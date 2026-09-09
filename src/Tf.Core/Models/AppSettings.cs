@@ -48,4 +48,11 @@ public sealed class AppSettings
     public decimal DailyLossCap { get; set; } = 50.00m;
     public double MinConfidence { get; set; } = 0.60;
     public int CooldownMinutesAfterLoss { get; set; } = 15;
+
+    // ── Market hours ─────────────────────────────────────────────
+    /// <summary>Only trade during active forex sessions.</summary>
+    public bool RespectMarketHours { get; set; }
+
+    /// <summary>Only trade during high-liquidity overlap windows.</summary>
+    public bool OverlapsOnly { get; set; }
 }

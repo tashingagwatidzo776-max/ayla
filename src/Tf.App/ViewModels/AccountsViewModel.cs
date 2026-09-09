@@ -186,4 +186,68 @@ public sealed partial class AccountsViewModel : ObservableObject
         await _hub.DisconnectAllAsync();
         StatusMessage = "All accounts disconnected — growth runners stopped.";
     }
+
+    [RelayCommand]
+    private void ExportAccounts()
+    {
+        try
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "JSON files (*.json)|*.json",
+                DefaultExt = ".json",
+                FileName = $"tf_accounts_{DateTime.UtcNow:yyyyMMdd}.json"
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                var vault = new AccountVault();
+                vault.Export(dialog.FileName, _hub.Accounts.Select(a => a.Config).ToArray());
+                StatusMessage = $"Exported {Accounts.Count} account(s) to {dialog.FileName}";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Export failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private void ImportAccounts()
+    {
+        try
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "JSON files (*.json)|*.json",
+                DefaultExt = ".json"
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                var vault = new AccountVault();
+                var imported = vault.Import(dialog.FileName);
+                var added = 0;
+
+                foreach (var config in imported)
+                {
+                    try
+                    {
+                        _hub.AddAccount(config);
+                        added++;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Duplicate token — skip silently.
+                    }
+                }
+
+                StatusMessage = $"Imported {added} new account(s) from {Path.GetFileName(dialog.FileName)}";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Import failed: {ex.Message}";
+        }
+    }
 }

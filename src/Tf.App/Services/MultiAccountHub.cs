@@ -20,17 +20,22 @@ public sealed class MultiAccountHub
     private readonly TradeJournal _journal;
     private readonly PerformanceTracker? _tracker;
     private readonly TickHistoryCache? _tickCache;
+    private readonly NotificationService? _notifications;
+    private readonly WebhookService? _webhook;
     private readonly Dictionary<Guid, GrowthRunner> _runners = new();
     private readonly object _runnerLock = new();
 
     public MultiAccountHub(AccountVault vault, TradeStore store, TradeJournal journal,
-        PerformanceTracker? tracker = null, TickHistoryCache? tickCache = null)
+        PerformanceTracker? tracker = null, TickHistoryCache? tickCache = null,
+        NotificationService? notifications = null, WebhookService? webhook = null)
     {
         _vault = vault;
         _store = store;
         _journal = journal;
         _tracker = tracker;
         _tickCache = tickCache;
+        _notifications = notifications;
+        _webhook = webhook;
 
         foreach (var config in vault.Load())
         {
@@ -141,7 +146,7 @@ public sealed class MultiAccountHub
                 return running;
             }
 
-            var runner = new GrowthRunner(connection, _store, settings, killSwitch, _journal, _tracker);
+            var runner = new GrowthRunner(connection, _store, settings, killSwitch, _journal, _tracker, _notifications, _webhook);
             runner.Activity += line => GrowthActivity?.Invoke(runner, line);
             runner.Connection.StateChanged += OnConnectionStateChanged;
 

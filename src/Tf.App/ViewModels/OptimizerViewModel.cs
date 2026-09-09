@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Tf.Core.Analytics;
 using Tf.Core.Brain;
 using Tf.Core.Models;
 using Tf.Core.Optimization;
@@ -9,14 +10,18 @@ namespace Tf.App.ViewModels;
 
 /// <summary>
 /// ViewModel for the strategy optimizer. Allows backtesting different
-/// brain strategies and finding optimal parameters.
+/// brain strategies on real cached tick data or synthetic fallback.
 /// </summary>
 public partial class OptimizerViewModel : ObservableObject
 {
     private readonly StrategyOptimizer _optimizer;
+    private readonly TickHistoryCache _tickCache;
 
     [ObservableProperty]
     private string selectedStrategy = "TrendFollowing";
+
+    [ObservableProperty]
+    private string selectedSymbol = "frxEURUSD";
 
     [ObservableProperty]
     private decimal startBankroll = 5m;
@@ -37,6 +42,9 @@ public partial class OptimizerViewModel : ObservableObject
     private string statusMessage = "Select a strategy and click Run Backtest";
 
     [ObservableProperty]
+    private string dataSourceInfo = "";
+
+    [ObservableProperty]
     private BacktestResultViewModel? lastResult;
 
     public IReadOnlyList<string> Strategies { get; } = new[]
@@ -44,11 +52,39 @@ public partial class OptimizerViewModel : ObservableObject
         "TrendFollowing", "Breakout", "MeanReversion", "Growth"
     };
 
+    public ObservableCollection<string> AvailableSymbols { get; } = new();
     public ObservableCollection<OptimizationResultViewModel> Results { get; } = new();
 
-    public OptimizerViewModel(StrategyOptimizer optimizer)
+    public OptimizerViewModel(StrategyOptimizer optimizer, TickHistoryCache tickCache)
     {
         _optimizer = optimizer;
+        _tickCache = tickCache;
+        RefreshSymbols();
+    }
+
+    [RelayCommand]
+    private void RefreshSymbols()
+    {
+        AvailableSymbols.Clear();
+        foreach (var sym in _tickCache.GetSymbols())
+            AvailableSymbols.Add(sym);
+        if (!AvailableSymbols.Contains("frxEURUSD"))
+            AvailableSymbols.Insert(0, "frxEURUSD");
+        if (string.IsNullOrEmpty(SelectedSymbol) || !AvailableSymbols.Contains(SelectedSymbol))
+            SelectedSymbol = AvailableSymbols.FirstOrDefault() ?? "frxEURUSD";
+    }
+
+    private IReadOnlyList<Tick> LoadData(int minCount)
+    {
+        var cached = _tickCache.GetTicks(SelectedSymbol);
+        if (cached.Count >= minCount)
+        {
+            DataSourceInfo = $"{cached.Count:N0} real ticks for {SelectedSymbol}";
+            return cached;
+        }
+
+        DataSourceInfo = $"Only {cached.Count} cached ticks — using synthetic data";
+        return GenerateSyntheticData(Math.Max(minCount, 500));
     }
 
     [RelayCommand]
@@ -61,8 +97,7 @@ public partial class OptimizerViewModel : ObservableObject
             IsRunning = true;
             StatusMessage = "Running backtest...";
 
-            // Generate synthetic data for demo (in production, use real historical data)
-            var data = GenerateSyntheticData(500);
+            var data = LoadData(50);
 
             Func<IReadOnlyList<Tick>, LlmDecision> decideFunc = SelectedStrategy switch
             {
@@ -101,7 +136,7 @@ public partial class OptimizerViewModel : ObservableObject
             IsRunning = true;
             StatusMessage = "Running optimization...";
 
-            var data = GenerateSyntheticData(1000);
+            var data = LoadData(100);
 
             // Define parameter ranges for each strategy
             var ranges = SelectedStrategy switch

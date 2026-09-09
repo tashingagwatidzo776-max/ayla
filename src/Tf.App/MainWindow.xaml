@@ -145,6 +145,10 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />  <!-- LLM -->
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />  <!-- Market Hours -->
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />  <!-- Webhooks -->
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />  <!-- Actions -->
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
@@ -195,7 +199,26 @@
                         <TextBox Grid.Row="15" Grid.Column="1" Margin="0,0,0,10"
                                  Text="{Binding SettingsVm.LlmApiKey, UpdateSourceTrigger=PropertyChanged}" />
 
-                        <StackPanel Grid.Row="16" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
+                        <TextBlock Grid.Row="16" Grid.ColumnSpan="2" Text="MARKET HOURS" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="17" Grid.Column="0" Text="Respect hours" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <CheckBox Grid.Row="17" Grid.Column="1" Margin="0,0,0,10"
+                                  Content="Only trade during active forex sessions"
+                                  IsChecked="{Binding SettingsVm.RespectMarketHours}" />
+                        <TextBlock Grid.Row="18" Grid.Column="0" Text="Overlaps only" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <CheckBox Grid.Row="18" Grid.Column="1" Margin="0,0,0,10"
+                                  Content="Only trade during high-liquidity overlap windows (London/NY)"
+                                  IsChecked="{Binding SettingsVm.OverlapsOnly}" />
+
+                        <TextBlock Grid.Row="19" Grid.ColumnSpan="2" Text="WEBHOOKS" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="20" Grid.Column="0" Text="Webhook URL" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="20" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.WebhookUrl, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="21" Grid.Column="0" Text="Platform" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <CheckBox Grid.Row="21" Grid.Column="1" Margin="0,0,0,10"
+                                  Content="Discord (uncheck for Slack)"
+                                  IsChecked="{Binding SettingsVm.IsDiscordWebhook}" />
+
+                        <StackPanel Grid.Row="22" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
                             <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
                         </StackPanel>
@@ -257,6 +280,10 @@
                                         Command="{Binding AccountsVm.ConnectAllCommand}" />
                                 <Button Content="Disconnect all" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                                         Command="{Binding AccountsVm.DisconnectAllCommand}" />
+                                <Button Content="Export" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding AccountsVm.ExportAccountsCommand}" />
+                                <Button Content="Import" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding AccountsVm.ImportAccountsCommand}" />
                                 <TextBlock Text="{Binding AccountsVm.StatusMessage}" Margin="12,0,0,0"
                                            Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
                             </StackPanel>
@@ -683,6 +710,48 @@
                             <DataGridTextColumn Header="ROI" Width="70" Binding="{Binding ROI, StringFormat=P1}" />
                         </DataGrid.Columns>
                     </DataGrid>
+
+                    <!-- Strategy comparison summary -->
+                    <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0,10,0,0"
+                            Visibility="{Binding PerformanceVm.StrategyStats.Count, Converter={StaticResource CountToVisibility}}">
+                        <StackPanel>
+                            <TextBlock Text="STRATEGY COMPARISON" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="Best strategy by win rate and P&amp;L:" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ItemsControl ItemsSource="{Binding PerformanceVm.StrategyComparison}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{StaticResource CardBrush}" CornerRadius="4" Padding="10" Margin="0,4">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="120" />
+                                                    <ColumnDefinition Width="80" />
+                                                    <ColumnDefinition Width="80" />
+                                                    <ColumnDefinition Width="90" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding Strategy}" FontWeight="Bold" />
+                                                <TextBlock Grid.Column="1" Text="{Binding WinRate, StringFormat='Win: {0:P0}'}" />
+                                                <TextBlock Grid.Column="2" Text="{Binding TotalTrades, StringFormat='Trades: {0}'}" />
+                                                <TextBlock Grid.Column="3" Text="{Binding TotalProfit, StringFormat='P&L: +0.##;-0.##;0'}" FontWeight="Bold">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsBest}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Grid.Column="4" Text="{Binding Rank}" Foreground="{StaticResource TextSecondaryBrush}" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </TabItem>
 
@@ -838,6 +907,75 @@
                                        Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                         </ScrollViewer>
                     </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Health">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Summary -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="SYSTEM HEALTH" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="{Binding HealthVm.OverallStatus}" FontSize="16" FontWeight="Bold" />
+                            <WrapPanel Margin="0,8,0,0">
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Connected: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding HealthVm.ConnectedCount}" FontWeight="Bold" />
+                                        <TextBlock Text="/{Binding HealthVm.TotalAccounts}" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Engines: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding HealthVm.RunningEngines}" FontWeight="Bold" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Degraded: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding HealthVm.DegradedCount}" FontWeight="Bold" Foreground="{StaticResource WarningBrush}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Paused: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding HealthVm.PausedCount}" FontWeight="Bold" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource StatusPill}">
+                                    <TextBlock Text="{Binding HealthVm.CacheStats}" Foreground="{StaticResource TextSecondaryBrush}" />
+                                </Border>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="Refresh" Command="{Binding HealthVm.RefreshCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Per-account health -->
+                    <TextBlock Grid.Row="1" Text="ACCOUNT HEALTH" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding HealthVm.Accounts}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Account" Width="120" Binding="{Binding Name}" />
+                            <DataGridTextColumn Header="Login" Width="90" Binding="{Binding LoginId}" />
+                            <DataGridTextColumn Header="Symbol" Width="100" Binding="{Binding Symbol}" />
+                            <DataGridTextColumn Header="Brain" Width="100" Binding="{Binding Brain}" />
+                            <DataGridTextColumn Header="Status" Width="130" Binding="{Binding Status}" />
+                            <DataGridTextColumn Header="Balance" Width="100" Binding="{Binding Balance}" />
+                            <DataGridTextColumn Header="Ticks" Width="80" Binding="{Binding TickBuffer}" />
+                            <DataGridTextColumn Header="Cached" Width="90" Binding="{Binding CachedTicks}" />
+                            <DataGridTextColumn Header="Engine" Width="60" Binding="{Binding HasRunner, Converter={StaticResource NullToVisibility}}" />
+                            <DataGridTextColumn Header="Circuit" Width="130" Binding="{Binding CircuitStatus}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
                 </Grid>
             </TabItem>
         </TabControl>

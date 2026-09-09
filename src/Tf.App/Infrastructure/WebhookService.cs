@@ -1,0 +1,126 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+
+namespace Tf.App.Infrastructure;
+
+/// <summary>
+/// Sends trade events to a Discord or Slack webhook URL. Supports both
+/// Discord and Slack payload formats. Thread-safe; fire-and-forget calls.
+/// </summary>
+public sealed class WebhookService : IDisposable
+{
+    private readonly HttpClient _http;
+    private bool _disposed;
+
+    public WebhookService()
+    {
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+    }
+
+    /// <summary>Webhook URL (Discord or Slack). Null/empty disables sending.</summary>
+    public string? WebhookUrl { get; set; }
+
+    /// <summary>Whether to use Discord payload format (true) or Slack (false).</summary>
+    public bool IsDiscord { get; set; } = true;
+
+    /// <summary>Minimum interval between webhook posts to avoid rate limits.</summary>
+    public TimeSpan MinInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    private DateTimeOffset _lastPost = DateTimeOffset.MinValue;
+
+    /// <summary>Post a trade settlement event.</summary>
+    public void PostTradeSettled(string accountName, bool won, decimal profit,
+        string symbol, string direction, decimal stake, decimal bankroll)
+    {
+        if (string.IsNullOrEmpty(WebhookUrl)) return;
+        if (DateTimeOffset.UtcNow - _lastPost < MinInterval) return;
+        _lastPost = DateTimeOffset.UtcNow;
+
+        var emoji = won ? "✅" : "❌";
+        var color = won ? 0x00D4AA : 0xFF5C5C;
+        var title = $"{emoji} Trade Settled — {accountName}";
+        var body = $"{symbol} {direction} | Stake: ${stake:0.##} | {(won ? "WIN" : "LOSS")} | P&L: {profit:+0.##;-0.##;0} | Bankroll: ${bankroll:0.##}";
+
+        _ = PostAsync(title, body, color);
+    }
+
+    /// <summary>Post a growth engine milestone (target/floor hit).</summary>
+    public void PostMilestone(string accountName, string milestone, decimal bankroll)
+    {
+        if (string.IsNullOrEmpty(WebhookUrl)) return;
+
+        var color = milestone.Contains("target") ? 0x00D4AA : 0xFF5C5C;
+        _ = PostAsync($"🎯 {milestone}", $"{accountName} — bankroll ${bankroll:0.##}", color);
+    }
+
+    /// <summary>Post a circuit breaker alert.</summary>
+    public void PostCircuitBreaker(string accountName, int failures)
+    {
+        if (string.IsNullOrEmpty(WebhookUrl)) return;
+
+        _ = PostAsync("⚠ Circuit Breaker Tripped",
+            $"{accountName}: {failures} consecutive failures", 0xFFC857);
+    }
+
+    /// <summary>Post a general status message.</summary>
+    public void PostStatus(string title, string message)
+    {
+        if (string.IsNullOrEmpty(WebhookUrl)) return;
+
+        _ = PostAsync(title, message, 0x9AA3B2);
+    }
+
+    private async Task PostAsync(string title, string body, int color)
+    {
+        try
+        {
+            if (IsDiscord)
+            {
+                var payload = new
+                {
+                    embeds = new[]
+                    {
+                        new
+                        {
+                            title,
+                            description = body,
+                            color,
+                            timestamp = DateTimeOffset.UtcNow.ToString("o")
+                        }
+                    }
+                };
+                await _http.PostAsJsonAsync(WebhookUrl, payload);
+            }
+            else
+            {
+                // Slack format
+                var payload = new
+                {
+                    attachments = new[]
+                    {
+                        new
+                        {
+                            fallback = $"{title}: {body}",
+                            color = $"#{color:X6}",
+                            title,
+                            text = body,
+                            ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                        }
+                    }
+                };
+                await _http.PostAsJsonAsync(WebhookUrl, payload);
+            }
+        }
+        catch
+        {
+            // Fire-and-forget; webhook failures must not affect trading.
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _http.Dispose();
+    }
+}

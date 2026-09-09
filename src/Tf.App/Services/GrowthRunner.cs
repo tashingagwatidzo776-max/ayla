@@ -23,6 +23,8 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     private readonly Func<bool> _killSwitch;
     private readonly TradeJournal _journal;
     private readonly PerformanceTracker? _tracker;
+    private readonly NotificationService? _notifications;
+    private readonly WebhookService? _webhook;
 
     private AutonomousScheduler? _scheduler;
     private TradingBrain? _brain;
@@ -46,7 +48,8 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
     public GrowthRunner(AccountConnection connection, TradeStore store,
         Func<AppSettings> settings, Func<bool> killSwitch, TradeJournal journal,
-        PerformanceTracker? tracker = null)
+        PerformanceTracker? tracker = null, NotificationService? notifications = null,
+        WebhookService? webhook = null)
     {
         Connection = connection;
         _store = store;
@@ -54,6 +57,8 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         _killSwitch = killSwitch;
         _journal = journal;
         _tracker = tracker;
+        _notifications = notifications;
+        _webhook = webhook;
     }
 
     public AccountConnection Connection { get; }
@@ -218,6 +223,28 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             return;
         }
 
+        // Skip if outside market hours (when enabled).
+        var settings = _settings();
+        if (settings.RespectMarketHours)
+        {
+            var marketHours = new MarketHours();
+            var now = DateTimeOffset.UtcNow;
+            if (!marketHours.IsOpen(now))
+            {
+                var nextOpen = marketHours.TimeUntilNextOpen(now);
+                LastActivity = $"{DateTime.Now:HH:mm:ss} Market closed ({marketHours.GetActiveSessions(now)}) — opens in {nextOpen.TotalHours:0.#}h";
+                RaiseState();
+                return;
+            }
+
+            if (settings.OverlapsOnly && !marketHours.IsOverlap(now))
+            {
+                LastActivity = $"{DateTime.Now:HH:mm:ss} Waiting for overlap window ({marketHours.GetActiveSessions(now)})";
+                RaiseState();
+                return;
+            }
+        }
+
         var line = Describe(result);
         LastActivity = line;
         Activity?.Invoke(line);
@@ -267,6 +294,11 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             _tracker?.Save();
             engine?.ApplySettlement(trade.IsWin, trade.Profit);
 
+            // Fire notifications for trade settlements.
+            _notifications?.NotifyTradeSettled(Connection.DisplayName, trade.IsWin, trade.Profit, trade.Symbol);
+            _webhook?.PostTradeSettled(Connection.DisplayName, trade.IsWin, trade.Profit,
+                trade.Symbol, trade.Direction.ToString(), trade.Stake, engine?.Bankroll ?? 0);
+
             var pnl = trade.Profit >= 0 ? $"+{trade.Profit:0.##}" : $"{trade.Profit:0.##}";
             return $"{DateTime.Now:HH:mm:ss} {trade.Direction} {decision.Stake:0.##} → {trade.Outcome} " +
                    $"({pnl}) · bankroll ${engine?.Bankroll ?? 0:0.##} · {verdict}";
@@ -293,8 +325,25 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         var start = engine.StartBankroll;
         var growthPct = start <= 0 ? 0 : (engine.Bankroll - start) / start * 100m;
         BankrollText = $"${engine.Bankroll:0.##} ({growthPct:+0.0;-0.0;0.0}%)";
+
+        var prevState = SessionStateText;
         SessionStateText = engine.TargetHit ? "target reached 🎯"
             : engine.FloorHit ? "floor hit — stopped"
             : IsRunning ? "running" : "stopped";
+
+        // Fire notifications on state transitions.
+        if (prevState != SessionStateText)
+        {
+            if (engine.TargetHit)
+            {
+                _notifications?.NotifyTargetHit(Connection.DisplayName, engine.Bankroll);
+                _webhook?.PostMilestone(Connection.DisplayName, "Target reached", engine.Bankroll);
+            }
+            else if (engine.FloorHit)
+            {
+                _notifications?.NotifyFloorHit(Connection.DisplayName, engine.Bankroll);
+                _webhook?.PostMilestone(Connection.DisplayName, "Floor hit — stopped", engine.Bankroll);
+            }
+        }
     }
 }

@@ -49,6 +49,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string llmApiKey = "";
 
     [ObservableProperty]
+    private bool respectMarketHours;
+
+    [ObservableProperty]
+    private bool overlapsOnly;
+
+    [ObservableProperty]
+    private string webhookUrl = "";
+
+    [ObservableProperty]
+    private bool isDiscordWebhook = true;
+
+    [ObservableProperty]
     private string statusMessage = "Settings load on startup; Save writes them to %APPDATA%\\tf\\data.";
 
     /// <summary>Human-readable trading-mode label.</summary>
@@ -80,6 +92,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         LlmBaseUrl = settings.LlmBaseUrl;
         LlmModel = settings.LlmModel;
         LlmApiKey = settings.LlmApiKey;
+        RespectMarketHours = settings.RespectMarketHours;
+        OverlapsOnly = settings.OverlapsOnly;
         StatusMessage = "Settings loaded.";
     }
 
@@ -102,7 +116,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         MaxConcurrentContracts = 1,
         DailyLossCap = 50.00m,
         MinConfidence = 0.60,
-        CooldownMinutesAfterLoss = 15
+        CooldownMinutesAfterLoss = 15,
+        RespectMarketHours = RespectMarketHours,
+        OverlapsOnly = OverlapsOnly
     };
 
     [RelayCommand]
@@ -119,6 +135,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             var settings = BuildSettings();
             await Task.Run(() => _settingsService.Save(settings));
             ApplyToClient(settings);
+
             StatusMessage = "Settings saved.";
         }
         catch (Exception ex)

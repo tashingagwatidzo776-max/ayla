@@ -64,4 +64,19 @@ public sealed class AccountVault
             Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser);
         File.WriteAllBytes(AccountsPath, protectedBytes);
     }
+
+    /// <summary>Export accounts as plain JSON to a user-chosen file (no encryption).</summary>
+    public void Export(string filePath, IReadOnlyList<AccountConfig> accounts)
+    {
+        var json = JsonSerializer.Serialize(accounts, JsonOptions);
+        File.WriteAllText(filePath, json);
+    }
+
+    /// <summary>Import accounts from a plain JSON export file (tokens included).</summary>
+    public IReadOnlyList<AccountConfig> Import(string filePath)
+    {
+        var json = File.ReadAllText(filePath);
+        return JsonSerializer.Deserialize<List<AccountConfig>>(json, JsonOptions)
+               ?? new List<AccountConfig>();
+    }
 }

@@ -27,6 +27,7 @@ public partial class PerformanceViewModel : ObservableObject
     public ObservableCollection<StrategyStatsViewModel> StrategyStats { get; } = new();
     public ObservableCollection<DailyPerformanceViewModel> DailyHistory { get; } = new();
     public ObservableCollection<EquityPoint> EquityCurve { get; } = new();
+    public ObservableCollection<StrategyComparisonItem> StrategyComparison { get; } = new();
 
     public PerformanceViewModel(PerformanceTracker tracker)
     {
@@ -64,9 +65,15 @@ public partial class PerformanceViewModel : ObservableObject
             });
         }
 
-        // Strategy stats
-        foreach (var stat in _tracker.GetAllStrategyStats())
+        // Strategy stats + comparison
+        StrategyComparison.Clear();
+        var rankedStrategies = _tracker.GetAllStrategyStats()
+            .OrderByDescending(s => s.TotalProfit)
+            .ToList();
+
+        for (var i = 0; i < rankedStrategies.Count; i++)
         {
+            var stat = rankedStrategies[i];
             StrategyStats.Add(new StrategyStatsViewModel
             {
                 Strategy = stat.Strategy,
@@ -77,6 +84,17 @@ public partial class PerformanceViewModel : ObservableObject
                 TotalProfit = stat.TotalProfit,
                 ROI = stat.ROI,
                 MaxDrawdown = stat.MaxDrawdown
+            });
+
+            var rank = i == 0 ? "🥇 Best" : i == 1 ? "🥈 2nd" : i == 2 ? "🥉 3rd" : $"#{i + 1}";
+            StrategyComparison.Add(new StrategyComparisonItem
+            {
+                Strategy = stat.Strategy,
+                TotalTrades = stat.TotalTrades,
+                WinRate = stat.WinRate,
+                TotalProfit = stat.TotalProfit,
+                IsBest = i == 0,
+                Rank = rank
             });
         }
 
@@ -171,4 +189,14 @@ public class EquityPoint
 {
     public string Day { get; set; } = "";
     public decimal Value { get; set; }
+}
+
+public class StrategyComparisonItem
+{
+    public string Strategy { get; set; } = "";
+    public int TotalTrades { get; set; }
+    public decimal WinRate { get; set; }
+    public decimal TotalProfit { get; set; }
+    public bool IsBest { get; set; }
+    public string Rank { get; set; } = "";
 }

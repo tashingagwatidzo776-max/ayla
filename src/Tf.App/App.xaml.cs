@@ -31,6 +31,8 @@ public partial class App : Application
         services.AddSingleton<AccountVault>();
         services.AddSingleton<GrowthPlanStore>();
         services.AddSingleton(_ => new TickHistoryCache(SettingsService.DataDir));
+        services.AddSingleton<NotificationService>();
+        services.AddSingleton<WebhookService>();
         services.AddSingleton(_ => new TradeJournal(Path.Combine(SettingsService.DataDir, "journal")));
         services.AddSingleton(sp =>
             new MultiAccountHub(
@@ -38,7 +40,9 @@ public partial class App : Application
                 sp.GetRequiredService<TradeStore>(),
                 sp.GetRequiredService<TradeJournal>(),
                 sp.GetRequiredService<PerformanceTracker>(),
-                sp.GetRequiredService<TickHistoryCache>()));
+                sp.GetRequiredService<TickHistoryCache>(),
+                sp.GetRequiredService<NotificationService>(),
+                sp.GetRequiredService<WebhookService>()));
 
         services.AddSingleton<DashboardViewModel>();
         services.AddSingleton<SettingsViewModel>();
@@ -70,7 +74,11 @@ public partial class App : Application
         services.AddSingleton(_ => new StrategyOptimizer(Path.Combine(SettingsService.DataDir, "backtests")));
         services.AddSingleton<UpdateViewModel>();
         services.AddSingleton<PerformanceViewModel>();
-        services.AddSingleton<OptimizerViewModel>();
+        services.AddSingleton(sp =>
+            new OptimizerViewModel(
+                sp.GetRequiredService<StrategyOptimizer>(),
+                sp.GetRequiredService<TickHistoryCache>()));
+        services.AddSingleton<HealthViewModel>();
         services.AddSingleton<MainViewModel>();
 
         var provider = services.BuildServiceProvider();
