@@ -17,7 +17,7 @@ public partial class HealthViewModel : ObservableObject
     private readonly MultiAccountHub _hub;
     private readonly TickHistoryCache _tickCache;
     private readonly Dispatcher _dispatcher;
-    private Timer? _refreshTimer;
+    private System.Threading.Timer? _refreshTimer;
 
     [ObservableProperty]
     private string overallStatus = "Unknown";
@@ -63,7 +63,7 @@ public partial class HealthViewModel : ObservableObject
 
     public void StartAutoRefresh()
     {
-        _refreshTimer = new Timer(_ => OnUiThread(RefreshInternal), null,
+        _refreshTimer = new System.Threading.Timer(_ => OnUiThread(RefreshInternal), null,
             TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
     }
 
@@ -126,8 +126,8 @@ public partial class HealthViewModel : ObservableObject
         // Cache stats
         var symbols = _tickCache.GetSymbols();
         var totalTicks = symbols.Sum(s => _tickCache.GetTickCount(s));
-        CacheStats = symbols.Length > 0
-            ? $"{totalTicks:N0} ticks cached across {symbols.Length} symbol(s)"
+        CacheStats = symbols.Count > 0
+            ? $"{totalTicks:N0} ticks cached across {symbols.Count} symbol(s)"
             : "No tick data cached yet";
     }
 

@@ -228,10 +228,9 @@ public sealed class EnsembleBrainWrapper : IBrainDecisionProvider
     {
         if (_brains.Count == 0)
         {
-            // Default ensemble: combine all deterministic brains
-            AddBrain(new TrendFollowingBrainWrapper(), 1.0);
-            AddBrain(new BreakoutBrainWrapper(), 1.0);
-            AddBrain(new MeanReversionBrainWrapper(), 1.0);
+            return Task.FromResult(new BrainDecision(
+                LlmDecision.Hold("Ensemble has no brains configured"),
+                "ensemble: no brains"));
         }
 
         var votes = new List<(BrainDirection Direction, double Confidence, double Weight, string Reasoning)>();

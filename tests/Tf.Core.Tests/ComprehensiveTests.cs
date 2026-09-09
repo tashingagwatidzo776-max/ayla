@@ -1,6 +1,7 @@
 using Tf.Core;
 using Tf.Core.Brain;
 using Tf.Core.Models;
+using Tf.Core.Optimization;
 
 namespace Tf.Core.Tests;
 

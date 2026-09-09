@@ -9,6 +9,7 @@ public sealed class MainViewModel
 {
     private readonly SettingsService _settingsService;
     private readonly DerivClient _client;
+    private readonly TradeStore _store;
 
     public DashboardViewModel Dashboard { get; }
     public SettingsViewModel SettingsVm { get; }
@@ -23,6 +24,7 @@ public sealed class MainViewModel
     public HealthViewModel HealthVm { get; }
 
     public MainViewModel(SettingsService settingsService, DerivClient client,
+        TradeStore store,
         DashboardViewModel dashboard, SettingsViewModel settingsVm, TradesViewModel trades,
         BrainViewModel brain, AccountsViewModel accountsVm, GrowthViewModel growthVm,
         JournalViewModel journalVm, UpdateViewModel updateVm, PerformanceViewModel performanceVm,
@@ -30,6 +32,7 @@ public sealed class MainViewModel
     {
         _settingsService = settingsService;
         _client = client;
+        _store = store;
         Dashboard = dashboard;
         SettingsVm = settingsVm;
         Trades = trades;

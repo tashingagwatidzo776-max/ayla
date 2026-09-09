@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 
@@ -102,6 +103,7 @@ public sealed class NotificationService : IDisposable
 
     private bool CanNotify()
     {
+        if (_disposed) return false;
         if (!Enabled) return false;
         if (DateTimeOffset.UtcNow - _lastNotification < MinInterval) return false;
         _lastNotification = DateTimeOffset.UtcNow;

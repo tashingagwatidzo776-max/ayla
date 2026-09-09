@@ -21,25 +21,25 @@ public sealed class TickChartControl : FrameworkElement
 
     public static readonly DependencyProperty LineBrushProperty = DependencyProperty.Register(
         nameof(LineBrush),
-        typeof(Brush),
+        typeof(System.Windows.Media.Brush),
         typeof(TickChartControl),
         new FrameworkPropertyMetadata(Brushes.LimeGreen, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public static readonly DependencyProperty LabelBrushProperty = DependencyProperty.Register(
         nameof(LabelBrush),
-        typeof(Brush),
+        typeof(System.Windows.Media.Brush),
         typeof(TickChartControl),
         new FrameworkPropertyMetadata(Brushes.Gray, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    public Brush LineBrush
+    public System.Windows.Media.Brush LineBrush
     {
-        get => (Brush)GetValue(LineBrushProperty);
+        get => (System.Windows.Media.Brush)GetValue(LineBrushProperty);
         set => SetValue(LineBrushProperty, value);
     }
 
-    public Brush LabelBrush
+    public System.Windows.Media.Brush LabelBrush
     {
-        get => (Brush)GetValue(LabelBrushProperty);
+        get => (System.Windows.Media.Brush)GetValue(LabelBrushProperty);
         set => SetValue(LabelBrushProperty, value);
     }
 
@@ -174,7 +174,7 @@ public sealed class TickChartControl : FrameworkElement
     private FormattedText MakeLabel(string text) => new(
         text,
         CultureInfo.InvariantCulture,
-        FlowDirection.LeftToRight,
+        System.Windows.FlowDirection.LeftToRight,
         new Typeface("Consolas"),
         11,
         LabelBrush,

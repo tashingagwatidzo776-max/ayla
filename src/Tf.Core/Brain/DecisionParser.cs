@@ -84,5 +84,5 @@ public static class DecisionParser
             ? el.GetDecimal()
             : null;
 
-    private static string Truncate(string s) => s.Length > 200 ? s[..200] + "…" : s;
+    private static string Truncate(string s) => s is null ? "(null)" : s.Length > 200 ? s[..200] + "…" : s;
 }

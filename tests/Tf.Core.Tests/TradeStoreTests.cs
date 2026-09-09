@@ -82,10 +82,10 @@ public class TradeStoreTests
         store.Add(T(Guid.NewGuid(), null, TradeSource.Manual));
 
         Assert.Equal(2, store.ForAccount(accountA, TradeSource.Growth).Count);
-        Assert.Equal(1, store.ForAccount(accountB, TradeSource.Growth).Count);
+        Assert.Single(store.ForAccount(accountB, TradeSource.Growth));
         Assert.Equal(3, store.ForAccount(accountA).Count);
-        Assert.Equal(1, store.ForAccount(null, TradeSource.Manual).Count);
-        Assert.Equal(1, store.ForAccount(null).Count);
+        Assert.Single(store.ForAccount(null, TradeSource.Manual));
+        Assert.Single(store.ForAccount(null));
 
         // Per-account daily summary sees only that account's growth trades.
         var growthSummaryA = store.SummaryFor(DateTimeOffset.Now, accountA, TradeSource.Growth);

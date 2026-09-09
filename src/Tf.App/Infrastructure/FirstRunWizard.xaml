@@ -58,7 +58,7 @@
             <Button Content="Skip for now" Padding="16,8" Margin="0,0,8,0"
                     Background="Transparent" Foreground="#FFE8EAF0" BorderBrush="#FF2E3440"
                     Click="OnSkip" />
-            <Button Content="Save & Connect" Padding="16,8"
+            <Button Content="Save &amp; Connect" Padding="16,8"
                     Click="OnSave" />
         </StackPanel>
     </Grid>

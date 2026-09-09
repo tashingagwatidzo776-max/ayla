@@ -16,7 +16,7 @@ using Tf.Deriv;
 
 namespace Tf.App;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -39,7 +39,7 @@ public partial class App : Application
                 File.WriteAllText(firstRunMarker, wizard.ApiToken.Length > 0 ? "configured" : "skipped");
 
                 // Apply wizard settings immediately.
-                var settings = new AppSettings
+                var wizardSettings = new AppSettings
                 {
                     ApiToken = wizard.ApiToken,
                     Symbol = wizard.Symbol,
@@ -49,7 +49,7 @@ public partial class App : Application
                 };
 
                 var settingsService = new SettingsService();
-                settingsService.Save(settings);
+                settingsService.Save(wizardSettings);
             }
         }
 
@@ -68,6 +68,7 @@ public partial class App : Application
         services.AddSingleton<NotificationService>();
         services.AddSingleton<WebhookService>();
         services.AddSingleton(_ => new TradeJournal(Path.Combine(SettingsService.DataDir, "journal")));
+        services.AddSingleton(_ => new PerformanceTracker(Path.Combine(SettingsService.DataDir, "analytics")));
         services.AddSingleton(sp =>
             new MultiAccountHub(
                 sp.GetRequiredService<AccountVault>(),
@@ -105,7 +106,6 @@ public partial class App : Application
 
         // New services: auto-update, performance tracking, strategy optimizer
         services.AddSingleton(_ => new AutoUpdater("1.0.0"));
-        services.AddSingleton(_ => new PerformanceTracker(Path.Combine(SettingsService.DataDir, "analytics")));
         services.AddSingleton(_ => new StrategyOptimizer(Path.Combine(SettingsService.DataDir, "backtests")));
         services.AddSingleton<UpdateViewModel>();
         services.AddSingleton<PerformanceViewModel>();
@@ -150,7 +150,6 @@ public partial class App : Application
         IDisposable?[] disposables = [
             Ioc.Default.GetService<AppLogger>(),
             Ioc.Default.GetService<TradeJournal>(),
-            Ioc.Default.GetService<HeartbeatLog>(),
             Ioc.Default.GetService<ApiAuditLog>(),
             Ioc.Default.GetService<NotificationService>(),
             Ioc.Default.GetService<WebhookService>(),

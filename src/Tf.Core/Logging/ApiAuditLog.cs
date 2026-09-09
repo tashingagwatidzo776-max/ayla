@@ -103,9 +103,9 @@ public sealed class ApiAuditLog : IDisposable
         return result;
     }
 
-    private void Flush()
+    private void Flush(bool force = false)
     {
-        if (_queue.IsEmpty || _disposed) return;
+        if (_queue.IsEmpty || (!force && _disposed)) return;
 
         var batch = new List<AuditEntry>();
         while (_queue.TryDequeue(out var entry))
@@ -138,7 +138,7 @@ public sealed class ApiAuditLog : IDisposable
         if (_disposed) return;
         _disposed = true;
         _flushTimer?.Dispose();
-        Flush();
+        Flush(force: true);
     }
 }
 

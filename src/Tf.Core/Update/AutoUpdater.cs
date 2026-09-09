@@ -14,7 +14,7 @@ public sealed class AutoUpdater : IDisposable
     private readonly HttpClient _http;
     private readonly string _currentVersion;
     private readonly string _updateDir;
-    private CancellationTokenSource? _cts;
+    private CancellationTokenSource _cts = new();
 
     public AutoUpdater(string currentVersion, string? proxyUrl = null)
     {

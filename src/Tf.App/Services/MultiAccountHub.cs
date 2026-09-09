@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using Tf.App.Infrastructure;
 using Tf.Core;
+using Tf.Core.Analytics;
 using Tf.Core.Brain;
 using Tf.Core.Logging;
 using Tf.Core.Models;
