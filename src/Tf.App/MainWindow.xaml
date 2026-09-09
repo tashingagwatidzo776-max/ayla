@@ -45,6 +45,14 @@
                     <Border Style="{StaticResource StatusPill}">
                         <TextBlock Text="{Binding Dashboard.BalanceText}" FontFamily="Consolas" FontWeight="SemiBold" />
                     </Border>
+                    <Button Margin="8,0,0,0" Padding="8,4"
+                            ToolTip="Minimize to tray — app keeps running in background">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                <Setter Property="Content" Value="🔽 Tray" />
+                            </Style>
+                        </Button.Style>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -263,6 +271,7 @@
                             <DataGridTextColumn Header="Account" Width="140" Binding="{Binding DisplayName}" />
                             <DataGridTextColumn Header="Login" Width="110" Binding="{Binding LoginIdText}" />
                             <DataGridTextColumn Header="Status" Width="110" Binding="{Binding StatusText}" />
+                            <DataGridTextColumn Header="Circuit" Width="110" Binding="{Binding CircuitStatus}" />
                             <DataGridTextColumn Header="Balance" Width="110" Binding="{Binding BalanceText}" />
                             <DataGridTextColumn Header="Symbol" Width="110" Binding="{Binding Config.Symbol}" />
                             <DataGridTextColumn Header="Mode" Width="60" Binding="{Binding Config.IsDemo}" />
@@ -283,6 +292,35 @@
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding IsBusy}" Value="True">
                                                                 <Setter Property="Content" Value="…" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Margin="0,0,6,0" Padding="12,3"
+                                                    Command="{Binding DataContext.AccountsVm.TogglePauseCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                        <Setter Property="Content" Value="Pause" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsPaused}" Value="True">
+                                                                <Setter Property="Content" Value="Resume" />
+                                                                <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Margin="0,0,6,0" Padding="12,3"
+                                                    Command="{Binding DataContext.AccountsVm.ResetCircuitBreakerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                        <Setter Property="Content" Value="Reset" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsDegraded}" Value="False">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>

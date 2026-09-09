@@ -17,6 +17,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>Tf</AssemblyName>
     <Product>Tf — Deriv options trader</Product>
     <Version>0.6.0</Version>

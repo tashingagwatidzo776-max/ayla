@@ -1,19 +1,25 @@
 using System.Collections.ObjectModel;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Tf.App.Infrastructure;
+using Tf.Core;
 using Tf.Core.Logging;
+using Tf.Core.Models;
 
 namespace Tf.App.ViewModels;
 
 /// <summary>
 /// ViewModel for the trade journal log viewer. Shows all brain decisions,
 /// trade executions, and account activity across all accounts.
+/// Auto-refreshes when new trades are recorded.
 /// </summary>
 public partial class JournalViewModel : ObservableObject
 {
     private readonly TradeJournal _journal;
+    private readonly TradeStore _store;
     private readonly Func<bool> _killSwitch;
+    private readonly Dispatcher _dispatcher;
 
     [ObservableProperty]
     private Guid? selectedAccountId;
@@ -35,10 +41,15 @@ public partial class JournalViewModel : ObservableObject
         "GROWTH_STATE", "ACCOUNT_EVENT"
     };
 
-    public JournalViewModel(TradeJournal journal, Func<bool> killSwitch)
+    public JournalViewModel(TradeJournal journal, TradeStore store, Func<bool> killSwitch)
     {
         _journal = journal;
+        _store = store;
         _killSwitch = killSwitch;
+        _dispatcher = Dispatcher.CurrentDispatcher;
+
+        // Auto-refresh when a new trade is recorded.
+        _store.TradeAdded += OnTradeAdded;
     }
 
     [RelayCommand]
@@ -182,6 +193,41 @@ public partial class JournalViewModel : ObservableObject
         var stats = _journal.GetStats(SelectedAccountId.Value);
         StatsText = $"Decisions: {stats.TotalDecisions} | Trades: {stats.TotalSettlements} | " +
                    $"Win rate: {stats.WinRate:P0} | Period: {stats.PeriodStart:MM/dd HH:mm} - {stats.PeriodEnd:HH:mm}";
+    }
+
+    /// <summary>Auto-refresh the journal when a new trade is recorded.</summary>
+    private void OnTradeAdded(Trade trade)
+    {
+        void Update()
+        {
+            // Prepend the new entry if it matches the current filter.
+            if (FilterCategory != "ALL" && FilterCategory != "TRADE_SETTLEMENT")
+                return;
+
+            if (SelectedAccountId != null && trade.AccountId != SelectedAccountId)
+                return;
+
+            Entries.Insert(0, new JournalEntryViewModel
+            {
+                Timestamp = trade.SettledAt.ToLocalTime().ToString("HH:mm:ss.fff"),
+                AccountId = (trade.AccountId ?? Guid.Empty).ToString()[..8],
+                Category = "TRADE_SETTLEMENT",
+                Details = trade.IsWin
+                    ? $"✅ WIN | Profit: ${trade.Profit:0.##} | {trade.Symbol} {trade.Direction} stake {trade.Stake:0.##}"
+                    : $"❌ LOSS | Profit: ${trade.Profit:0.##} | {trade.Symbol} {trade.Direction} stake {trade.Stake:0.##}"
+            });
+
+            // Cap the list size.
+            while (Entries.Count > MaxEntries)
+                Entries.RemoveAt(Entries.Count - 1);
+
+            UpdateStats();
+        }
+
+        if (_dispatcher.CheckAccess())
+            Update();
+        else
+            _dispatcher.BeginInvoke(Update);
     }
 }
 

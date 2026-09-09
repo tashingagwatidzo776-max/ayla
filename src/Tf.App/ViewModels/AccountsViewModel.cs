@@ -117,6 +117,32 @@ public sealed partial class AccountsViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void TogglePause(AccountConnection? connection)
+    {
+        if (connection is null)
+        {
+            return;
+        }
+
+        connection.IsPaused = !connection.IsPaused;
+        StatusMessage = connection.IsPaused
+            ? $"{connection.DisplayName} paused — growth engine will skip cycles."
+            : $"{connection.DisplayName} resumed.";
+    }
+
+    [RelayCommand]
+    private void ResetCircuitBreaker(AccountConnection? connection)
+    {
+        if (connection is null)
+        {
+            return;
+        }
+
+        connection.ResetCircuitBreaker();
+        StatusMessage = $"{connection.DisplayName} circuit breaker reset — ready to reconnect.";
+    }
+
+    [RelayCommand]
     private async Task RemoveAccountAsync(AccountConnection? connection)
     {
         if (connection is null)

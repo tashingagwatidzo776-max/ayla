@@ -30,8 +30,15 @@ public partial class App : Application
         // Multi-account layer: vault → hub (connections + growth runners) → VMs.
         services.AddSingleton<AccountVault>();
         services.AddSingleton<GrowthPlanStore>();
+        services.AddSingleton(_ => new TickHistoryCache(SettingsService.DataDir));
         services.AddSingleton(_ => new TradeJournal(Path.Combine(SettingsService.DataDir, "journal")));
-        services.AddSingleton<MultiAccountHub>();
+        services.AddSingleton(sp =>
+            new MultiAccountHub(
+                sp.GetRequiredService<AccountVault>(),
+                sp.GetRequiredService<TradeStore>(),
+                sp.GetRequiredService<TradeJournal>(),
+                sp.GetRequiredService<PerformanceTracker>(),
+                sp.GetRequiredService<TickHistoryCache>()));
 
         services.AddSingleton<DashboardViewModel>();
         services.AddSingleton<SettingsViewModel>();
@@ -51,7 +58,11 @@ public partial class App : Application
         services.AddSingleton<GrowthViewModel>();
         services.AddSingleton(sp =>
             (Func<bool>)(() => sp.GetRequiredService<DashboardViewModel>().IsKillSwitchEngaged));
-        services.AddSingleton<JournalViewModel>();
+        services.AddSingleton(sp =>
+            new JournalViewModel(
+                sp.GetRequiredService<TradeJournal>(),
+                sp.GetRequiredService<TradeStore>(),
+                () => sp.GetRequiredService<DashboardViewModel>().IsKillSwitchEngaged));
 
         // New services: auto-update, performance tracking, strategy optimizer
         services.AddSingleton(_ => new AutoUpdater("1.0.0"));

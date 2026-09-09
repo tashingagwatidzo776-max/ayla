@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using Tf.App.Infrastructure;
+using Tf.Core.Analytics;
 using Tf.Core.Models;
 using Tf.Deriv;
 
@@ -9,13 +10,23 @@ namespace Tf.App.Services;
 /// One Deriv account session: its own <see cref="DerivClient"/> (one account
 /// per WebSocket connection on the Deriv API), live status/balance, and a
 /// rolling tick buffer the growth brain reads for signals.
+/// 
+/// Includes a circuit breaker that pauses reconnection after repeated failures
+/// and a per-account pause/resume toggle independent of the global kill switch.
 /// </summary>
 public sealed partial class AccountConnection : ObservableObject, IAsyncDisposable
 {
     private readonly DerivClient _client;
     private readonly List<Tick> _ticks = new();
     private readonly object _sync = new();
+    private readonly TickHistoryCache? _tickCache;
     private bool _disposed;
+
+    // ── Circuit breaker ────────────────────────────────────────────
+    private const int MaxConsecutiveFailures = 5;
+    private const int CircuitOpenMinutes = 10;
+    private int _consecutiveFailures;
+    private DateTimeOffset _circuitOpenUntil = DateTimeOffset.MinValue;
 
     /// <summary>Raised whenever connection state or balance changes materially.</summary>
     public event Action<AccountConnection>? StateChanged;
@@ -38,10 +49,26 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     [ObservableProperty]
     private string lastError = "";
 
-    public AccountConnection(AccountConfig config)
+    /// <summary>
+    /// Per-account pause toggle. When true, the growth runner skips this
+    /// account even if the global kill switch is off.
+    /// </summary>
+    [ObservableProperty]
+    private bool isPaused;
+
+    /// <summary>True when the circuit breaker has tripped (too many failures).</summary>
+    [ObservableProperty]
+    private bool isDegraded;
+
+    /// <summary>Human-readable circuit breaker status.</summary>
+    [ObservableProperty]
+    private string circuitStatus = "";
+
+    public AccountConnection(AccountConfig config, TickHistoryCache? tickCache = null)
     {
         Config = config;
         _client = new DerivClient { AppId = AppSettings.DefaultAppId };
+        _tickCache = tickCache;
         BalanceText = config.IsDemo ? "demo" : "REAL";
         LoginIdText = "";
 
@@ -78,6 +105,25 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
             return;
         }
 
+        // Circuit breaker: refuse to connect if too many consecutive failures.
+        if (_consecutiveFailures >= MaxConsecutiveFailures)
+        {
+            if (DateTimeOffset.UtcNow < _circuitOpenUntil)
+            {
+                var remaining = (_circuitOpenUntil - DateTimeOffset.UtcNow).TotalMinutes;
+                StatusText = $"Degraded — retry in {remaining:0} min ({_consecutiveFailures} failures)";
+                IsDegraded = true;
+                CircuitStatus = $"Open ({_consecutiveFailures} failures, {remaining:0} min left)";
+                RaiseStateChanged();
+                return;
+            }
+
+            // Cooldown expired — allow a retry attempt.
+            _consecutiveFailures = 0;
+            IsDegraded = false;
+            CircuitStatus = "";
+        }
+
         IsBusy = true;
         LastError = "";
         StatusText = "Connecting…";
@@ -94,6 +140,9 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
                     _ticks.Clear();
                     _ticks.AddRange(history);
                 }
+
+                // Cache history for backtesting.
+                _tickCache?.AddTicks(Config.Symbol, history);
             }
             catch
             {
@@ -101,6 +150,12 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
             }
 
             await _client.SubscribeTicksAsync(Config.Symbol);
+
+            // Success — reset circuit breaker.
+            _consecutiveFailures = 0;
+            IsDegraded = false;
+            CircuitStatus = "";
+
             StatusText = string.IsNullOrEmpty(LoginIdText)
                 ? "Connected (not authorized)"
                 : $"Connected · {LoginIdText}";
@@ -108,8 +163,20 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         }
         catch (Exception ex)
         {
+            _consecutiveFailures++;
+            if (_consecutiveFailures >= MaxConsecutiveFailures)
+            {
+                _circuitOpenUntil = DateTimeOffset.UtcNow.AddMinutes(CircuitOpenMinutes);
+                IsDegraded = true;
+                CircuitStatus = $"Open ({_consecutiveFailures} failures, {CircuitOpenMinutes} min cooldown)";
+                StatusText = $"Degraded — too many failures, pausing {CircuitOpenMinutes} min";
+            }
+            else
+            {
+                StatusText = $"Connect failed ({_consecutiveFailures}/{MaxConsecutiveFailures})";
+            }
+
             LastError = ex.Message;
-            StatusText = "Connect failed";
             RaiseStateChanged();
             throw;
         }
@@ -125,6 +192,19 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         StatusText = "Not connected";
         IsConnected = false;
         BalanceText = Config.IsDemo ? "demo" : "REAL";
+        _consecutiveFailures = 0;
+        IsDegraded = false;
+        CircuitStatus = "";
+        RaiseStateChanged();
+    }
+
+    /// <summary>Manually reset the circuit breaker (e.g. after fixing a token).</summary>
+    public void ResetCircuitBreaker()
+    {
+        _consecutiveFailures = 0;
+        _circuitOpenUntil = DateTimeOffset.MinValue;
+        IsDegraded = false;
+        CircuitStatus = "";
         RaiseStateChanged();
     }
 
@@ -163,6 +243,9 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
                 _ticks.RemoveRange(0, _ticks.Count - 400);
             }
         }
+
+        // Feed the persistent cache for backtesting (batched by caller).
+        _tickCache?.AddTicks(Config.Symbol, new[] { tick });
     }
 
     private void OnErrorReceived(string message)

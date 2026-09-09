@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using Tf.App.Infrastructure;
 using Tf.Core;
+using Tf.Core.Analytics;
 using Tf.Core.Brain;
 using Tf.Core.Logging;
 using Tf.Core.Models;
@@ -21,6 +22,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     private readonly Func<AppSettings> _settings;
     private readonly Func<bool> _killSwitch;
     private readonly TradeJournal _journal;
+    private readonly PerformanceTracker? _tracker;
 
     private AutonomousScheduler? _scheduler;
     private TradingBrain? _brain;
@@ -43,13 +45,15 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     public event Action<string>? Activity;
 
     public GrowthRunner(AccountConnection connection, TradeStore store,
-        Func<AppSettings> settings, Func<bool> killSwitch, TradeJournal journal)
+        Func<AppSettings> settings, Func<bool> killSwitch, TradeJournal journal,
+        PerformanceTracker? tracker = null)
     {
         Connection = connection;
         _store = store;
         _settings = settings;
         _killSwitch = killSwitch;
         _journal = journal;
+        _tracker = tracker;
     }
 
     public AccountConnection Connection { get; }
@@ -65,6 +69,12 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         if (!Connection.IsConnected)
         {
             LastActivity = "Account not connected — Connect it first.";
+            return Task.CompletedTask;
+        }
+
+        if (Connection.IsPaused)
+        {
+            LastActivity = "Account is paused — resume it first.";
             return Task.CompletedTask;
         }
 
@@ -200,6 +210,14 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
     private void OnCycle(BrainCycleResult result)
     {
+        // Skip recording if the account is paused (scheduler still runs to stay warm).
+        if (Connection.IsPaused)
+        {
+            LastActivity = $"{DateTime.Now:HH:mm:ss} Paused — skipping cycle";
+            RaiseState();
+            return;
+        }
+
         var line = Describe(result);
         LastActivity = line;
         Activity?.Invoke(line);
@@ -238,12 +256,15 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
         if (result.ExecutedTrade is { } trade)
         {
-            _store.Add(trade with
+            var tagged = trade with
             {
                 AccountId = Connection.Config.Id,
                 AccountName = Connection.DisplayName,
                 Source = TradeSource.Growth
-            });
+            };
+            _store.Add(tagged);
+            _tracker?.RecordTrade(tagged);
+            _tracker?.Save();
             engine?.ApplySettlement(trade.IsWin, trade.Profit);
 
             var pnl = trade.Profit >= 0 ? $"+{trade.Profit:0.##}" : $"{trade.Profit:0.##}";
