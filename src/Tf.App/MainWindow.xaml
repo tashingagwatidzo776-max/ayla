@@ -1,0 +1,807 @@
+<Window x:Class="Tf.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:Tf.App.Controls"
+        xmlns:infra="clr-namespace:Tf.App.Infrastructure"
+        Title="Tf — Deriv Binary-Options Trader"
+        Width="1280" Height="820"
+        MinWidth="1024" MinHeight="680"
+        WindowStartupLocation="CenterScreen">
+
+    <DockPanel Margin="0,0,0,0">
+
+        <!-- ═══════════ Header ═══════════ -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="TF" FontSize="20" FontWeight="Bold"
+                               Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="  Deriv Binary-Options Trader · LLM + Growth brains"
+                               FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="8" Height="8" Fill="{StaticResource TextSecondaryBrush}" Margin="0,0,6,0">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Dashboard.IsConnected}" Value="True">
+                                                <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock Text="{Binding Dashboard.StatusText}" FontWeight="SemiBold" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatusPill}">
+                        <TextBlock Text="{Binding Dashboard.BalanceText}" FontFamily="Consolas" FontWeight="SemiBold" />
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ═══════════ Tabs ═══════════ -->
+        <TabControl Margin="0,0,0,0">
+            <TabItem Header="Dashboard">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Status row -->
+                    <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <WrapPanel>
+                            <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Symbol: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding Dashboard.SymbolText}" FontFamily="Consolas" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Brain: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding Brain.StatusText}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource StatusPill}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Mode: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding SettingsVm.ModeLabel}" />
+                                </StackPanel>
+                            </Border>
+                        </WrapPanel>
+                        <Button Grid.Column="1"
+                                Command="{Binding Dashboard.ToggleKillSwitchCommand}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource DangerButton}">
+                                    <Setter Property="Content" Value="☠ KILL SWITCH" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Dashboard.IsKillSwitchEngaged}" Value="True">
+                                            <Setter Property="Content" Value="☠ ENGAGED — CLICK TO RESET" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </Grid>
+
+                    <!-- Chart -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0">
+                        <controls:TickChartControl x:Name="Chart"
+                                                   LineBrush="{StaticResource AccentBrush}" />
+                    </Border>
+
+                    <!-- Footer -->
+                    <Grid Grid.Row="2" Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Dashboard.LastPriceText}"
+                                   FontFamily="Consolas" FontSize="22" FontWeight="Bold"
+                                   Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Grid.Column="1" Text="{Binding Dashboard.TickCountText}"
+                                   Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Bottom" />
+                    </Grid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Settings">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid Margin="24,16" MaxWidth="720" HorizontalAlignment="Left">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="220" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />  <!-- Account -->
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />  <!-- Market -->
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />  <!-- Autonomy -->
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />  <!-- LLM -->
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />  <!-- Actions -->
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="API token (demo)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <PasswordBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,10"
+                                     infra:PasswordBoxHelper.BoundPassword="{Binding SettingsVm.ApiToken, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="App ID" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.AppId, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Demo account" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <CheckBox Grid.Row="3" Grid.Column="1" Margin="0,0,0,10"
+                                  Content="Demo (real money requires explicit opt-in + risk guardrails)"
+                                  IsChecked="{Binding SettingsVm.IsDemo}" />
+
+                        <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Text="MARKET" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Symbol" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="5" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.Symbol, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Currency" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="6" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.Currency, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Duration (min)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="7" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.DurationMinutes, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Stake" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="8" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.Stake, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <TextBlock Grid.Row="9" Grid.ColumnSpan="2" Text="AUTONOMY" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="10" Grid.Column="0" Text="Autonomy" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <CheckBox Grid.Row="10" Grid.Column="1" Margin="0,0,0,10"
+                                  Content="Let the brain place trades (guardrails enforced)"
+                                  IsChecked="{Binding SettingsVm.AutonomyEnabled}" />
+                        <TextBlock Grid.Row="11" Grid.Column="0" Text="Decision interval (min)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="11" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.DecisionIntervalMinutes, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <TextBlock Grid.Row="12" Grid.ColumnSpan="2" Text="LLM BRAIN" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="13" Grid.Column="0" Text="Base URL" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="13" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.LlmBaseUrl, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="14" Grid.Column="0" Text="Model" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="14" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.LlmModel, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="15" Grid.Column="0" Text="API key" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="15" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.LlmApiKey, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <StackPanel Grid.Row="16" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
+                            <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
+                            <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
+                        </StackPanel>
+                        <TextBlock Grid.Row="17" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                                   Text="{Binding SettingsVm.StatusMessage}"
+                                   Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Accounts &amp; Growth">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />   <!-- add-account card -->
+                        <RowDefinition Height="Auto" />   <!-- accounts header -->
+                        <RowDefinition Height="220" />    <!-- accounts grid -->
+                        <RowDefinition Height="Auto" />   <!-- growth plan card -->
+                        <RowDefinition Height="Auto" />   <!-- growth grid header -->
+                        <RowDefinition Height="190" />    <!-- growth grid -->
+                        <RowDefinition Height="Auto" />   <!-- activity header -->
+                        <RowDefinition Height="*" />      <!-- activity log -->
+                    </Grid.RowDefinitions>
+
+                    <!-- ── Add account card ─────────────────────────── -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="MULTI-ACCOUNT CONNECT" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
+                                       Text="Each token is its own Deriv account (one WebSocket each). Paste a demo token per row, then Connect all — every account streams its own feed and balance." />
+                            <WrapPanel Margin="0,10,0,0">
+                                <StackPanel Width="430" Margin="0,0,12,0">
+                                    <TextBlock Text="API token (demo)" Style="{StaticResource FieldLabel}" />
+                                    <PasswordBox infra:PasswordBoxHelper.BoundPassword="{Binding AccountsVm.NewToken, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="130" Margin="0,0,12,0">
+                                    <TextBlock Text="Label (optional)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding AccountsVm.NewLabel, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="120" Margin="0,0,12,0">
+                                    <TextBlock Text="Symbol" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding AccountsVm.NewSymbol, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,12,0">
+                                    <TextBlock Text="Dur (min)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding AccountsVm.NewDurationMinutes, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,12,0">
+                                    <TextBlock Text="Budget ($)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding AccountsVm.NewBudget, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="120" Margin="0,0,12,0">
+                                    <TextBlock Text="Brain" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox ItemsSource="{Binding AccountsVm.AvailableBrains}" SelectedItem="{Binding AccountsVm.NewBrainKey}" />
+                                </StackPanel>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Content="＋ Add account" Command="{Binding AccountsVm.AddAccountCommand}" />
+                                <Button Content="Connect all" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding AccountsVm.ConnectAllCommand}" />
+                                <Button Content="Disconnect all" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding AccountsVm.DisconnectAllCommand}" />
+                                <TextBlock Text="{Binding AccountsVm.StatusMessage}" Margin="12,0,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ── Connected accounts grid ──────────────────── -->
+                    <TextBlock Grid.Row="1" Text="CONNECTED ACCOUNTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding AccountsVm.Accounts}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True" Margin="0,0,0,10">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Account" Width="140" Binding="{Binding DisplayName}" />
+                            <DataGridTextColumn Header="Login" Width="110" Binding="{Binding LoginIdText}" />
+                            <DataGridTextColumn Header="Status" Width="110" Binding="{Binding StatusText}" />
+                            <DataGridTextColumn Header="Balance" Width="110" Binding="{Binding BalanceText}" />
+                            <DataGridTextColumn Header="Symbol" Width="110" Binding="{Binding Config.Symbol}" />
+                            <DataGridTextColumn Header="Mode" Width="60" Binding="{Binding Config.IsDemo}" />
+                            <DataGridTextColumn Header="Brain" Width="100" Binding="{Binding Config.BrainKey}" />
+                            <DataGridTemplateColumn Header="Actions" Width="*" MinWidth="210">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Button Margin="0,0,6,0" Padding="12,3"
+                                                    Command="{Binding DataContext.AccountsVm.ConnectAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                        <Setter Property="Content" Value="Connect" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                                                <Setter Property="Content" Value="Disconnect" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                                                <Setter Property="Content" Value="…" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Padding="12,3"
+                                                    Command="{Binding DataContext.AccountsVm.RemoveAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                        <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                        <Setter Property="Content" Value="Remove" />
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <!-- ── Growth plan card ──────────────────────────── -->
+                    <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="GROWTH ENGINES — the second brain ($5 challenge)" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
+                                       Text="Deterministic rules brain — no LLM or API key needed. Every connected demo account gets a session that starts at the budget below and replays today's trades, so it survives restarts. Stakes are a % of the bankroll with a ×2 recovery ladder; the session stops at the floor or daily target." />
+                            <WrapPanel Margin="0,10,0,0">
+                                <StackPanel Width="90" Margin="0,0,10,0">
+                                    <TextBlock Text="Budget ($)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.Budget, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="90" Margin="0,0,10,0">
+                                    <TextBlock Text="Risk / trade (%)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.RiskPercent, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="90" Margin="0,0,10,0">
+                                    <TextBlock Text="Daily target (%)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.TargetPercent, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="90" Margin="0,0,10,0">
+                                    <TextBlock Text="Stop at floor (%)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.FloorPercent, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="100" Margin="0,0,10,0">
+                                    <TextBlock Text="Recovery steps" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.RecoverySteps, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Interval (min)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.IntervalMinutes, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Content="Save plan" Style="{StaticResource GhostButton}" Command="{Binding GrowthVm.SavePlanCommand}" />
+                                <Button Content="▶ Start all engines" Margin="8,0,0,0" Command="{Binding GrowthVm.StartAllCommand}" />
+                                <Button Content="■ Stop all engines" Style="{StaticResource DangerButton}" Margin="8,0,0,0" Command="{Binding GrowthVm.StopAllCommand}" />
+                                <TextBlock Text="{Binding GrowthVm.StatusMessage}" Margin="12,0,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ── Growth runners grid ───────────────────────── -->
+                    <TextBlock Grid.Row="4" Text="RUNNERS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <DataGrid Grid.Row="5" ItemsSource="{Binding GrowthVm.Rows}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Account" Width="130" Binding="{Binding DisplayName}" />
+                            <DataGridTextColumn Header="Login" Width="110" Binding="{Binding Connection.LoginIdText}" />
+                            <DataGridTextColumn Header="Status" Width="120" Binding="{Binding Connection.StatusText}" />
+                            <DataGridTextColumn Header="Balance" Width="100" Binding="{Binding Connection.BalanceText}" />
+                            <DataGridTextColumn Header="Budget" Width="70" Binding="{Binding BudgetText}" />
+                            <DataGridTextColumn Header="Bankroll" Width="110" Binding="{Binding Runner.BankrollText}" />
+                            <DataGridTextColumn Header="Session" Width="150" Binding="{Binding Runner.SessionStateText}" />
+                            <DataGridTextColumn Header="Last activity" Width="*" Binding="{Binding Runner.LastActivity}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <!-- ── Activity log ──────────────────────────────── -->
+                    <TextBlock Grid.Row="6" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="7" Style="{StaticResource Card}" Padding="10">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding GrowthVm.ActivityLog}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontFamily="Consolas" FontSize="12"
+                                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2" TextWrapping="Wrap" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Trades">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Summary + manual demo trade -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="DAILY SUMMARY" Style="{StaticResource SectionTitle}" />
+                                <TextBlock Text="{Binding Trades.SummaryText}" FontSize="16" FontWeight="Bold" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="Direction:" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <ComboBox Width="100" Margin="0,0,10,0"
+                                          ItemsSource="{Binding Trades.Directions}"
+                                          SelectedItem="{Binding Trades.SelectedDirection}" />
+                                <Button Command="{Binding Trades.PlaceDemoTradeCommand}"
+                                        IsEnabled="{Binding Trades.CanTrade}">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="Content" Value="Place demo trade" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Trades.IsBusy}" Value="True">
+                                                    <Setter Property="Content" Value="Placing…" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Grid.Row="1" Margin="4,0,0,8" TextWrapping="Wrap"
+                               Text="{Binding Trades.StatusMessage}"
+                               Foreground="{StaticResource TextSecondaryBrush}" />
+
+                    <!-- Trade history -->
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding Trades.Trades}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Acct" Width="80"
+                                                Binding="{Binding AccountName, TargetNullValue=primary}" />
+                            <DataGridTextColumn Header="Source" Width="70"
+                                                Binding="{Binding Source, TargetNullValue=—}" />
+                            <DataGridTextColumn Header="Settled" Width="80"
+                                                Binding="{Binding SettledAt, StringFormat=HH:mm}" />
+                            <DataGridTextColumn Header="Symbol" Width="*"
+                                                Binding="{Binding Symbol}" />
+                            <DataGridTextColumn Header="Direction" Width="70"
+                                                Binding="{Binding Direction}" />
+                            <DataGridTextColumn Header="Stake" Width="70"
+                                                Binding="{Binding Stake, StringFormat=0.##}" />
+                            <DataGridTextColumn Header="Outcome" Width="80"
+                                                Binding="{Binding Outcome}" />
+                            <DataGridTemplateColumn Header="P&amp;L" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Profit, StringFormat=+0.##;-0.##;0}" FontWeight="Bold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsWin}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Outcome}" Value="Lost">
+                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Brain">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Controls -->
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="DECISION ENGINE" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="{Binding Brain.LlmInfo}" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="Autonomy off: cycle decides + risk-checks only. Autonomy on: allowed trades are placed."
+                                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="Start" Style="{StaticResource {x:Type Button}}" Margin="0,0,6,0"
+                                    Command="{Binding Brain.StartAutonomyCommand}" />
+                            <Button Content="Stop" Style="{StaticResource {x:Type Button}}"
+                                    Command="{Binding Brain.StopAutonomyCommand}" />
+                        </StackPanel>
+                        <Button Grid.Column="2" VerticalAlignment="Center" Command="{Binding Brain.RunCycleCommand}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Content" Value="Run" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Brain.IsBusy}" Value="True">
+                                            <Setter Property="Content" Value="Thinking…" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </Grid>
+
+                    <!-- Last decision card -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="LAST DECISION" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="{Binding Brain.LastDecisionText}"
+                                       FontFamily="Consolas" FontSize="13" LineHeight="20" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Confidence history -->
+                    <TextBlock Grid.Row="2" Text="CONFIDENCE HISTORY" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,0" Padding="10">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Brain.ConfidenceHistory}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontFamily="Consolas" FontSize="12"
+                                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+
+                    <!-- Lessons -->
+                    <TextBlock Grid.Row="4" Text="LESSONS / MEMORY" Style="{StaticResource SectionTitle}" Margin="4,12,0,6" />
+                    <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0" Padding="10">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <TextBlock Text="{Binding Brain.LessonsText}" FontFamily="Consolas" FontSize="12"
+                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Journal">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Controls -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="TRADE JOURNAL" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="Complete log of all brain decisions, trade executions, and account activity." Foreground="{StaticResource TextSecondaryBrush}" />
+                            <WrapPanel Margin="0,10,0,0">
+                                <StackPanel Width="150" Margin="0,0,10,0">
+                                    <TextBlock Text="Filter category" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox ItemsSource="{Binding JournalVm.Categories}" SelectedItem="{Binding JournalVm.FilterCategory}" />
+                                </StackPanel>
+                                <StackPanel Width="100" Margin="0,0,10,0">
+                                    <TextBlock Text="Max entries" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding JournalVm.MaxEntries, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="Refresh" Command="{Binding JournalVm.RefreshCommand}" />
+                                <Button Content="Clear filter" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding JournalVm.ClearFilterCommand}" />
+                                <TextBlock Text="{Binding JournalVm.StatsText}" Margin="12,0,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Journal entries -->
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding JournalVm.Entries}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Time" Width="90" Binding="{Binding Timestamp}" />
+                            <DataGridTextColumn Header="Account" Width="80" Binding="{Binding AccountId}" />
+                            <DataGridTextColumn Header="Category" Width="120" Binding="{Binding Category}" />
+                            <DataGridTextColumn Header="Details" Width="*" Binding="{Binding Details}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Performance">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Summary -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="PERFORMANCE DASHBOARD" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="{Binding PerformanceVm.SummaryText}" FontSize="16" FontWeight="Bold" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="Refresh" Command="{Binding PerformanceVm.RefreshCommand}" />
+                                <Button Content="Export CSV" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding PerformanceVm.ExportToCsvCommand}" />
+                                <TextBlock Text="{Binding PerformanceVm.StatusMessage}" Margin="12,0,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Account Stats -->
+                    <TextBlock Grid.Row="1" Text="ACCOUNT STATS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding PerformanceVm.AccountStats}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True" Margin="0,0,0,10">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Account" Width="120" Binding="{Binding AccountName}" />
+                            <DataGridTextColumn Header="Trades" Width="70" Binding="{Binding TotalTrades}" />
+                            <DataGridTextColumn Header="Wins" Width="60" Binding="{Binding Wins}" />
+                            <DataGridTextColumn Header="Losses" Width="60" Binding="{Binding Losses}" />
+                            <DataGridTextColumn Header="Win Rate" Width="80" Binding="{Binding WinRate, StringFormat=P0}" />
+                            <DataGridTextColumn Header="P&amp;L" Width="90" Binding="{Binding TotalProfit, StringFormat=+0.##;-0.##;0}" />
+                            <DataGridTextColumn Header="ROI" Width="70" Binding="{Binding ROI, StringFormat=P1}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <!-- Strategy Stats -->
+                    <TextBlock Grid.Row="3" Text="STRATEGY STATS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <DataGrid Grid.Row="4" ItemsSource="{Binding PerformanceVm.StrategyStats}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True" Margin="0,0,0,10">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Strategy" Width="120" Binding="{Binding Strategy}" />
+                            <DataGridTextColumn Header="Trades" Width="70" Binding="{Binding TotalTrades}" />
+                            <DataGridTextColumn Header="Wins" Width="60" Binding="{Binding Wins}" />
+                            <DataGridTextColumn Header="Losses" Width="60" Binding="{Binding Losses}" />
+                            <DataGridTextColumn Header="Win Rate" Width="80" Binding="{Binding WinRate, StringFormat=P0}" />
+                            <DataGridTextColumn Header="P&amp;L" Width="90" Binding="{Binding TotalProfit, StringFormat=+0.##;-0.##;0}" />
+                            <DataGridTextColumn Header="ROI" Width="70" Binding="{Binding ROI, StringFormat=P1}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Optimizer">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Controls -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="STRATEGY OPTIMIZER" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="Backtest and optimize brain strategies on historical data." Foreground="{StaticResource TextSecondaryBrush}" />
+                            <WrapPanel Margin="0,10,0,0">
+                                <StackPanel Width="130" Margin="0,0,10,0">
+                                    <TextBlock Text="Strategy" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox ItemsSource="{Binding OptimizerVm.Strategies}" SelectedItem="{Binding OptimizerVm.SelectedStrategy}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Start ($)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding OptimizerVm.StartBankroll, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Risk %" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding OptimizerVm.RiskFraction, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Max Trades" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding OptimizerVm.MaxTrades, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Iterations" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding OptimizerVm.OptimizationIterations, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="▶ Run Backtest" Command="{Binding OptimizerVm.RunBacktestCommand}" />
+                                <Button Content="⚙ Run Optimization" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding OptimizerVm.RunOptimizationCommand}" />
+                                <TextBlock Text="{Binding OptimizerVm.StatusMessage}" Margin="12,0,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Last result -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10"
+                            Visibility="{Binding OptimizerVm.LastResult, Converter={StaticResource NullToVisibility}}">
+                        <StackPanel>
+                            <TextBlock Text="LAST BACKTEST RESULT" Style="{StaticResource SectionTitle}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="Strategy" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding OptimizerVm.LastResult.Strategy}" FontWeight="Bold" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Trades" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding OptimizerVm.LastResult.TotalTrades}" FontWeight="Bold" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Win Rate" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding OptimizerVm.LastResult.WinRate, StringFormat=P0}" FontWeight="Bold" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="3">
+                                    <TextBlock Text="P&amp;L" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding OptimizerVm.LastResult.TotalProfit, StringFormat=+0.##;-0.##;0}" FontWeight="Bold" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="Sharpe" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding OptimizerVm.LastResult.SharpeRatio, StringFormat=F2}" FontWeight="Bold" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="5">
+                                    <TextBlock Text="Max DD" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding OptimizerVm.LastResult.MaxDrawdown, StringFormat=0.##}" FontWeight="Bold" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Optimization results -->
+                    <TextBlock Grid.Row="2" Text="TOP OPTIMIZATION RESULTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6"
+                               Visibility="{Binding OptimizerVm.Results.Count, Converter={StaticResource CountToVisibility}}" />
+                    <DataGrid Grid.Row="3" ItemsSource="{Binding OptimizerVm.Results}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Parameters" Width="*" Binding="{Binding Parameters}" />
+                            <DataGridTextColumn Header="P&amp;L" Width="90" Binding="{Binding TotalProfit, StringFormat=+0.##;-0.##;0}" />
+                            <DataGridTextColumn Header="Sharpe" Width="80" Binding="{Binding SharpeRatio, StringFormat=F2}" />
+                            <DataGridTextColumn Header="Max DD" Width="80" Binding="{Binding MaxDrawdown, StringFormat=0.##}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Updates">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Controls -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="AUTO-UPDATE" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="Check for and install updates automatically." Foreground="{StaticResource TextSecondaryBrush}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="Check for updates" Command="{Binding UpdateVm.CheckForUpdateCommand}" />
+                                <Button Content="Download" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding UpdateVm.DownloadUpdateCommand}"
+                                        IsEnabled="{Binding UpdateVm.AvailableUpdate, Converter={StaticResource NullToVisibility}, ConverterParameter=True}" />
+                                <Button Content="Install &amp; Restart" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                        Command="{Binding UpdateVm.InstallUpdateCommand}" />
+                                <Button Content="Cleanup old updates" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding UpdateVm.CleanupOldUpdatesCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Status -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10"
+                            Visibility="{Binding UpdateVm.AvailableUpdate, Converter={StaticResource NullToVisibility}}">
+                        <StackPanel>
+                            <TextBlock Text="UPDATE AVAILABLE" Style="{StaticResource SectionTitle}" />
+                            <TextBlock>
+                                <Run Text="Version: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                <Run Text="{Binding UpdateVm.AvailableUpdate.Version}" FontWeight="Bold" />
+                            </TextBlock>
+                            <TextBlock>
+                                <Run Text="Size: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                <Run Text="{Binding UpdateVm.AvailableUpdate.FileSize}" />
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Status log -->
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Padding="10">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <TextBlock Text="{Binding UpdateVm.StatusMessage}" FontFamily="Consolas" FontSize="12"
+                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

@@ -1,0 +1,22 @@
+# Build outputs
+bin/
+obj/
+*.user
+publish/
+
+# Data & secrets (never commit live keys)
+data/
+secrets/
+
+# Rider/VS
+.idea/
+.vs/
+*.suo
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Preview artifacts
+*.html
+*.png
