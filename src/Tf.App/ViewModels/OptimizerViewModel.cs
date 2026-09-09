@@ -54,6 +54,7 @@ public partial class OptimizerViewModel : ObservableObject
 
     public ObservableCollection<string> AvailableSymbols { get; } = new();
     public ObservableCollection<OptimizationResultViewModel> Results { get; } = new();
+    public ObservableCollection<SavedResultViewModel> SavedResults { get; } = new();
 
     public OptimizerViewModel(StrategyOptimizer optimizer, TickHistoryCache tickCache)
     {
@@ -85,6 +86,28 @@ public partial class OptimizerViewModel : ObservableObject
 
         DataSourceInfo = $"Only {cached.Count} cached ticks — using synthetic data";
         return GenerateSyntheticData(Math.Max(minCount, 500));
+    }
+
+    [RelayCommand]
+    private void LoadSavedResults()
+    {
+        SavedResults.Clear();
+        foreach (var file in _optimizer.GetSavedResults())
+        {
+            var result = _optimizer.LoadResult(file);
+            if (result != null)
+            {
+                SavedResults.Add(new SavedResultViewModel
+                {
+                    FilePath = file,
+                    Strategy = result.StrategyName,
+                    BestSharpe = result.BestResult.SharpeRatio,
+                    BestPnl = result.BestResult.TotalProfit,
+                    Iterations = result.TotalIterations,
+                    BestParams = string.Join(", ", result.BestParameters.Select(p => $"{p.Key}={p.Value:0.##}"))
+                });
+            }
+        }
     }
 
     [RelayCommand]
@@ -281,4 +304,14 @@ public class OptimizationResultViewModel
     public decimal TotalProfit { get; set; }
     public double SharpeRatio { get; set; }
     public decimal MaxDrawdown { get; set; }
+}
+
+public class SavedResultViewModel
+{
+    public string FilePath { get; set; } = "";
+    public string Strategy { get; set; } = "";
+    public double BestSharpe { get; set; }
+    public decimal BestPnl { get; set; }
+    public int Iterations { get; set; }
+    public string BestParams { get; set; } = "";
 }

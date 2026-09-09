@@ -232,7 +232,8 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             if (!marketHours.IsOpen(now))
             {
                 var nextOpen = marketHours.TimeUntilNextOpen(now);
-                LastActivity = $"{DateTime.Now:HH:mm:ss} Market closed ({marketHours.GetActiveSessions(now)}) — opens in {nextOpen.TotalHours:0.#}h";
+                var holiday = MarketHours.IsHoliday(now.Date) ? $" (holiday — next: {MarketHours.GetNextHoliday(now.Date.AddDays(1)) ?? "none"})" : "";
+                LastActivity = $"{DateTime.Now:HH:mm:ss} Market closed{holiday} — opens in {nextOpen.TotalHours:0.#}h";
                 RaiseState();
                 return;
             }

@@ -31,6 +31,8 @@ public partial class App : Application
         services.AddSingleton<AccountVault>();
         services.AddSingleton<GrowthPlanStore>();
         services.AddSingleton(_ => new TickHistoryCache(SettingsService.DataDir));
+        services.AddSingleton(_ => new HeartbeatLog(SettingsService.DataDir));
+        services.AddSingleton(_ => new AppLogger(SettingsService.DataDir));
         services.AddSingleton<NotificationService>();
         services.AddSingleton<WebhookService>();
         services.AddSingleton(_ => new TradeJournal(Path.Combine(SettingsService.DataDir, "journal")));
@@ -41,6 +43,7 @@ public partial class App : Application
                 sp.GetRequiredService<TradeJournal>(),
                 sp.GetRequiredService<PerformanceTracker>(),
                 sp.GetRequiredService<TickHistoryCache>(),
+                sp.GetRequiredService<HeartbeatLog>(),
                 sp.GetRequiredService<NotificationService>(),
                 sp.GetRequiredService<WebhookService>()));
 
@@ -93,6 +96,15 @@ public partial class App : Application
         var mainVm = (MainViewModel)window.DataContext;
         _ = mainVm.InitializeAsync();
         provider.GetRequiredService<BrainViewModel>().StartAutonomy();
+
+        // Configure webhook from persisted settings.
+        var settings = provider.GetRequiredService<SettingsService>().Load();
+        if (!string.IsNullOrEmpty(settings.WebhookUrl))
+        {
+            var webhook = provider.GetRequiredService<WebhookService>();
+            webhook.WebhookUrl = settings.WebhookUrl;
+            webhook.IsDiscord = settings.IsDiscordWebhook;
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

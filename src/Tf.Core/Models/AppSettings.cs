@@ -55,4 +55,20 @@ public sealed class AppSettings
 
     /// <summary>Only trade during high-liquidity overlap windows.</summary>
     public bool OverlapsOnly { get; set; }
+
+    // ── Webhooks ───────────────────────────────────────────────
+    /// <summary>Discord or Slack webhook URL for trade notifications.</summary>
+    public string WebhookUrl { get; set; } = "";
+
+    /// <summary>True = Discord format, false = Slack format.</summary>
+    public bool IsDiscordWebhook { get; set; } = true;
+
+    /// <summary>Post trade settlements to webhook.</summary>
+    public bool WebhookOnTrade { get; set; } = true;
+
+    /// <summary>Post growth milestones (target/floor) to webhook.</summary>
+    public bool WebhookOnMilestone { get; set; } = true;
+
+    /// <summary>Post circuit breaker events to webhook.</summary>
+    public bool WebhookOnCircuitBreaker { get; set; } = true;
 }

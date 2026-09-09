@@ -151,6 +151,8 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />  <!-- Actions -->
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />  <!-- Status -->
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -218,11 +220,18 @@
                                   Content="Discord (uncheck for Slack)"
                                   IsChecked="{Binding SettingsVm.IsDiscordWebhook}" />
 
-                        <StackPanel Grid.Row="22" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
+                        <TextBlock Grid.Row="22" Grid.Column="0" Text="Events" Style="{StaticResource FieldLabel}" VerticalAlignment="Top" />
+                        <StackPanel Grid.Row="22" Grid.Column="1" Margin="0,0,0,10">
+                            <CheckBox Content="Trade settlements" IsChecked="{Binding SettingsVm.WebhookOnTrade}" Margin="0,0,0,4" />
+                            <CheckBox Content="Growth milestones (target/floor)" IsChecked="{Binding SettingsVm.WebhookOnMilestone}" Margin="0,0,0,4" />
+                            <CheckBox Content="Circuit breaker events" IsChecked="{Binding SettingsVm.WebhookOnCircuitBreaker}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="23" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
                             <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
                         </StackPanel>
-                        <TextBlock Grid.Row="17" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                        <TextBlock Grid.Row="24" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
                                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                     </Grid>
@@ -634,10 +643,19 @@
                                     <TextBlock Text="Max entries" Style="{StaticResource FieldLabel}" />
                                     <TextBox Text="{Binding JournalVm.MaxEntries, UpdateSourceTrigger=PropertyChanged}" />
                                 </StackPanel>
+                                <StackPanel Width="130" Margin="0,0,10,0">
+                                    <TextBlock Text="From date" Style="{StaticResource FieldLabel}" />
+                                    <DatePicker SelectedDate="{Binding JournalVm.FilterDateFrom}" />
+                                </StackPanel>
+                                <StackPanel Width="130" Margin="0,0,10,0">
+                                    <TextBlock Text="To date" Style="{StaticResource FieldLabel}" />
+                                    <DatePicker SelectedDate="{Binding JournalVm.FilterDateTo}" />
+                                </StackPanel>
                             </WrapPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <Button Content="Refresh" Command="{Binding JournalVm.RefreshCommand}" />
                                 <Button Content="Clear filter" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding JournalVm.ClearFilterCommand}" />
+                                <Button Content="Export" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding JournalVm.ExportJournalCommand}" />
                                 <TextBlock Text="{Binding JournalVm.StatsText}" Margin="12,0,0,0"
                                            Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
                             </StackPanel>
@@ -853,6 +871,24 @@
                             <DataGridTextColumn Header="P&amp;L" Width="90" Binding="{Binding TotalProfit, StringFormat=+0.##;-0.##;0}" />
                             <DataGridTextColumn Header="Sharpe" Width="80" Binding="{Binding SharpeRatio, StringFormat=F2}" />
                             <DataGridTextColumn Header="Max DD" Width="80" Binding="{Binding MaxDrawdown, StringFormat=0.##}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <!-- Saved results -->
+                    <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,10,0,6">
+                        <TextBlock Text="PREVIOUS RUNS" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                        <Button Content="Load" Style="{StaticResource GhostButton}" Margin="12,0,0,0"
+                                Command="{Binding OptimizerVm.LoadSavedResultsCommand}" />
+                    </StackPanel>
+                    <DataGrid Grid.Row="5" ItemsSource="{Binding OptimizerVm.SavedResults}" AutoGenerateColumns="False"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True"
+                              Visibility="{Binding OptimizerVm.SavedResults.Count, Converter={StaticResource CountToVisibility}}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Strategy" Width="120" Binding="{Binding Strategy}" />
+                            <DataGridTextColumn Header="Sharpe" Width="80" Binding="{Binding BestSharpe, StringFormat=F2}" />
+                            <DataGridTextColumn Header="P&amp;L" Width="90" Binding="{Binding BestPnl, StringFormat=+0.##;-0.##;0}" />
+                            <DataGridTextColumn Header="Iterations" Width="80" Binding="{Binding Iterations}" />
+                            <DataGridTextColumn Header="Best Params" Width="*" Binding="{Binding BestParams}" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>

@@ -20,6 +20,7 @@ public sealed class MultiAccountHub
     private readonly TradeJournal _journal;
     private readonly PerformanceTracker? _tracker;
     private readonly TickHistoryCache? _tickCache;
+    private readonly HeartbeatLog? _heartbeat;
     private readonly NotificationService? _notifications;
     private readonly WebhookService? _webhook;
     private readonly Dictionary<Guid, GrowthRunner> _runners = new();
@@ -27,13 +28,15 @@ public sealed class MultiAccountHub
 
     public MultiAccountHub(AccountVault vault, TradeStore store, TradeJournal journal,
         PerformanceTracker? tracker = null, TickHistoryCache? tickCache = null,
-        NotificationService? notifications = null, WebhookService? webhook = null)
+        HeartbeatLog? heartbeat = null, NotificationService? notifications = null,
+        WebhookService? webhook = null)
     {
         _vault = vault;
         _store = store;
         _journal = journal;
         _tracker = tracker;
         _tickCache = tickCache;
+        _heartbeat = heartbeat;
         _notifications = notifications;
         _webhook = webhook;
 
@@ -189,7 +192,7 @@ public sealed class MultiAccountHub
     }
 
     private AccountConnection CreateConnection(AccountConfig config) =>
-        new(config, _tickCache);
+        new(config, _tickCache, _heartbeat);
 
     private void OnConnectionStateChanged(AccountConnection connection)
     {

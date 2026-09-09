@@ -20,7 +20,9 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private readonly List<Tick> _ticks = new();
     private readonly object _sync = new();
     private readonly TickHistoryCache? _tickCache;
+    private readonly HeartbeatLog? _heartbeat;
     private bool _disposed;
+    private string _lastState = "Not connected";
 
     // ── Circuit breaker ────────────────────────────────────────────
     private const int MaxConsecutiveFailures = 5;
@@ -64,11 +66,12 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     [ObservableProperty]
     private string circuitStatus = "";
 
-    public AccountConnection(AccountConfig config, TickHistoryCache? tickCache = null)
+    public AccountConnection(AccountConfig config, TickHistoryCache? tickCache = null, HeartbeatLog? heartbeat = null)
     {
         Config = config;
         _client = new DerivClient { AppId = AppSettings.DefaultAppId };
         _tickCache = tickCache;
+        _heartbeat = heartbeat;
         BalanceText = config.IsDemo ? "demo" : "REAL";
         LoginIdText = "";
 
@@ -211,7 +214,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private void OnStatusChanged(ConnectionStatus status)
     {
         IsConnected = status is ConnectionStatus.Connected or ConnectionStatus.Reconnecting;
-        StatusText = status switch
+        var newState = status switch
         {
             ConnectionStatus.Connected => "Connected",
             ConnectionStatus.Connecting => "Connecting…",
@@ -219,6 +222,14 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
             ConnectionStatus.Error => "Error",
             _ => "Not connected"
         };
+
+        if (newState != _lastState)
+        {
+            _heartbeat?.Record(Config.Id, DisplayName, _lastState, newState);
+            _lastState = newState;
+        }
+
+        StatusText = newState;
         RaiseStateChanged();
     }
 

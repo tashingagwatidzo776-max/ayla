@@ -61,6 +61,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool isDiscordWebhook = true;
 
     [ObservableProperty]
+    private bool webhookOnTrade = true;
+
+    [ObservableProperty]
+    private bool webhookOnMilestone = true;
+
+    [ObservableProperty]
+    private bool webhookOnCircuitBreaker = true;
+
+    [ObservableProperty]
     private string statusMessage = "Settings load on startup; Save writes them to %APPDATA%\\tf\\data.";
 
     /// <summary>Human-readable trading-mode label.</summary>
@@ -94,6 +103,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         LlmApiKey = settings.LlmApiKey;
         RespectMarketHours = settings.RespectMarketHours;
         OverlapsOnly = settings.OverlapsOnly;
+        WebhookUrl = settings.WebhookUrl;
+        IsDiscordWebhook = settings.IsDiscordWebhook;
+        WebhookOnTrade = settings.WebhookOnTrade;
+        WebhookOnMilestone = settings.WebhookOnMilestone;
+        WebhookOnCircuitBreaker = settings.WebhookOnCircuitBreaker;
         StatusMessage = "Settings loaded.";
     }
 
@@ -118,7 +132,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         MinConfidence = 0.60,
         CooldownMinutesAfterLoss = 15,
         RespectMarketHours = RespectMarketHours,
-        OverlapsOnly = OverlapsOnly
+        OverlapsOnly = OverlapsOnly,
+        WebhookUrl = WebhookUrl?.Trim() ?? "",
+        IsDiscordWebhook = IsDiscordWebhook,
+        WebhookOnTrade = WebhookOnTrade,
+        WebhookOnMilestone = WebhookOnMilestone,
+        WebhookOnCircuitBreaker = WebhookOnCircuitBreaker
     };
 
     [RelayCommand]

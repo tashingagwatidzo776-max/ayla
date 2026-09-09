@@ -182,6 +182,65 @@ public sealed class StrategyOptimizer
         return stdDev > 0 ? avgReturn / stdDev * Math.Sqrt(252) : 0; // Annualized
     }
 
+    /// <summary>List all saved optimization result files.</summary>
+    public IReadOnlyList<string> GetSavedResults()
+    {
+        try
+        {
+            return Directory.GetFiles(_resultsDir, "optimization_*.json")
+                .OrderByDescending(f => f)
+                .ToArray();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>Load a previous optimization result from disk.</summary>
+    public OptimizationResult? LoadResult(string filePath)
+    {
+        try
+        {
+            var json = File.ReadAllText(filePath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var strategyName = root.GetProperty("StrategyName").GetString() ?? "";
+            var bestParams = new Dictionary<string, double>();
+            if (root.TryGetProperty("BestParameters", out var bp))
+            {
+                foreach (var prop in bp.EnumerateObject())
+                    bestParams[prop.Name] = prop.Value.GetDouble();
+            }
+
+            var bestResult = new BacktestResult { StrategyName = strategyName };
+            if (root.TryGetProperty("BestResult", out var br))
+            {
+                bestResult.StartBankroll = br.TryGetProperty("StartBankroll", out var sb) ? sb.GetDecimal() : 5m;
+                bestResult.EndBankroll = br.TryGetProperty("EndBankroll", out var eb) ? eb.GetDecimal() : 5m;
+                bestResult.TotalTrades = br.TryGetProperty("TotalTrades", out var tt) ? tt.GetInt32() : 0;
+                bestResult.Wins = br.TryGetProperty("Wins", out var w) ? w.GetInt32() : 0;
+                bestResult.Losses = br.TryGetProperty("Losses", out var l) ? l.GetInt32() : 0;
+                bestResult.TotalProfit = br.TryGetProperty("TotalProfit", out var tp) ? tp.GetDecimal() : 0m;
+                bestResult.MaxDrawdown = br.TryGetProperty("MaxDrawdown", out var md) ? md.GetDecimal() : 0m;
+                bestResult.SharpeRatio = br.TryGetProperty("SharpeRatio", out var sr) ? sr.GetDouble() : 0;
+            }
+
+            return new OptimizationResult
+            {
+                StrategyName = strategyName,
+                BestParameters = bestParams,
+                BestResult = bestResult,
+                TotalIterations = root.TryGetProperty("TotalIterations", out var ti) ? ti.GetInt32() : 0
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void SaveResults(
         string strategyName,
         Dictionary<string, double> bestParams,

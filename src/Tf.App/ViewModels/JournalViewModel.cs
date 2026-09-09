@@ -31,6 +31,12 @@ public partial class JournalViewModel : ObservableObject
     private int maxEntries = 200;
 
     [ObservableProperty]
+    private DateTimeOffset? filterDateFrom;
+
+    [ObservableProperty]
+    private DateTimeOffset? filterDateTo;
+
+    [ObservableProperty]
     private string statsText = "No data yet";
 
     public ObservableCollection<JournalEntryViewModel> Entries { get; } = new();
@@ -63,6 +69,11 @@ public partial class JournalViewModel : ObservableObject
             if (FilterCategory != "ALL" && entry.Category != FilterCategory)
                 continue;
 
+            if (FilterDateFrom.HasValue && entry.Timestamp < FilterDateFrom.Value)
+                continue;
+            if (FilterDateTo.HasValue && entry.Timestamp > FilterDateTo.Value.AddDays(1))
+                continue;
+
             Entries.Add(new JournalEntryViewModel
             {
                 Timestamp = entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"),
@@ -81,6 +92,49 @@ public partial class JournalViewModel : ObservableObject
         FilterCategory = "ALL";
         SelectedAccountId = null;
         Refresh();
+    }
+
+    [RelayCommand]
+    private void ExportJournal()
+    {
+        try
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "CSV files (*.csv)|*.csv|JSON files (*.json)|*.json",
+                DefaultExt = ".csv",
+                FileName = $"tf_journal_{DateTime.UtcNow:yyyyMMdd}.csv"
+            };
+
+            if (dialog.ShowDialog() != true) return;
+
+            var entries = _journal.GetRecent(SelectedAccountId, MaxEntries * 10);
+            using var writer = new StreamWriter(dialog.FileName);
+
+            if (dialog.FileName.EndsWith(".json"))
+            {
+                // JSON export
+                var json = System.Text.Json.JsonSerializer.Serialize(entries,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                writer.Write(json);
+            }
+            else
+            {
+                // CSV export
+                writer.WriteLine("Timestamp,Account,Category,Details");
+                foreach (var e in entries)
+                {
+                    var details = e.Details.Replace("\"", "\"\"");
+                    writer.WriteLine($"{e.Timestamp:O},{e.AccountId},{e.Category},\"{details}\"");
+                }
+            }
+
+            StatsText = $"Exported {entries.Count} entries to {dialog.FileName}";
+        }
+        catch (Exception ex)
+        {
+            StatsText = $"Export failed: {ex.Message}";
+        }
     }
 
     private string FormatDetails(JournalEntry entry)

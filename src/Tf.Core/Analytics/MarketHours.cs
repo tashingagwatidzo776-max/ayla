@@ -26,6 +26,29 @@ public sealed class MarketHours
         new Session("London/New York", 13, 17),  // 13:00–17:00 UTC
     };
 
+    /// <summary>Major forex holidays (UTC dates). Markets closed all day.</summary>
+    public static readonly IReadOnlyList<DateTime> Holidays = new[]
+    {
+        // New Year's Day
+        new DateTime(2025, 1, 1), new DateTime(2026, 1, 1), new DateTime(2027, 1, 1),
+        // Good Friday (varies — add manually or compute)
+        new DateTime(2025, 4, 18), new DateTime(2026, 4, 3), new DateTime(2027, 3, 26),
+        // Easter Monday
+        new DateTime(2025, 4, 21), new DateTime(2026, 4, 6), new DateTime(2027, 3, 29),
+        // Christmas Eve (half day — treat as closed)
+        new DateTime(2025, 12, 24), new DateTime(2026, 12, 24),
+        // Christmas Day
+        new DateTime(2025, 12, 25), new DateTime(2026, 12, 25), new DateTime(2027, 12, 25),
+        // Boxing Day
+        new DateTime(2025, 12, 26), new DateTime(2026, 12, 26),
+        // US Independence Day
+        new DateTime(2025, 7, 4), new DateTime(2026, 7, 4),
+        // Thanksgiving (US — 4th Thursday in November)
+        new DateTime(2025, 11, 27), new DateTime(2026, 11, 26),
+        // New Year's Eve (early close)
+        new DateTime(2025, 12, 31), new DateTime(2026, 12, 31),
+    };
+
     private readonly IReadOnlyList<Session> _sessions;
 
     public MarketHours(IReadOnlyList<Session>? sessions = null)
@@ -36,6 +59,10 @@ public sealed class MarketHours
     /// <summary>Check if the given UTC time is within any active session.</summary>
     public bool IsOpen(DateTimeOffset utcTime)
     {
+        // Holiday check
+        if (IsHoliday(utcTime.Date))
+            return false;
+
         // Weekend check — forex market is closed Sat 00:00 – Sun 22:00 UTC.
         if (utcTime.DayOfWeek == DayOfWeek.Saturday)
             return false;
@@ -44,6 +71,21 @@ public sealed class MarketHours
 
         var hour = utcTime.Hour;
         return _sessions.Any(s => IsInSession(hour, s));
+    }
+
+    /// <summary>Check if a date is a forex holiday.</summary>
+    public static bool IsHoliday(DateTime date)
+    {
+        return Holidays.Any(h => h.Month == date.Month && h.Day == date.Day);
+    }
+
+    /// <summary>Get the name of the next upcoming holiday.</summary>
+    public static string? GetNextHoliday(DateTime from)
+    {
+        var upcoming = Holidays.Where(h => h >= from.Date)
+            .OrderBy(h => h)
+            .FirstOrDefault();
+        return upcoming == default ? null : upcoming.ToString("MMMM dd");
     }
 
     /// <summary>Check if we're in a high-liquidity overlap period.</summary>
