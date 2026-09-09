@@ -22,7 +22,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private readonly TickHistoryCache? _tickCache;
     private readonly HeartbeatLog? _heartbeat;
     private bool _disposed;
-    private string _lastState = "Not connected";
+    private volatile string _lastState = "Not connected";
 
     // ── Circuit breaker ────────────────────────────────────────────
     private const int MaxConsecutiveFailures = 5;

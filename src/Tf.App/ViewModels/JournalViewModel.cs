@@ -37,6 +37,9 @@ public partial class JournalViewModel : ObservableObject
     private DateTimeOffset? filterDateTo;
 
     [ObservableProperty]
+    private string searchText = "";
+
+    [ObservableProperty]
     private string statsText = "No data yet";
 
     public ObservableCollection<JournalEntryViewModel> Entries { get; } = new();
@@ -73,6 +76,14 @@ public partial class JournalViewModel : ObservableObject
                 continue;
             if (FilterDateTo.HasValue && entry.Timestamp > FilterDateTo.Value.AddDays(1))
                 continue;
+
+            if (!string.IsNullOrWhiteSpace(SearchText))
+            {
+                var details = FormatDetails(entry);
+                if (!details.Contains(SearchText, StringComparison.OrdinalIgnoreCase) &&
+                    !entry.Category.Contains(SearchText, StringComparison.OrdinalIgnoreCase))
+                    continue;
+            }
 
             Entries.Add(new JournalEntryViewModel
             {

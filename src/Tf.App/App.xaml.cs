@@ -114,6 +114,22 @@ public partial class App : Application
             vm.Shutdown();
         }
 
+        // Dispose all IDisposable services to release file handles, timers, etc.
+        var disposables = new[]
+        {
+            Ioc.Default.GetService<AppLogger>(),
+            Ioc.Default.GetService<TradeJournal>(),
+            Ioc.Default.GetService<HeartbeatLog>(),
+            Ioc.Default.GetService<NotificationService>(),
+            Ioc.Default.GetService<WebhookService>(),
+            Ioc.Default.GetService<AutoUpdater>()
+        };
+
+        foreach (var d in disposables)
+        {
+            d?.Dispose();
+        }
+
         base.OnExit(e);
     }
 }

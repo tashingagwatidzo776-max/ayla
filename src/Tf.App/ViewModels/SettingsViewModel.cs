@@ -70,6 +70,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool webhookOnCircuitBreaker = true;
 
     [ObservableProperty]
+    private int logLevel = 1;
+
+    public IReadOnlyList<string> LogLevels { get; } = new[] { "Debug", "Info", "Warn", "Error" };
+
+    [ObservableProperty]
     private string statusMessage = "Settings load on startup; Save writes them to %APPDATA%\\tf\\data.";
 
     /// <summary>Human-readable trading-mode label.</summary>
@@ -108,6 +113,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnTrade = settings.WebhookOnTrade;
         WebhookOnMilestone = settings.WebhookOnMilestone;
         WebhookOnCircuitBreaker = settings.WebhookOnCircuitBreaker;
+        LogLevel = settings.LogLevel;
         StatusMessage = "Settings loaded.";
     }
 
@@ -137,7 +143,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsDiscordWebhook = IsDiscordWebhook,
         WebhookOnTrade = WebhookOnTrade,
         WebhookOnMilestone = WebhookOnMilestone,
-        WebhookOnCircuitBreaker = WebhookOnCircuitBreaker
+        WebhookOnCircuitBreaker = WebhookOnCircuitBreaker,
+        LogLevel = LogLevel
     };
 
     [RelayCommand]

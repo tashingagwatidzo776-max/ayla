@@ -71,4 +71,8 @@ public sealed class AppSettings
 
     /// <summary>Post circuit breaker events to webhook.</summary>
     public bool WebhookOnCircuitBreaker { get; set; } = true;
+
+    // ── Logging ─────────────────────────────────────────────────
+    /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>
+    public int LogLevel { get; set; } = 1;
 }

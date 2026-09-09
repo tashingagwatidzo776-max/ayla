@@ -14,6 +14,10 @@ public sealed class TickChartControl : FrameworkElement
 {
     private readonly List<Tick> _ticks = new();
     private int _maxPoints = 400;
+    private bool _renderQueued;
+    private readonly System.Windows.Threading.DispatcherTimer _renderTimer;
+    private const int TargetFps = 20;
+    private const int RenderIntervalMs = 1000 / TargetFps;
 
     public static readonly DependencyProperty LineBrushProperty = DependencyProperty.Register(
         nameof(LineBrush),
@@ -39,6 +43,20 @@ public sealed class TickChartControl : FrameworkElement
         set => SetValue(LabelBrushProperty, value);
     }
 
+    public TickChartControl()
+    {
+        _renderTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(RenderIntervalMs)
+        };
+        _renderTimer.Tick += (_, _) =>
+        {
+            _renderQueued = false;
+            _renderTimer.Stop();
+            InvalidateVisual();
+        };
+    }
+
     public int MaxPoints
     {
         get => _maxPoints;
@@ -56,7 +74,13 @@ public sealed class TickChartControl : FrameworkElement
     {
         _ticks.AddRange(ticks);
         Trim();
-        InvalidateVisual();
+
+        // Rate-limit redraws to ~20fps to avoid choking the UI thread.
+        if (!_renderQueued)
+        {
+            _renderQueued = true;
+            _renderTimer.Start();
+        }
     }
 
     public void Clear()

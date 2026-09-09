@@ -23,6 +23,10 @@ public partial class PerformanceViewModel : ObservableObject
     [ObservableProperty]
     private int selectedDays = 30;
 
+    /// <summary>Points for the equity curve polyline ("x1,y1 x2,y2 ..." format).</summary>
+    [ObservableProperty]
+    private string equityCurvePoints = "";
+
     public ObservableCollection<AccountStatsViewModel> AccountStats { get; } = new();
     public ObservableCollection<StrategyStatsViewModel> StrategyStats { get; } = new();
     public ObservableCollection<DailyPerformanceViewModel> DailyHistory { get; } = new();
@@ -122,6 +126,28 @@ public partial class PerformanceViewModel : ObservableObject
                 Day = day.Date.ToString("MM/dd"),
                 Value = runningPnl
             });
+        }
+
+        // Generate polyline points for the equity curve chart.
+        if (EquityCurve.Count > 1)
+        {
+            var minVal = EquityCurve.Min(e => e.Value);
+            var maxVal = EquityCurve.Max(e => e.Value);
+            var range = maxVal - minVal;
+            if (range == 0) range = 1; // avoid division by zero
+
+            var points = new List<string>();
+            for (var i = 0; i < EquityCurve.Count; i++)
+            {
+                var x = (double)i / (EquityCurve.Count - 1) * 400; // scale to 400px width
+                var y = 140 - (double)(EquityCurve[i].Value - minVal) / (double)range * 130; // scale to 130px height, inverted
+                points.Add($"{x:0},{y:0}");
+            }
+            EquityCurvePoints = string.Join(" ", points);
+        }
+        else
+        {
+            EquityCurvePoints = "";
         }
     }
 
