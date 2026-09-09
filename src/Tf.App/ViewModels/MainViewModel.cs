@@ -54,6 +54,9 @@ public sealed class MainViewModel
         Trades.Load();
         Brain.Refresh();
 
+        // Crash recovery: check for unsettled contracts from a previous session.
+        await RecoverUnsettledContractsAsync(settings);
+
         if (string.IsNullOrEmpty(settings.AppId))
         {
             return;
@@ -96,6 +99,61 @@ public sealed class MainViewModel
         {
             SettingsVm.StatusMessage = $"Auto-connect failed: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Crash recovery: if the app closed while a contract was still open on
+    /// Deriv, poll it until it settles so the trade log stays accurate.
+    /// </summary>
+    private async Task RecoverUnsettledContractsAsync(AppSettings settings)
+    {
+        var unsettled = _store.Trades
+            .Where(t => t.Outcome == ContractStatus.Open &&
+                        t.SettledAt > DateTimeOffset.UtcNow.AddHours(-24))
+            .ToList();
+
+        if (unsettled.Count == 0) return;
+
+        Trades.StatusMessage = $"Recovering {unsettled.Count} unsettled contract(s) from previous session...";
+
+        try
+        {
+            await _client.ConnectAsync(string.IsNullOrEmpty(settings.ApiToken) ? null : settings.ApiToken);
+        }
+        catch (Exception ex)
+        {
+            Trades.StatusMessage = $"Recovery failed — cannot connect: {ex.Message}";
+            return;
+        }
+
+        foreach (var trade in unsettled)
+        {
+            try
+            {
+                Trades.StatusMessage = $"Checking contract {trade.ContractId}...";
+                var info = await _client.WaitForSettlementAsync(
+                    trade.ContractId, TimeSpan.FromSeconds(30));
+
+                _store.Add(trade with
+                {
+                    Outcome = info.Status,
+                    Profit = info.Profit,
+                    ExitSpot = info.ExitSpot > 0 ? info.ExitSpot : null,
+                    ExitEpoch = info.ExitTime > 0 ? info.ExitTime : null,
+                    SettledAt = DateTimeOffset.UtcNow
+                });
+            }
+            catch (TimeoutException)
+            {
+                Trades.StatusMessage = $"Contract {trade.ContractId} still open — will retry on next startup.";
+            }
+            catch (Exception ex)
+            {
+                Trades.StatusMessage = $"Recovery error for {trade.ContractId}: {ex.Message}";
+            }
+        }
+
+        Trades.StatusMessage = "Recovery complete.";
     }
 
     public void Shutdown()

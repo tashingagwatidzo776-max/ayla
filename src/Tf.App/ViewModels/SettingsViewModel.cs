@@ -155,6 +155,24 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
+        // Real-money guard: require explicit confirmation.
+        if (!IsDemo)
+        {
+            var result = System.Windows.MessageBox.Show(
+                "You are about to save settings for a REAL MONEY account. " +
+                "Trading with real money carries significant risk of financial loss.\n\n" +
+                "Do you want to continue?",
+                "⚠ Real Money Warning",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Warning);
+
+            if (result != System.Windows.MessageBoxResult.Yes)
+            {
+                StatusMessage = "Real money settings not saved — user cancelled.";
+                return;
+            }
+        }
+
         IsBusy = true;
         try
         {
@@ -162,7 +180,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             await Task.Run(() => _settingsService.Save(settings));
             ApplyToClient(settings);
 
-            StatusMessage = "Settings saved.";
+            StatusMessage = IsDemo ? "Settings saved (demo)." : "Settings saved (REAL MONEY — trade carefully).";
         }
         catch (Exception ex)
         {

@@ -22,6 +22,37 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // First-run wizard: show setup dialog if no settings exist.
+        var firstRunMarker = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "tf", "data", "wizard_done.flag");
+        if (!File.Exists(firstRunMarker))
+        {
+            var wizard = new FirstRunWizard();
+            wizard.ShowDialog();
+
+            if (wizard.Completed)
+            {
+                // Persist the wizard choices.
+                var dir = Path.GetDirectoryName(firstRunMarker)!;
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(firstRunMarker, wizard.ApiToken.Length > 0 ? "configured" : "skipped");
+
+                // Apply wizard settings immediately.
+                var settings = new AppSettings
+                {
+                    ApiToken = wizard.ApiToken,
+                    Symbol = wizard.Symbol,
+                    AutonomyEnabled = wizard.AutonomyEnabled,
+                    RespectMarketHours = wizard.RespectMarketHours,
+                    IsDemo = true
+                };
+
+                var settingsService = new SettingsService();
+                settingsService.Save(settings);
+            }
+        }
+
         var services = new ServiceCollection();
         services.AddSingleton<SettingsService>();
         services.AddSingleton(_ => new TradeStore(SettingsService.DataDir));
@@ -33,6 +64,7 @@ public partial class App : Application
         services.AddSingleton(_ => new TickHistoryCache(SettingsService.DataDir));
         services.AddSingleton(_ => new HeartbeatLog(SettingsService.DataDir));
         services.AddSingleton(_ => new AppLogger(SettingsService.DataDir));
+        services.AddSingleton(_ => new ApiAuditLog(SettingsService.DataDir));
         services.AddSingleton<NotificationService>();
         services.AddSingleton<WebhookService>();
         services.AddSingleton(_ => new TradeJournal(Path.Combine(SettingsService.DataDir, "journal")));
@@ -115,15 +147,15 @@ public partial class App : Application
         }
 
         // Dispose all IDisposable services to release file handles, timers, etc.
-        var disposables = new[]
-        {
+        IDisposable?[] disposables = [
             Ioc.Default.GetService<AppLogger>(),
             Ioc.Default.GetService<TradeJournal>(),
             Ioc.Default.GetService<HeartbeatLog>(),
+            Ioc.Default.GetService<ApiAuditLog>(),
             Ioc.Default.GetService<NotificationService>(),
             Ioc.Default.GetService<WebhookService>(),
             Ioc.Default.GetService<AutoUpdater>()
-        };
+        ];
 
         foreach (var d in disposables)
         {
