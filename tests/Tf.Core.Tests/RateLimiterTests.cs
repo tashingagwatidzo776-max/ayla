@@ -85,12 +85,22 @@ public class RateLimiterTests
 
         Assert.Equal(workers, grants.Count);
 
+        // A sliding-window limiter admits a burst of `limit` grants roughly
+        // once per second, so a centered ±1s window around one grant can
+        // legitimately straddle the tail of one burst and the head of the
+        // next. The jitter-robust invariant is the sorted spacing: grant
+        // i + limit must come no earlier than ~1s after grant i, otherwise
+        // more than `limit` grants were admitted inside one window. A small
+        // tolerance absorbs thread-pool completion jitter (the limiter polls
+        // at 50ms granularity); a no-op limiter fails this immediately.
+        const double minSpacingSeconds = 0.95;
         var ordered = grants.OrderBy(t => t).ToArray();
-        for (var i = 0; i < ordered.Length; i++)
+        for (var i = 0; i + limit < ordered.Length; i++)
         {
-            var inWindow = ordered.Count(t => (t - ordered[i]).Duration() < TimeSpan.FromSeconds(1));
-            Assert.True(inWindow <= limit,
-                $"concurrent burst admitted {inWindow} > {limit} requests in one window");
+            var spacing = (ordered[i + limit] - ordered[i]).TotalSeconds;
+            Assert.True(spacing >= minSpacingSeconds,
+                $"grants {i} and {i + limit} were only {spacing * 1000:0}ms apart — " +
+                $"more than {limit} requests were admitted within one window");
         }
     }
 

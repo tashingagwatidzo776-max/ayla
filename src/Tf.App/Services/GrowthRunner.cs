@@ -109,7 +109,30 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         RaiseState();
         SessionStateText = "starting…";
         LastActivity = $"Session {Connection.DisplayName}: bankroll ${_engine.Bankroll:0.##} → target ${_engine.Target:0.##}";
-        _ = _scheduler.StartAsync();
+
+        var scheduler = _scheduler;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await scheduler.StartAsync();
+            }
+            finally
+            {
+                // The loop self-exits when the kill switch engages (Stop()
+                // nulls _scheduler first, so this only fires on self-exit).
+                // IsRunning must not stay true while the engine is dead, or
+                // StartAsync would be a no-op after the switch is released.
+                if (ReferenceEquals(_scheduler, scheduler) && IsRunning)
+                {
+                    IsRunning = false;
+                    SessionStateText = "stopped";
+                    LastActivity = $"{DateTime.Now:HH:mm:ss} Kill switch engaged — engine stopped";
+                    _journal.LogGrowthState(Connection.Config.Id, "stopped",
+                        _engine?.Bankroll ?? 0, _engine?.LossStreak ?? 0, "kill switch engaged");
+                }
+            }
+        });
         return Task.CompletedTask;
     }
 

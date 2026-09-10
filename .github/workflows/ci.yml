@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  unit:
     runs-on: windows-latest
 
     steps:
@@ -24,5 +24,33 @@ jobs:
     - name: Build
       run: dotnet build --no-restore --configuration Release
 
-    - name: Test
+    - name: Test (Unit)
       run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit"
+
+  integration:
+    runs-on: windows-latest
+    needs: unit
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+
+    # Fake-server E2E tests (DerivIntegrationFlowTests, GrowthRunnerEndToEndTests)
+    # need no network and always run. Live-Deriv tests stay opt-in: they detect
+    # TF_DERIV_TOKEN / TF_OLLAMA_MODEL and pass through when unset.
+    - name: Test (Integration)
+      run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration"
+      env:
+        TF_DERIV_TOKEN: ${{ secrets.TF_DERIV_TOKEN }}
+        TF_DERIV_APP_ID: ${{ secrets.TF_DERIV_APP_ID }}
+        TF_DERIV_SYMBOL: ${{ secrets.TF_DERIV_SYMBOL }}
