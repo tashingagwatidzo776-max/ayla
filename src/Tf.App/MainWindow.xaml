@@ -63,6 +63,7 @@
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />   <!-- portfolio summary -->
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -108,14 +109,40 @@
                         </Button>
                     </Grid>
 
+                    <!-- Portfolio summary: combined growth P&amp;L + latched risk rails -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="10" Margin="0,0,0,10">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Portfolio P&amp;L: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding Dashboard.CombinedGrowthPnlText}" FontFamily="Consolas" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Text="all growth accounts, today" VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <ItemsControl ItemsSource="{Binding Dashboard.RiskRailAlerts}" Margin="0,6,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
+                                                CornerRadius="4" Padding="8,3" Margin="0,0,8,4">
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
                     <!-- Chart -->
-                    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0">
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">
                         <controls:TickChartControl x:Name="Chart"
                                                    LineBrush="{StaticResource AccentBrush}" />
                     </Border>
 
                     <!-- Footer -->
-                    <Grid Grid.Row="2" Margin="0,10,0,0">
+                    <Grid Grid.Row="3" Margin="0,10,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -262,8 +289,11 @@
                         <RowDefinition Height="Auto" />   <!-- growth plan card -->
                         <RowDefinition Height="Auto" />   <!-- growth grid header -->
                         <RowDefinition Height="190" />    <!-- growth grid -->
+                        <RowDefinition Height="Auto" />   <!-- gave-up banners -->
+                        <RowDefinition Height="Auto" />   <!-- governor latch banner -->
                         <RowDefinition Height="Auto" />   <!-- activity header -->
                         <RowDefinition Height="*" />      <!-- activity log -->
+                        <RowDefinition Height="180" />    <!-- intraday pnl curve -->
                     </Grid.RowDefinitions>
 
                     <!-- ── Add account card ─────────────────────────── -->
@@ -425,11 +455,39 @@
                                     <TextBlock Text="Interval (min)" Style="{StaticResource FieldLabel}" />
                                     <TextBox Text="{Binding GrowthVm.IntervalMinutes, UpdateSourceTrigger=PropertyChanged}" />
                                 </StackPanel>
+                                <StackPanel Width="90" Margin="0,0,10,0">
+                                    <TextBlock Text="Failure backoff (s)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.FailureBackoffSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Max restarts" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.MaxAutoRestarts, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Restart delay (s)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.RestartBaseDelaySeconds, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="80" Margin="0,0,10,0">
+                                    <TextBlock Text="Restart ×3.0" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.RestartBackoffFactor, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Width="90" Margin="0,0,10,0">
+                                    <TextBlock Text="Portfolio DD cap ($)" Style="{StaticResource FieldLabel}" />
+                                    <TextBox Text="{Binding GrowthVm.PortfolioDrawdownCapText, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
                             </WrapPanel>
+                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                       Text="Portfolio DD cap: stop every engine when the combined daily P&amp;L of all accounts breaches −cap (blank = off). Manual start re-arms it." />
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                                 <Button Content="Save plan" Style="{StaticResource GhostButton}" Command="{Binding GrowthVm.SavePlanCommand}" />
                                 <Button Content="▶ Start all engines" Margin="8,0,0,0" Command="{Binding GrowthVm.StartAllCommand}" />
                                 <Button Content="■ Stop all engines" Style="{StaticResource DangerButton}" Margin="8,0,0,0" Command="{Binding GrowthVm.StopAllCommand}" />
+                                <Border Style="{StaticResource StatusPill}" Margin="12,0,0,0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Portfolio P&amp;L: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding GrowthVm.CombinedPnlText}" FontFamily="Consolas" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
                                 <TextBlock Text="{Binding GrowthVm.StatusMessage}" Margin="12,0,0,0"
                                            Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
                             </StackPanel>
@@ -447,14 +505,84 @@
                             <DataGridTextColumn Header="Balance" Width="100" Binding="{Binding Connection.BalanceText}" />
                             <DataGridTextColumn Header="Budget" Width="70" Binding="{Binding BudgetText}" />
                             <DataGridTextColumn Header="Bankroll" Width="110" Binding="{Binding Runner.BankrollText}" />
+                            <DataGridTemplateColumn Header="P&amp;L today" Width="110">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <controls:PnlSparkline Points="{Binding PnlSeries}" Height="22" Margin="0,2" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Session" Width="150" Binding="{Binding Runner.SessionStateText}" />
+                            <DataGridTemplateColumn Header="Auto-restart" Width="170">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding RestartText}" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                                            <Button Content="↻ Restart" Margin="8,0,0,0" Padding="10,2"
+                                                    Command="{Binding DataContext.GrowthVm.RestartAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding Connection.Config.Id}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsGaveUp}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Last activity" Width="*" Binding="{Binding Runner.LastActivity}" />
                         </DataGrid.Columns>
                     </DataGrid>
 
+                    <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->
+                    <ItemsControl Grid.Row="6" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
+                                        CornerRadius="4" Padding="10,6" Margin="0,0,0,6">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
+                                            <Run Text="⚠ " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" stopped after repeated broker failures — auto-restarts exhausted. Start it manually to try again." />
+                                        </TextBlock>
+                                        <Button Content="↻ Restart" Margin="10,0,0,0" Padding="12,3"
+                                                Command="{Binding DataContext.GrowthVm.RestartAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding AccountId}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- ── Portfolio governor latch banner ────────── -->
+                    <Border Grid.Row="7" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                            Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding GrowthVm.IsGovernorTripped}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding GrowthVm.GovernorBannerText}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                            <Button Content="✓ Re-arm governor" Margin="10,0,0,0" Padding="12,3"
+                                    Command="{Binding GrowthVm.RearmGovernorCommand}" />
+                        </StackPanel>
+                    </Border>
+
                     <!-- ── Activity log ──────────────────────────────── -->
-                    <TextBlock Grid.Row="6" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="7" Style="{StaticResource Card}" Padding="10">
+                    <TextBlock Grid.Row="8" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="9" Style="{StaticResource Card}" Padding="10">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <ItemsControl ItemsSource="{Binding GrowthVm.ActivityLog}">
                                 <ItemsControl.ItemTemplate>
@@ -465,6 +593,12 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+                    </Border>
+
+                    <!-- ── Intraday P&amp;L curve (per account, cumulative) ───── -->
+                    <TextBlock Grid.Row="10" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="11" Style="{StaticResource Card}" Padding="6">
+                        <controls:PnlCurveControl x:Name="PnlCurve" />
                     </Border>
                 </Grid>
             </TabItem>

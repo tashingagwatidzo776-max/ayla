@@ -14,6 +14,7 @@ public sealed class PerformanceTracker
     private readonly ConcurrentDictionary<Guid, AccountStats> _accountStats = new();
     private readonly ConcurrentDictionary<string, StrategyStats> _strategyStats = new();
     private readonly List<DailyPerformance> _dailyHistory = new();
+    private readonly ConcurrentDictionary<Guid, List<(DateTimeOffset At, decimal Pnl)>> _pnlSeries = new();
     private readonly object _lock = new();
 
     public PerformanceTracker(string dataDir)
@@ -84,6 +85,35 @@ public sealed class PerformanceTracker
             daily.Profit += trade.Profit;
             if (trade.IsWin) daily.Wins++;
             else daily.Losses++;
+
+            // Intraday P&L series for charting: one point per settled trade,
+            // per account, ordered per account by settlement time.
+            var series = _pnlSeries.GetOrAdd(trade.AccountId ?? Guid.Empty, _ => new List<(DateTimeOffset, decimal)>());
+            series.Add((trade.SettledAt, trade.Profit));
+        }
+    }
+
+    /// <summary>
+    /// Intraday cumulative-P&L curve for one account: each point is a settled
+    /// trade — the timestamp, the trade's net P&L, and the running total for
+    /// the day (starts at the first trade of the day). Points are appended in
+    /// settlement order as trades settle.
+    /// </summary>
+    public IReadOnlyList<(DateTimeOffset At, decimal TradePnl, decimal CumulativePnl)> GetIntradayPnl(Guid accountId)
+    {
+        lock (_lock)
+        {
+            var points = _pnlSeries.TryGetValue(accountId, out var list)
+                ? list : new List<(DateTimeOffset, decimal)>();
+            var running = 0m;
+            var result = new List<(DateTimeOffset, decimal, decimal)>(points.Count);
+            foreach (var (at, pnl) in points.OrderBy(p => p.Item1))
+            {
+                running += pnl;
+                result.Add((at, pnl, running));
+            }
+
+            return result;
         }
     }
 
@@ -155,7 +185,10 @@ public sealed class PerformanceTracker
             {
                 Accounts = _accountStats.Values.ToList(),
                 Strategies = _strategyStats.Values.ToList(),
-                Daily = _dailyHistory.ToList()
+                Daily = _dailyHistory.ToList(),
+                PnlSeries = _pnlSeries.ToDictionary(
+                    kv => kv.Key.ToString(),
+                    kv => kv.Value.Select(p => new PnlPoint { At = p.At, Pnl = p.Pnl }).ToList())
             };
             File.WriteAllText(path, JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
         }
@@ -181,6 +214,15 @@ public sealed class PerformanceTracker
             lock (_lock)
             {
                 _dailyHistory.AddRange(data.Daily);
+                foreach (var kv in data.PnlSeries)
+                {
+                    if (Guid.TryParse(kv.Key, out var id))
+                    {
+                        _pnlSeries[id] = kv.Value
+                            .Select(p => (p.At, p.Pnl))
+                            .ToList();
+                    }
+                }
             }
         }
         catch { /* start fresh */ }
@@ -249,4 +291,12 @@ internal sealed class PerformanceData
     public List<AccountStats> Accounts { get; set; } = new();
     public List<StrategyStats> Strategies { get; set; } = new();
     public List<DailyPerformance> Daily { get; set; } = new();
+    public Dictionary<string, List<PnlPoint>> PnlSeries { get; set; } = new();
+}
+
+/// <summary>One persisted point of an account's intraday P&L series.</summary>
+public sealed class PnlPoint
+{
+    public DateTimeOffset At { get; set; }
+    public decimal Pnl { get; set; }
 }

@@ -1,6 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Tf.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Tf.Core\Tf.Core.csproj" />
     <ProjectReference Include="..\Tf.Deriv\Tf.Deriv.csproj" />
   </ItemGroup>

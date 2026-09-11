@@ -10,6 +10,16 @@ namespace Tf.App.Services;
 
 // BrainRegistry is in Tf.Core.Brain namespace
 
+/// <summary>Why a growth scheduler self-exited.</summary>
+public enum GrowthExitReason
+{
+    /// <summary>The master kill switch was engaged.</summary>
+    KillSwitchEngaged,
+
+    /// <summary>Too many consecutive failed cycles (broker or LLM errors).</summary>
+    RepeatedFailures
+}
+
 /// <summary>
 /// Drives the deterministic Growth brain on one account via the autonomous
 /// scheduler. Bankroll sessions reset daily at <see cref="GrowthPlan.StartBudget"/>
@@ -45,6 +55,16 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
     /// <summary>Raised per cycle with a human-readable activity line (any thread).</summary>
     public event Action<string>? Activity;
+
+    /// <summary>Raised after the scheduler self-exits (kill switch or repeated failures).</summary>
+    public event Action<GrowthRunner, GrowthExitReason>? Exited;
+
+    /// <summary>
+    /// Raised after a settled growth trade is persisted to the store (any
+    /// thread) — the hub's portfolio governor listens for its combined-net
+    /// check on every settlement.
+    /// </summary>
+    public event Action<GrowthRunner, Trade>? Settled;
 
     public GrowthRunner(AccountConnection connection, TradeStore store,
         Func<AppSettings> settings, Func<bool> killSwitch, TradeJournal journal,
@@ -103,7 +123,8 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         });
 
         _scheduler = new AutonomousScheduler(_brain, settings,
-            () => Connection.Ticks, risk, lessons, OnCycle);
+            () => Connection.Ticks, risk, lessons, OnCycle,
+            TimeSpan.FromSeconds(plan.FailureBackoffSeconds));
 
         IsRunning = true;
         RaiseState();
@@ -119,17 +140,29 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             }
             finally
             {
-                // The loop self-exits when the kill switch engages (Stop()
-                // nulls _scheduler first, so this only fires on self-exit).
-                // IsRunning must not stay true while the engine is dead, or
-                // StartAsync would be a no-op after the switch is released.
+                // The loop self-exits when the kill switch engages or after too
+                // many consecutive failed cycles (Stop() nulls _scheduler
+                // first, so this only fires on self-exit). IsRunning must not
+                // stay true while the engine is dead, or StartAsync would be a
+                // no-op after the condition clears.
                 if (ReferenceEquals(_scheduler, scheduler) && IsRunning)
                 {
+                    var reason = _killSwitch()
+                        ? GrowthExitReason.KillSwitchEngaged
+                        : GrowthExitReason.RepeatedFailures;
+
                     IsRunning = false;
                     SessionStateText = "stopped";
-                    LastActivity = $"{DateTime.Now:HH:mm:ss} Kill switch engaged — engine stopped";
+                    LastActivity = reason == GrowthExitReason.KillSwitchEngaged
+                        ? $"{DateTime.Now:HH:mm:ss} Kill switch engaged — engine stopped"
+                        : $"{DateTime.Now:HH:mm:ss} Scheduler stopped after {scheduler.ConsecutiveFailures} " +
+                          $"consecutive failed cycles — engine stopped";
                     _journal.LogGrowthState(Connection.Config.Id, "stopped",
-                        _engine?.Bankroll ?? 0, _engine?.LossStreak ?? 0, "kill switch engaged");
+                        _engine?.Bankroll ?? 0, _engine?.LossStreak ?? 0,
+                        reason == GrowthExitReason.KillSwitchEngaged
+                            ? "kill switch engaged"
+                            : $"repeated failures ({scheduler.ConsecutiveFailures})");
+                    Exited?.Invoke(this, reason);
                 }
             }
         });
@@ -270,7 +303,10 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         }
 
         var line = Describe(result);
-        LastActivity = line;
+        if (IsRunning)
+        {
+            LastActivity = line;
+        }
         Activity?.Invoke(line);
         RaiseState();
 
@@ -317,6 +353,9 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             _tracker?.RecordTrade(tagged);
             _tracker?.Save();
             engine?.ApplySettlement(trade.IsWin, trade.Profit);
+
+            // The trade is now in the store — safe for portfolio-level checks.
+            Settled?.Invoke(this, tagged);
 
             // Fire notifications for trade settlements.
             _notifications?.NotifyTradeSettled(Connection.DisplayName, trade.IsWin, trade.Profit, trade.Symbol);

@@ -63,6 +63,15 @@ public sealed class WebhookService : IDisposable
             $"{accountName}: {failures} consecutive failures", 0xFFC857);
     }
 
+    /// <summary>Post a dashboard risk-rail alert (governor, kill switch,
+    /// circuit breakers, exhausted restarts — or an all-clear).</summary>
+    public void PostRiskRail(string title, string body)
+    {
+        if (string.IsNullOrEmpty(WebhookUrl)) return;
+
+        _ = PostAsync(title, body, 0xFFC857);
+    }
+
     /// <summary>Post a general status message.</summary>
     public void PostStatus(string title, string message)
     {

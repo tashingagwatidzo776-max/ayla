@@ -23,11 +23,23 @@ public sealed class AccountConfig
 }
 
 /// <summary>
+/// Storage surface for the account list. Abstracted so the multi-account hub
+/// (and its tests) can run against an in-memory store instead of the
+/// DPAPI-encrypted file vault.
+/// </summary>
+public interface IAccountVault
+{
+    IReadOnlyList<AccountConfig> Load();
+
+    void Save(IReadOnlyList<AccountConfig> accounts);
+}
+
+/// <summary>
 /// Persists the multi-account list under %APPDATA%\tf\data\accounts.bin.
 /// The whole document — including every API token — is DPAPI-encrypted
 /// (CurrentUser), so it only decrypts for this Windows user.
 /// </summary>
-public sealed class AccountVault
+public sealed class AccountVault : IAccountVault
 {
     private static readonly string AccountsPath =
         Path.Combine(SettingsService.DataDir, "accounts.bin");

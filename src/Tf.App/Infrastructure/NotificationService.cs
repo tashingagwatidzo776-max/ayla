@@ -90,6 +90,18 @@ public sealed class NotificationService : IDisposable
             "error");
     }
 
+    /// <summary>Notify when a dashboard risk rail (governor, kill switch,
+    /// circuit breaker, exhausted restarts) newly engages.</summary>
+    public void NotifyRiskRailEngaged(string change, string summary)
+    {
+        if (!CanNotify()) return;
+
+        SendToast(
+            "⚠ Risk rail engaged",
+            $"{change} — {summary}",
+            "warning");
+    }
+
     /// <summary>Notify when an update is available.</summary>
     public void NotifyUpdateAvailable(string version)
     {

@@ -213,7 +213,10 @@ public sealed class TradeJournal : IDisposable
         _pending.Enqueue(entry);
     }
 
-    private void Flush()
+    /// <summary>Writes any pending buffered entries to disk immediately
+    /// (the timer calls this every few seconds; readers may call it to force
+    /// durability before reading the journal back).</summary>
+    public void Flush()
     {
         if (_pending.IsEmpty) return;
 
@@ -228,10 +231,19 @@ public sealed class TradeJournal : IDisposable
 
         lock (_writeLock)
         {
-            using var writer = new StreamWriter(filePath, append: true);
-            foreach (var entry in batch)
+            try
             {
-                writer.WriteLine(JsonSerializer.Serialize(entry));
+                using var writer = new StreamWriter(filePath, append: true);
+                foreach (var entry in batch)
+                {
+                    writer.WriteLine(JsonSerializer.Serialize(entry));
+                }
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // The journal directory vanished (e.g. cleaned up while a
+                // flush timer was still in flight). Journaling is best-effort:
+                // never let the background flush kill the process.
             }
         }
     }

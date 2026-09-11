@@ -23,12 +23,33 @@ A WPF desktop application for automated binary-options trading on the [Deriv](ht
 - Stake limits, daily loss cap, confidence floor, post-loss cooldown
 - Market hours awareness (Sydney/Tokyo/London/New York sessions)
 - Forex holiday calendar
+- Portfolio governor — combined daily drawdown cap across all growth accounts (latched trip, survives restart, manual re-arm)
 
 ### Multi-Account
 - Connect multiple Deriv accounts simultaneously (one WebSocket each)
 - Per-account brain selection and configuration
 - Independent growth engine sessions per account
+- Combined growth P&L view across accounts with portfolio-level risk governor
+- Automatic engine restart with exponential backoff and a bounded restart budget
 - Export/import accounts for backup and migration
+
+### Portfolio Governor
+
+The governor watches the **combined net P&L of all growth-engine accounts** against the plan's `PortfolioDailyDrawdownCap`:
+
+- Trips (latches) when the day's combined drawdown exceeds the cap — every growth engine is halted, not just the losing account
+- The latch is journaled and **survives app restarts**; it is restored from the journal on the next launch
+- Re-arm is manual: clear the banner in the Growth or Dashboard tab once you've reviewed the day
+- Adding a new account while latched does not clear the latch; only an explicit re-arm does
+
+### Auto-Restart & Failure Hardening
+
+When a growth engine exits because its scheduler kept failing (broken broker connection, dead WebSocket), the hub restarts it automatically:
+
+- Failed brain cycles back off `FailureBackoffSeconds` (default 5 s); the scheduler stops retrying after repeated consecutive failures and surfaces the exit reason
+- Restarts use exponential backoff: `RestartBaseDelaySeconds` (5 s) × `RestartBackoffFactor` (3.0) per attempt
+- Auto-restarts stop after `MaxAutoRestarts` (default 3); the account is marked "gave up" until you start it manually (which resets the budget)
+- A governor trip suspends auto-restart for all accounts until the governor is re-armed
 
 ### Monitoring & Notifications
 - System health dashboard (all accounts at a glance)
@@ -37,6 +58,7 @@ A WPF desktop application for automated binary-options trading on the [Deriv](ht
 - Heartbeat monitoring with uptime tracking
 - Trade journal with full-text search and date filtering
 - Performance dashboard with equity curves and strategy comparison
+- Intraday P&L curves (per account, persisted across sessions) and per-row sparklines
 
 ### Developer Tools
 - Strategy optimizer with parameter tuning
@@ -89,6 +111,26 @@ All settings are stored under `%APPDATA%\tf\data\`:
 | `heartbeats/` | Connection state history |
 | `api_audit/` | API request/response audit trail |
 | `tick_history/` | Cached tick data for backtesting |
+
+### Growth plan parameters
+
+`growth-plan.json` round-trips through the Growth tab UI. Defaults:
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `StartBudget` | 5.00 | Challenge budget per account |
+| `RiskFraction` | 0.20 | Stake as a fraction of available bankroll |
+| `MaxRecoverySteps` | 3 | Stake-reduction steps after losses |
+| `DailyTargetFraction` | 1.00 | Daily profit target as a fraction of budget |
+| `FloorFraction` | 0.40 | Bankroll floor below which the engine stops |
+| `MinStake` | 1.00 | Minimum allowed stake |
+| `IntervalMinutes` | 1 | Delay between brain cycles |
+| `CooldownMinutesAfterLoss` | 1 | Pause after a losing trade |
+| `FailureBackoffSeconds` | 5 | Backoff after a failed brain cycle (1–120) |
+| `MaxAutoRestarts` | 3 | Auto-restarts before giving up (0–10, 0 disables) |
+| `RestartBaseDelaySeconds` | 5 | Base delay for restart backoff |
+| `RestartBackoffFactor` | 3.0 | Multiplier per restart attempt |
+| `PortfolioDailyDrawdownCap` | *(unset)* | Combined daily drawdown cap that trips the governor (blank disables) |
 
 ## Project Structure
 

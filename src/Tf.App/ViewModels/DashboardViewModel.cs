@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -13,6 +14,8 @@ public sealed partial class DashboardViewModel : ObservableObject
     private readonly DerivClient _client;
     private readonly MultiAccountHub? _hub;
     private readonly Dispatcher _dispatcher;
+    private readonly Infrastructure.NotificationService? _notifications;
+    private readonly Infrastructure.WebhookService? _webhook;
 
     [ObservableProperty]
     private string statusText = "Disconnected";
@@ -38,19 +41,161 @@ public sealed partial class DashboardViewModel : ObservableObject
     [ObservableProperty]
     private bool isKillSwitchEngaged;
 
+    /// <summary>True while the portfolio drawdown governor is latched after a trip.</summary>
+    [ObservableProperty]
+    private bool isGovernorLatched;
+
+    /// <summary>Combined net P&amp;L across all growth accounts (portfolio row).</summary>
+    [ObservableProperty]
+    private string combinedGrowthPnlText = "$0.00";
+
+    /// <summary>Per-account risk-rail summary lines for the dashboard card.</summary>
+    public ObservableCollection<string> RiskRailAlerts { get; } = new();
+
     /// <summary>The live chart view (attached by MainWindow; VM stays UI-agnostic).</summary>
     public TickChartControl? Chart { get; set; }
 
-    public DashboardViewModel(DerivClient client, MultiAccountHub? hub = null)
+    public DashboardViewModel(DerivClient client, MultiAccountHub? hub = null,
+        Infrastructure.NotificationService? notifications = null,
+        Infrastructure.WebhookService? webhook = null)
     {
         _client = client;
         _hub = hub;
+        _notifications = notifications;
+        _webhook = webhook;
         _dispatcher = Dispatcher.CurrentDispatcher;
 
         _client.StatusChanged += OnStatusChanged;
         _client.TickReceived += OnTickReceived;
         _client.BalanceUpdated += OnBalanceUpdated;
         _client.ErrorReceived += OnErrorReceived;
+
+        if (_hub is not null)
+        {
+            _hub.GrowthActivity += OnGrowthActivity;
+            _hub.PortfolioGovernorTripped += OnGovernorTripped;
+            _hub.GovernorRearmed += OnGovernorRearmed;
+            _hub.RestartStateChanged += OnRestartStateChanged;
+            _hub.AccountsChanged += OnAccountsChangedForSummary;
+
+            // A governor latch restored from the journal fires its event
+            // before this VM exists — seed the rail and alert on launch.
+            if (_hub.IsGovernorTripped)
+            {
+                IsGovernorLatched = true;
+            }
+
+            RefreshPortfolioSummary();
+        }
+    }
+
+    private void OnAccountsChangedForSummary() => OnUiThread(RefreshPortfolioSummary);
+
+    private void OnGrowthActivity(Services.GrowthRunner _, string __) =>
+        OnUiThread(RefreshPortfolioSummary);
+
+    private void OnGovernorTripped(decimal net) => OnUiThread(() =>
+    {
+        IsGovernorLatched = true;
+        RefreshPortfolioSummary();
+    });
+
+    private void OnGovernorRearmed() => OnUiThread(() =>
+    {
+        IsGovernorLatched = false;
+        RefreshPortfolioSummary();
+    });
+
+    private void OnRestartStateChanged(Guid _, int __, bool ___) =>
+        OnUiThread(RefreshPortfolioSummary);
+
+    /// <summary>
+    /// Rebuilds the dashboard's portfolio summary: combined growth P&amp;L
+    /// plus one alert line per latched risk rail (governor, kill switch,
+    /// account circuit breakers, exhausted auto-restarts). Any rail that
+    /// newly engages fires a toast and a webhook so the user is alerted no
+    /// matter which tab is open — not just for the governor.
+    /// </summary>
+    private void RefreshPortfolioSummary()
+    {
+        if (_hub is null)
+        {
+            return;
+        }
+
+        var net = _hub.CombinedGrowthNetPnl();
+        CombinedGrowthPnlText = $"{(net >= 0 ? "+" : "−")}${Math.Abs(net):0.00}";
+
+        // This runs on every growth activity line (each brain cycle) — skip
+        // the rebuild (and its flicker) unless the rails actually changed.
+        var alerts = BuildRiskRailAlerts();
+        if (alerts.SequenceEqual(RiskRailAlerts))
+        {
+            return;
+        }
+
+        var previous = RiskRailAlerts.ToList();
+
+        RiskRailAlerts.Clear();
+        foreach (var alert in alerts)
+        {
+            RiskRailAlerts.Add(alert);
+        }
+
+        NotifyOnRiskRailChange(previous, alerts);
+    }
+
+    /// <summary>Builds one alert line per currently latched risk rail.</summary>
+    private List<string> BuildRiskRailAlerts()
+    {
+        var alerts = new List<string>();
+        if (IsGovernorLatched)
+        {
+            alerts.Add("Portfolio drawdown governor latched — re-arm on the Growth tab");
+        }
+
+        if (IsKillSwitchEngaged)
+        {
+            alerts.Add("Global kill switch engaged");
+        }
+
+        if (_hub is null)
+        {
+            return alerts;
+        }
+
+        foreach (var connection in _hub.Accounts)
+        {
+            if (connection.IsDegraded)
+            {
+                alerts.Add($"{connection.DisplayName}: circuit breaker open");
+            }
+
+            if (_hub.IsGivenUp(connection.Config.Id))
+            {
+                alerts.Add($"{connection.DisplayName}: auto-restarts exhausted — restart on the Growth tab");
+            }
+        }
+
+        return alerts;
+    }
+
+    /// <summary>Fires the toast/webhook alerts for rails that newly engaged
+    /// (and one all-clear when the last rail releases).</summary>
+    private void NotifyOnRiskRailChange(IReadOnlyList<string> previous, IReadOnlyList<string> current)
+    {
+        var engaged = current.Where(a => !previous.Contains(a)).ToList();
+        if (engaged.Count > 0)
+        {
+            var change = string.Join("; ", engaged);
+            var summary = current.Count == 0 ? "no rails latched" : string.Join("; ", current);
+            _notifications?.NotifyRiskRailEngaged(change, summary);
+            _webhook?.PostRiskRail("⚠ Risk rail engaged", $"{change} — {summary}");
+        }
+        else if (previous.Count > 0 && current.Count == 0)
+        {
+            _webhook?.PostRiskRail("✅ Risk rails clear", "all latched risk rails have been released");
+        }
     }
 
     public void SetSymbol(string symbol) => OnUiThread(() => SymbolText = symbol);
@@ -88,6 +233,8 @@ public sealed partial class DashboardViewModel : ObservableObject
         {
             StatusText = "Disconnected — press Connect to resume";
         }
+
+        RefreshPortfolioSummary();
     }
 
     private void OnStatusChanged(ConnectionStatus status) => OnUiThread(() =>

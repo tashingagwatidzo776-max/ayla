@@ -80,7 +80,12 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<NotificationService>(),
                 sp.GetRequiredService<WebhookService>()));
 
-        services.AddSingleton<DashboardViewModel>();
+        services.AddSingleton(sp =>
+            new DashboardViewModel(
+                sp.GetRequiredService<DerivClient>(),
+                sp.GetRequiredService<MultiAccountHub>(),
+                sp.GetRequiredService<NotificationService>(),
+                sp.GetRequiredService<WebhookService>()));
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton(sp =>
             (Func<AppSettings>)(() => sp.GetRequiredService<SettingsViewModel>().BuildSettings()));
@@ -95,7 +100,13 @@ public partial class App : System.Windows.Application
         services.AddSingleton<TradesViewModel>();
         services.AddSingleton<BrainViewModel>();
         services.AddSingleton<AccountsViewModel>();
-        services.AddSingleton<GrowthViewModel>();
+        services.AddSingleton(sp =>
+            new GrowthViewModel(
+                sp.GetRequiredService<MultiAccountHub>(),
+                sp.GetRequiredService<GrowthPlanStore>(),
+                sp.GetRequiredService<Func<AppSettings>>(),
+                sp.GetRequiredService<DashboardViewModel>(),
+                sp.GetRequiredService<PerformanceTracker>()));
         services.AddSingleton(sp =>
             (Func<bool>)(() => sp.GetRequiredService<DashboardViewModel>().IsKillSwitchEngaged));
         services.AddSingleton(sp =>
@@ -128,6 +139,9 @@ public partial class App : System.Windows.Application
         var mainVm = (MainViewModel)window.DataContext;
         _ = mainVm.InitializeAsync();
         provider.GetRequiredService<BrainViewModel>().StartAutonomy();
+
+        // Wire the Growth tab's P&L chart once the window (and its controls) exist.
+        provider.GetRequiredService<GrowthViewModel>().AttachPnlChart(window.PnlCurve);
 
         // Configure webhook from persisted settings.
         var settings = provider.GetRequiredService<SettingsService>().Load();

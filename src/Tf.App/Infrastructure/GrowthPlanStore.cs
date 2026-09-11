@@ -6,8 +6,9 @@ namespace Tf.App.Infrastructure;
 
 /// <summary>
 /// Persists the Growth brain plan (risk %, daily target, floor, recovery
-/// ladder, cadence) as plain JSON under %APPDATA%\tf\data\growth-plan.json —
-/// no secrets here, so no encryption needed.
+/// ladder, cadence, restart policy, portfolio drawdown cap) as plain JSON
+/// under %APPDATA%\tf\data\growth-plan.json — no secrets here, so no
+/// encryption needed.
 /// </summary>
 public sealed class GrowthPlanStore
 {
@@ -53,10 +54,17 @@ public sealed class GrowthPlanStore
         public decimal MinStake { get; set; } = 1.00m;
         public int IntervalMinutes { get; set; } = 1;
         public int CooldownMinutesAfterLoss { get; set; } = 1;
+        public double FailureBackoffSeconds { get; set; } = 5.0;
+        public int MaxAutoRestarts { get; set; } = 3;
+        public double RestartBaseDelaySeconds { get; set; } = 5.0;
+        public double RestartBackoffFactor { get; set; } = 3.0;
+        public decimal? PortfolioDailyDrawdownCap { get; set; }
 
         public GrowthPlan ToPlan() => new(
             StartBudget, RiskFraction, MaxRecoverySteps, DailyTargetFraction,
-            FloorFraction, MinStake, IntervalMinutes, CooldownMinutesAfterLoss);
+            FloorFraction, MinStake, IntervalMinutes, CooldownMinutesAfterLoss,
+            FailureBackoffSeconds, MaxAutoRestarts, RestartBaseDelaySeconds,
+            RestartBackoffFactor, PortfolioDailyDrawdownCap);
 
         public static GrowthPlanDto From(GrowthPlan plan) => new()
         {
@@ -67,7 +75,12 @@ public sealed class GrowthPlanStore
             FloorFraction = plan.FloorFraction,
             MinStake = plan.MinStake,
             IntervalMinutes = plan.IntervalMinutes,
-            CooldownMinutesAfterLoss = plan.CooldownMinutesAfterLoss
+            CooldownMinutesAfterLoss = plan.CooldownMinutesAfterLoss,
+            FailureBackoffSeconds = plan.FailureBackoffSeconds,
+            MaxAutoRestarts = plan.MaxAutoRestarts,
+            RestartBaseDelaySeconds = plan.RestartBaseDelaySeconds,
+            RestartBackoffFactor = plan.RestartBackoffFactor,
+            PortfolioDailyDrawdownCap = plan.PortfolioDailyDrawdownCap
         };
     }
 }

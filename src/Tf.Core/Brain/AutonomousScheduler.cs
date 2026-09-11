@@ -17,6 +17,8 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     private readonly Func<RiskContext> _riskContext;
     private readonly Func<IReadOnlyList<string>> _recentLessons;
     private readonly Action<BrainCycleResult>? _onCycle;
+    private readonly TimeSpan _failureBackoff;
+    private readonly int _maxConsecutiveFailures;
 
     private CancellationTokenSource? _cts;
     private DateTimeOffset _nextAllowedDecision;
@@ -27,8 +29,12 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         Func<IReadOnlyList<Tick>> tickWindow,
         Func<RiskContext> riskContext,
         Func<IReadOnlyList<string>> recentLessons,
-        Action<BrainCycleResult>? onCycle = null)
+        Action<BrainCycleResult>? onCycle = null,
+        TimeSpan? failureBackoff = null,
+        int maxConsecutiveFailures = 3)
     {
+        _failureBackoff = failureBackoff ?? TimeSpan.FromSeconds(5);
+        _maxConsecutiveFailures = Math.Max(1, maxConsecutiveFailures);
         _brain = brain;
         _settings = settings;
         _tickWindow = tickWindow ?? throw new ArgumentNullException(nameof(tickWindow));
@@ -38,6 +44,18 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     }
 
     public bool IsRunning { get; private set; }
+
+    /// <summary>Failed cycles since the last successful one (reset on start).</summary>
+    public int ConsecutiveFailures { get; private set; }
+
+    /// <summary>Cap after which the loop exits instead of retrying forever.</summary>
+    public int MaxConsecutiveFailures => _maxConsecutiveFailures;
+
+    // Bumped by every Stop(). The loop carries the generation it started
+    // under and exits when they no longer match — this closes the race where
+    // Stop() runs before StartAsync creates the cancellation source (Stop
+    // then has nothing to cancel and the loop would run uncancellable).
+    private int _generation;
 
     /// <summary>
     /// Starts the loop. No-op if already running. The loop exits immediately
@@ -52,12 +70,14 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         }
 
         IsRunning = true;
+        ConsecutiveFailures = 0;
+        var generation = Interlocked.Increment(ref _generation);
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _nextAllowedDecision = DateTimeOffset.UtcNow;
 
         try
         {
-            await LoopAsync(_cts.Token);
+            await LoopAsync(_cts.Token, generation);
         }
         finally
         {
@@ -67,14 +87,17 @@ public sealed class AutonomousScheduler : IAsyncDisposable
 
     public void Stop()
     {
+        // Bump the generation first: a loop that starts after this point
+        // (the Stop-before-Start race) sees the mismatch and exits at once.
+        Interlocked.Increment(ref _generation);
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
     }
 
-    private async Task LoopAsync(CancellationToken ct)
+    private async Task LoopAsync(CancellationToken ct, int generation)
     {
-        while (!ct.IsCancellationRequested)
+        while (!ct.IsCancellationRequested && generation == Volatile.Read(ref _generation))
         {
             var settings = _settings();
             var interval = TimeSpan.FromMinutes(
@@ -108,6 +131,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                     allowTrading: settings.AutonomyEnabled, ct);
 
                 _onCycle?.Invoke(result);
+                ConsecutiveFailures = 0;
                 _nextAllowedDecision = DateTimeOffset.UtcNow.Add(interval);
             }
             catch (OperationCanceledException)
@@ -116,11 +140,20 @@ public sealed class AutonomousScheduler : IAsyncDisposable
             }
             catch (Exception)
             {
-                // Back off briefly after a failed cycle so a broken LLM or
-                // broker connection doesn't spin the loop hot.
+                // Back off after a failed cycle (default 5s, configurable via
+                // the constructor) so a broken LLM or broker connection
+                // doesn't spin the loop hot. After too many consecutive
+                // failures, stop retrying entirely — the runner surfaces the
+                // exit and may restart the session itself.
+                ConsecutiveFailures++;
+                if (ConsecutiveFailures >= _maxConsecutiveFailures)
+                {
+                    return;
+                }
+
                 try
                 {
-                    await Task.Delay(5000, ct);
+                    await Task.Delay(_failureBackoff, ct);
                 }
                 catch (OperationCanceledException)
                 {
