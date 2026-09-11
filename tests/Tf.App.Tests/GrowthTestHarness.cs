@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
-using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -150,14 +149,10 @@ internal sealed class FakeDerivServer : IAsyncDisposable
         _responder = responder;
         _tickGenerator = tickGenerator ?? DefaultTickGenerator;
 
-        var tcp = new TcpListener(IPAddress.Loopback, 0);
-        tcp.Start();
-        var port = ((IPEndPoint)tcp.LocalEndpoint).Port;
-        tcp.Stop();
-
-        _listener = new HttpListener();
-        _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        _listener.Start();
+        // Bind inside the helper's lock-and-retry window: the naive
+        // probe-then-bind here races the port away under parallel test
+        // hosts and intermittently fails setup with HttpListenerException.
+        (_listener, var port) = TestHttpListenerFactory.CreateOnFreeLoopbackPort();
         Port = port;
     }
 

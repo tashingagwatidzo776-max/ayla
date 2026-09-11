@@ -45,6 +45,11 @@ public sealed partial class DashboardViewModel : ObservableObject
     [ObservableProperty]
     private bool isGovernorLatched;
 
+    /// <summary>True while the pre-trip warning is active (combined daily
+    /// drawdown at 80% of the portfolio cap; cleared by a trip or re-arm).</summary>
+    [ObservableProperty]
+    private bool isGovernorWarned;
+
     /// <summary>Combined net P&amp;L across all growth accounts (portfolio row).</summary>
     [ObservableProperty]
     private string combinedGrowthPnlText = "$0.00";
@@ -74,6 +79,7 @@ public sealed partial class DashboardViewModel : ObservableObject
         {
             _hub.GrowthActivity += OnGrowthActivity;
             _hub.PortfolioGovernorTripped += OnGovernorTripped;
+            _hub.PortfolioGovernorWarning += OnGovernorWarning;
             _hub.GovernorRearmed += OnGovernorRearmed;
             _hub.RestartStateChanged += OnRestartStateChanged;
             _hub.AccountsChanged += OnAccountsChangedForSummary;
@@ -97,12 +103,20 @@ public sealed partial class DashboardViewModel : ObservableObject
     private void OnGovernorTripped(decimal net) => OnUiThread(() =>
     {
         IsGovernorLatched = true;
+        IsGovernorWarned = false;
+        RefreshPortfolioSummary();
+    });
+
+    private void OnGovernorWarning(decimal used) => OnUiThread(() =>
+    {
+        IsGovernorWarned = true;
         RefreshPortfolioSummary();
     });
 
     private void OnGovernorRearmed() => OnUiThread(() =>
     {
         IsGovernorLatched = false;
+        IsGovernorWarned = false;
         RefreshPortfolioSummary();
     });
 
@@ -152,6 +166,10 @@ public sealed partial class DashboardViewModel : ObservableObject
         if (IsGovernorLatched)
         {
             alerts.Add("Portfolio drawdown governor latched — re-arm on the Growth tab");
+        }
+        else if (IsGovernorWarned)
+        {
+            alerts.Add("Portfolio drawdown warning — 80% of the governor cap used");
         }
 
         if (IsKillSwitchEngaged)

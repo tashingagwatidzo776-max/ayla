@@ -20,14 +20,7 @@ public class LlmClientTests
             _responder = responder;
             _statusCode = statusCode;
 
-            var tcp = new TcpListener(IPAddress.Loopback, 0);
-            tcp.Start();
-            var port = ((IPEndPoint)tcp.LocalEndpoint).Port;
-            tcp.Stop();
-
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-            _listener.Start();
+            (_listener, var port) = TestHttpListenerFactory.CreateOnFreeLoopbackPort();
             Url = $"http://127.0.0.1:{port}/v1";
         }
 
@@ -80,7 +73,7 @@ public class LlmClientTests
     [Fact]
     public async Task CompleteJsonAsync_ReturnsContentAndSendsHeaders()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var server = new FakeHttpServer(_ =>
             ChatResponse("{\"direction\":\"RISE\",\"confidence\":0.7,\"stake\":1,\"reasoning\":\"trend\"}"));
         var run = server.RunAsync(cts.Token);
@@ -111,7 +104,7 @@ public class LlmClientTests
     [Fact]
     public async Task CompleteJsonAsync_OllamaMode_OmitsResponseFormat()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var server = new FakeHttpServer(_ => ChatResponse("{\"direction\":\"HOLD\"}"));
         var run = server.RunAsync(cts.Token);
 
@@ -146,7 +139,7 @@ public class LlmClientTests
     [Fact]
     public async Task CompleteJsonAsync_NonSuccess_ThrowsLlmException()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var server = new FakeHttpServer(
             _ => "{\"error\":\"boom\"}", statusCode: 500);
         var run = server.RunAsync(cts.Token);

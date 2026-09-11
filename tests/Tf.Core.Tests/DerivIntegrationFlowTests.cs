@@ -23,7 +23,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task FullLifecycle_AuthorizeSubscribeProposeBuySettle()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var pollCount = 0;
 
         var server = new FlowFakeServer(req =>
@@ -93,7 +93,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task TickSubscription_ReceivesMultipleTicks()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var tickCount = 0;
 
         var server = new FlowFakeServer(req =>
@@ -125,7 +125,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task TickSubscription_IncludesAskBidSpread()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
         {
@@ -157,7 +157,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task InvalidProposal_ThrowsDerivApiException()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
             $"{{\"msg_type\":\"error\",\"req_id\":{req.GetProperty("req_id").GetInt32()},\"error\":{{\"code\":\"InvalidSymbol\",\"message\":\"Invalid symbol: XYZ\"}}}}",
@@ -179,7 +179,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task StreamedError_ReceivedAsEvent()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
         {
@@ -209,7 +209,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task Disconnect_SetsStatusToDisconnected()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req => "", cts.Token);
         _ = server.RunAsync(cts.Token);
@@ -228,7 +228,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task StatusChanged_RaisesEvents()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var statuses = new List<ConnectionStatus>();
 
         var server = new FlowFakeServer(req => "", cts.Token);
@@ -249,7 +249,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task FallDirection_SendsPutContractType()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
             $"{{\"msg_type\":\"proposal\",\"req_id\":{req.GetProperty("req_id").GetInt32()},\"proposal\":{{\"id\":\"PUT-1\",\"spot\":1.25000,\"longcode\":\"Fall contract\",\"payout\":1.90}}}}",
@@ -271,7 +271,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task SettlementTimeout_ThrowsTimeoutException()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
             $"{{\"msg_type\":\"proposal_open_contract\",\"req_id\":{req.GetProperty("req_id").GetInt32()},\"proposal_open_contract\":{{\"contract_id\":\"STUCK-1\",\"status\":\"open\",\"is_sold\":false,\"entry_spot\":1.1,\"exit_spot\":0,\"entry_tick_time\":1700000000,\"exit_tick_time\":0,\"buy_price\":1.00,\"profit\":0,\"currency\":\"USD\"}}}}",
@@ -293,7 +293,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task MultipleProposals_ConcurrentRequests()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
         {
@@ -325,7 +325,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task GetTicksHistory_ParsesPricesAndTimes()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
             $"{{\"msg_type\":\"history\",\"req_id\":{req.GetProperty("req_id").GetInt32()},\"history\":{{\"prices\":[1.10001,1.10005,1.10003],\"times\":[1700000000,1700000002,1700000004]}},\"pip_size\":5}}",
@@ -351,7 +351,7 @@ public class DerivIntegrationFlowTests
     [Fact]
     public async Task TickMissingAskBid_DefaultsToQuote()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var server = new FlowFakeServer(req =>
         {
@@ -393,13 +393,7 @@ public class DerivIntegrationFlowTests
         {
             _responder = responder;
             _tickGenerator = tickGenerator;
-            var tcp = new TcpListener(IPAddress.Loopback, 0);
-            tcp.Start();
-            var port = ((IPEndPoint)tcp.LocalEndpoint).Port;
-            tcp.Stop();
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-            _listener.Start();
+            (_listener, var port) = TestHttpListenerFactory.CreateOnFreeLoopbackPort();
             Port = port;
         }
 

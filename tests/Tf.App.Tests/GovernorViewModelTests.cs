@@ -125,6 +125,51 @@ public class GovernorViewModelTests : IDisposable
         Assert.DoesNotContain(vm.RiskRailAlerts, a => a.Contains("governor latched", StringComparison.OrdinalIgnoreCase));
     }
 
+    // ─── Pre-trip warning (80% of the portfolio cap) ───────
+
+    [Fact]
+    public void GrowthViewModel_GovernorWarning_ShowsBanner_AndTripOrRearmClearsIt()
+    {
+        var vm = CreateGrowthVm();
+        Assert.False(vm.IsGovernorWarned);
+        Assert.Equal("", vm.GovernorWarningText);
+
+        _hub.TestRaiseGovernorWarning(1.20m);
+
+        Assert.True(vm.IsGovernorWarned);
+        Assert.Contains("−$1.2", vm.GovernorWarningText);
+        Assert.Contains("80%", vm.GovernorWarningText);
+
+        // A subsequent trip supersedes the amber warning.
+        _hub.TestRaiseGovernorTripped(-2.00m);
+        Assert.True(vm.IsGovernorTripped);
+        Assert.False(vm.IsGovernorWarned);
+        Assert.Equal("", vm.GovernorWarningText);
+
+        // And a re-arm resets everything.
+        _hub.TestRaiseGovernorRearmed();
+        Assert.False(vm.IsGovernorTripped);
+        Assert.False(vm.IsGovernorWarned);
+    }
+
+    [Fact]
+    public void DashboardViewModel_GovernorWarning_AppearsInRiskRail_AndClearsOnTrip()
+    {
+        var vm = CreateDashboardVm();
+        Assert.False(vm.IsGovernorWarned);
+
+        _hub.TestRaiseGovernorWarning(1.20m);
+
+        Assert.True(vm.IsGovernorWarned);
+        Assert.Contains(vm.RiskRailAlerts, a => a.Contains("drawdown warning", StringComparison.OrdinalIgnoreCase));
+
+        // The latched alert replaces the warning alert once the cap trips.
+        _hub.TestRaiseGovernorTripped(-2.00m);
+        Assert.True(vm.IsGovernorLatched);
+        Assert.DoesNotContain(vm.RiskRailAlerts, a => a.Contains("drawdown warning", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(vm.RiskRailAlerts, a => a.Contains("governor latched", StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>In-memory vault so the tests never touch %APPDATA%.</summary>
     private sealed class MemoryVault : IAccountVault
     {

@@ -94,6 +94,23 @@ public sealed class MultiAccountHub
     /// </summary>
     public event Action? GovernorRearmed;
 
+    /// <summary>
+    /// Raised when the combined daily drawdown reaches 80% of the portfolio
+    /// cap — an early warning before the trip. Fires once per arming cycle
+    /// (armed on <see cref="RearmGovernor"/>, day rollover, or restore;
+    /// cleared silently when the cap itself is breached) so repeated
+    /// settlements inside the warning band do not spam the banner or
+    /// webhook (background thread).
+    /// </summary>
+    public event Action<decimal>? PortfolioGovernorWarning;
+
+    /// <summary>Arm the pre-trip warning (or clear a stale one). Callers
+    /// hold <see cref="_runnerLock"/>; never notifies — arming is silent.</summary>
+    private void ArmGovernorWarningLocked()
+    {
+        _governorWarningFired = false;
+    }
+
     public IReadOnlyDictionary<Guid, GrowthRunner> Runners => _runners;
 
     /// <summary>Automatic restart attempts already made per account.
@@ -131,6 +148,10 @@ public sealed class MultiAccountHub
     private decimal? _governorTrippedNet;
 
     private bool _governorTripped;
+
+    /// <summary>Whether the pre-trip warning has fired in the current arming
+    /// cycle — gates the warning to one shot per re-arm / day rollover.</summary>
+    private bool _governorWarningFired;
 
     /// <summary>Account whose breach tripped the governor (null when the
     /// latch was restored from a journal entry without a usable id) — lets a
@@ -175,6 +196,7 @@ public sealed class MultiAccountHub
                 _governorTripAccountId = null;
                 _governorBaseline = CombinedGrowthNetPnl();
                 _governorBaselineDate = DateTime.UtcNow.Date;
+                ArmGovernorWarningLocked();
             }
         }
 
@@ -312,6 +334,7 @@ public sealed class MultiAccountHub
             _governorTripAccountId = null;
             _governorBaseline = CombinedGrowthNetPnl();
             _governorBaselineDate = DateTime.UtcNow.Date;
+            ArmGovernorWarningLocked();
             baseline = _governorBaseline;
         }
 
@@ -424,6 +447,11 @@ public sealed class MultiAccountHub
 
     /// <summary>Test seam: raises <see cref="GovernorRearmed"/> directly.</summary>
     internal void TestRaiseGovernorRearmed() => GovernorRearmed?.Invoke();
+
+    /// <summary>Test seam: raises <see cref="PortfolioGovernorWarning"/> with
+    /// the drawdown in use (the UI reaction is unit-tested here; the band
+    /// crossing itself is covered by the integration tests).</summary>
+    internal void TestRaiseGovernorWarning(decimal used) => PortfolioGovernorWarning?.Invoke(used);
 
     /// <summary>Cancels a scheduled automatic restart, if one is pending.</summary>
     private void CancelPendingRestart(Guid accountId)
@@ -571,11 +599,60 @@ public sealed class MultiAccountHub
             return; // governor disabled
         }
 
+        // Warn at 80% of the cap before tripping — a silent glide to the cap
+        // gives no chance to pause engines manually. No-op while latched or
+        // once fired for this arming cycle.
+        CheckGovernorWarning(CombinedGrowthNetPnl(), limit, GovernorBaseline());
+
         // TripGovernor re-checks the cap under the latch — a settlement on
         // another account racing this one must not be lost to the gap
         // between our combined-net read and the latch.
         TripGovernor(CombinedGrowthNetPnl(), limit, GovernorBaseline(),
             runner.Connection.Config.Id, runner.Connection.DisplayName);
+    }
+
+    /// <summary>
+    /// Warns when the combined daily drawdown reaches 80% of the portfolio
+    /// cap. One shot per arming cycle (re-arm, day rollover, or latch
+    /// restore): a settlement that slides from 81% to 95% must not spam the
+    /// banner and webhook; re-arming re-arms the warning too.
+    /// </summary>
+    private void CheckGovernorWarning(decimal net, decimal limit, decimal baseline)
+    {
+        bool fire;
+        lock (_runnerLock)
+        {
+            // The latch always wins: nothing to warn about once the cap is
+            // already breached, and the fired flag stays false so a re-arm
+            // (or the next day's baseline rollover) can warn again.
+            if (_governorTripped)
+            {
+                return;
+            }
+
+            // Arm the one-shot only when actually crossing the band: a
+            // below-band settlement that happens to run first must not
+            // consume the warning before the band is ever reached.
+            fire = !_governorWarningFired && baseline - net >= 0.80m * limit;
+            _governorWarningFired = fire;
+        }
+
+        if (!fire)
+        {
+            return;
+        }
+
+        var used = baseline - net;
+        _journal.LogGrowthState(Guid.Empty, "portfolio-governor-warning", net, 0,
+            $"combined drawdown {used:0.##} reached 80% of the -{limit:0.##} portfolio cap " +
+            $"({used / limit:P0}) — trip ahead if losses continue");
+
+        _notifications?.NotifyRiskRailEngaged("Portfolio drawdown warning",
+            $"{used:0.##} of the -{limit:0.##} portfolio cap used");
+        _webhook?.PostRiskRail("⚠ Portfolio drawdown warning",
+            $"combined daily drawdown {used:0.##} reached 80% of the -{limit:0.##} portfolio cap");
+
+        PortfolioGovernorWarning?.Invoke(used);
     }
 
     /// <summary>
@@ -606,6 +683,7 @@ public sealed class MultiAccountHub
 
             _governorTripped = true;
             _governorTripAccountId = accountId == Guid.Empty ? null : accountId;
+            ArmGovernorWarningLocked();
         }
 
         GovernorTrippedNet = net;

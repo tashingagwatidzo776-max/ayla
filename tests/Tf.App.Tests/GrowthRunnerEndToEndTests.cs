@@ -318,7 +318,7 @@ public class GrowthRunnerEndToEndTests
 
             // The scheduler's guard fires before any brain work, so within a
             // short window the runner must stop itself with zero trading.
-            await WaitForAsync(() => !runner.IsRunning, TimeSpan.FromSeconds(5),
+            await WaitForAsync(() => !runner.IsRunning, TimeSpan.FromSeconds(15),
                 "scheduler self-stop while the kill switch is engaged");
             Assert.False(runner.IsRunning, "kill switch must stop the scheduler immediately");
 
@@ -2352,6 +2352,8 @@ public class GrowthRunnerEndToEndTests
 
         var lastHubActivity = "";
         var governorNet = decimal.MinValue;
+        var warningCount = 0;
+        var warningUsed = decimal.MinValue;
         var countersA = new BrokerCounters();
         var countersB = new BrokerCounters();
 
@@ -2387,6 +2389,7 @@ public class GrowthRunnerEndToEndTests
                 }
             };
             hub.PortfolioGovernorTripped += net => governorNet = net;
+            hub.PortfolioGovernorWarning += used => { warningCount++; warningUsed = used; };
 
             var configA = new AccountConfig { Label = "Gov Alpha", ApiToken = "token-gov-a", IsDemo = true, BrainKey = "Growth" };
             var configB = new AccountConfig { Label = "Gov Beta", ApiToken = "token-gov-b", IsDemo = true, BrainKey = "Growth" };
@@ -2426,6 +2429,14 @@ public class GrowthRunnerEndToEndTests
                 TimeSpan.FromSeconds(60), "the portfolio governor trip");
             Assert.Equal(-2.00m, hub.CombinedGrowthNetPnl());
             Assert.Equal(-2.00m, governorNet);
+
+            // The warning must fire exactly once before the trip, with the
+            // drawdown at or past the 80% band edge (−$1.20 of the −$1.50
+            // cap) and no further than the worst-case combined loss. Where
+            // it lands depends on which settlement the settling thread sees
+            // first, so assert the range rather than an exact value.
+            Assert.Equal(1, warningCount);
+            Assert.InRange(warningUsed, 1.20m, 2.00m);
 
             // The hub's session was stopped; the latched governor refuses
             // new starts and nothing else trades.

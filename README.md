@@ -38,8 +38,9 @@ A WPF desktop application for automated binary-options trading on the [Deriv](ht
 The governor watches the **combined net P&L of all growth-engine accounts** against the plan's `PortfolioDailyDrawdownCap`:
 
 - Trips (latches) when the day's combined drawdown exceeds the cap — every growth engine is halted, not just the losing account
+- **Pre-trip warning** — when the combined drawdown reaches 80% of the cap, an amber banner, a Dashboard risk-rail alert, and a webhook fire once per arming cycle so you can stop engines manually before the trip
 - The latch is journaled and **survives app restarts**; it is restored from the journal on the next launch
-- Re-arm is manual: clear the banner in the Growth or Dashboard tab once you've reviewed the day
+- Re-arm is manual: clear the banner in the Growth or Dashboard tab once you've reviewed the day (re-arming also re-arms the warning)
 - Adding a new account while latched does not clear the latch; only an explicit re-arm does
 
 ### Auto-Restart & Failure Hardening

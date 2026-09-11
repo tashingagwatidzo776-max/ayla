@@ -65,6 +65,15 @@ public sealed partial class GrowthViewModel : ObservableObject
     [ObservableProperty]
     private bool isGovernorTripped;
 
+    /// <summary>True while the amber pre-trip warning shows (combined daily
+    /// drawdown at 80% of the portfolio cap; hidden when the cap trips).</summary>
+    [ObservableProperty]
+    private bool isGovernorWarned;
+
+    /// <summary>Amber banner text for the pre-trip warning (empty = hidden).</summary>
+    [ObservableProperty]
+    private string governorWarningText = "";
+
     /// <summary>Banner text shown while the governor is latched (empty = hidden).</summary>
     [ObservableProperty]
     private string governorBannerText = "";
@@ -97,6 +106,7 @@ public sealed partial class GrowthViewModel : ObservableObject
         _hub.GrowthActivity += OnPortfolioRefresh;
         _hub.RestartStateChanged += OnRestartStateChanged;
         _hub.PortfolioGovernorTripped += OnGovernorTripped;
+        _hub.PortfolioGovernorWarning += OnGovernorWarning;
         _hub.GovernorRearmed += OnGovernorRearmed;
         RefreshPortfolioPnl();
 
@@ -278,8 +288,24 @@ public sealed partial class GrowthViewModel : ObservableObject
         OnUiThread(() =>
         {
             IsGovernorTripped = true;
+            // The red latch banner supersedes the amber pre-trip warning.
+            IsGovernorWarned = false;
+            GovernorWarningText = "";
             var signedNet = ShowGovernorBanner(net);
             ActivityLog.Insert(0, $"{DateTime.Now:HH:mm:ss} — portfolio drawdown cap breached ({signedNet})");
+        });
+    }
+
+    private void OnGovernorWarning(decimal used)
+    {
+        OnUiThread(() =>
+        {
+            IsGovernorWarned = true;
+            // Drawdown is displayed as a negative number, like the trip banner.
+            var signedUsed = $"−${Math.Abs(used):0.##}";
+            GovernorWarningText = $"Portfolio drawdown warning — combined {signedUsed} is at 80% of the cap. " +
+                                  "Consider stopping engines before the governor trips.";
+            ActivityLog.Insert(0, $"{DateTime.Now:HH:mm:ss} — portfolio drawdown at 80% of cap ({signedUsed})");
         });
     }
 
@@ -301,7 +327,9 @@ public sealed partial class GrowthViewModel : ObservableObject
         OnUiThread(() =>
         {
             IsGovernorTripped = false;
+            IsGovernorWarned = false;
             GovernorBannerText = "";
+            GovernorWarningText = "";
             StatusMessage = "Portfolio governor re-armed — engines may start again.";
             ActivityLog.Insert(0, $"{DateTime.Now:HH:mm:ss} — portfolio governor re-armed");
             RefreshPortfolioPnl();

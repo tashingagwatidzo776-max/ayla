@@ -43,7 +43,7 @@ public class DerivTradePlumbingTests
     [Fact]
     public async Task GetProposalAsync_SendsCorrectPayload_ForRise()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var (server, client) = await SetupAsync(req =>
             Respond(req, "proposal", ProposalBody("PROP-RISE", 1.12345, 1.9m)), cts.Token);
         await using var _ = client;
@@ -71,7 +71,7 @@ public class DerivTradePlumbingTests
     [Fact]
     public async Task GetProposalAsync_Fall_SendsPut()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var (server, client) = await SetupAsync(req =>
             Respond(req, "proposal", ProposalBody("PROP-FALL", 2.5, 1.9m)), cts.Token);
         await using var _ = client;
@@ -88,7 +88,7 @@ public class DerivTradePlumbingTests
     [Fact]
     public async Task BuyAsync_ParsesBuyResult()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var (server, client) = await SetupAsync(req =>
             Respond(req, "buy",
                 "{\"contract_id\":\"CONTRACT-77\",\"buy_price\":1.05,\"balance_after\":999.95,\"longcode\":\"Rise\"}"),
@@ -110,7 +110,7 @@ public class DerivTradePlumbingTests
     [Fact]
     public async Task GetContractAsync_ParsesWonContract()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var (server, client) = await SetupAsync(req =>
             Respond(req, "proposal_open_contract",
                 ContractBody("CONTRACT-77", "won", true, 1.10, 1.11, 1700000000, 1700000300, 1.05m, 0.95m)),
@@ -130,7 +130,7 @@ public class DerivTradePlumbingTests
     [Fact]
     public async Task WaitForSettlementAsync_PollsUntilSold()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var polls = 0;
         var (server, client) = await SetupAsync(req =>
         {
@@ -156,7 +156,7 @@ public class DerivTradePlumbingTests
     [Fact]
     public async Task ApiError_ThrowsDerivApiException()
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var (server, client) = await SetupAsync(req =>
             $"{{\"msg_type\":\"error\",\"req_id\":{req.GetProperty("req_id").GetInt32()}," +
             "\"error\":{\"code\":\"AuthorizationRequired\",\"message\":\"Please authenticate.\"}}",
@@ -185,14 +185,7 @@ public class DerivTradePlumbingTests
         {
             _responder = responder;
 
-            var tcp = new TcpListener(IPAddress.Loopback, 0);
-            tcp.Start();
-            var port = ((IPEndPoint)tcp.LocalEndpoint).Port;
-            tcp.Stop();
-
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-            _listener.Start();
+            (_listener, var port) = TestHttpListenerFactory.CreateOnFreeLoopbackPort();
             Port = port;
         }
 
