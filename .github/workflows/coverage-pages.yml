@@ -1,19 +1,30 @@
 name: Coverage Pages
 
-# Publishes the merged HTML coverage report to GitHub Pages after every
-# successful CI run on main (a push to main covers both direct pushes and
-# merged pull requests). Reuses the cobertura artifacts the CI run already
-# produced — tests are not re-run here.
+# Publishes the merged HTML coverage report to GitHub Pages, reusing the
+# cobertura artifacts the CI run already produced — tests are not re-run here.
+#
+# PAUSED: the repository is private and GitHub Pages for private repos needs a
+# paid plan ("Your current plan does not support GitHub Pages"). The workflow
+# no longer runs automatically; trigger it manually from Actions → Coverage
+# Pages → Run workflow (it picks up the latest successful CI run on main and
+# publishes the report). The merged report is also always downloadable as the
+# `coverage-report` artifact of each CI run.
+#
+# To re-enable automatic publication after upgrading the plan: create the
+# Pages site (Settings → Pages → Build and deployment → Source: GitHub
+# Actions, or POST /repos/{owner}/{repo}/pages {"build_type":"workflow"}) and
+# restore the workflow_run trigger below.
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
+  # workflow_run:
+  #   workflows: [CI]
+  #   types: [completed]
+  #   branches: [main]
 
 permissions:
   contents: read
-  actions: read # download artifacts from the triggering CI run
+  actions: read # read CI runs / download their artifacts
   pages: write
   id-token: write # OIDC deployment to GitHub Pages
 
@@ -23,7 +34,7 @@ concurrency:
 
 jobs:
   publish:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: windows-latest
     environment:
       name: github-pages
@@ -31,6 +42,21 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    # On manual dispatch there is no triggering CI run, so resolve the latest
+    # successful CI run on main instead.
+    - name: Resolve latest successful CI run
+      if: ${{ github.event_name == 'workflow_dispatch' }}
+      id: ci_run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        run_id=$(gh run list --repo "${{ github.repository }}" \
+          --workflow CI --branch main --status success --limit 1 \
+          --json databaseId --jq '.[0].databaseId')
+        echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+        echo "Publishing coverage from CI run $run_id"
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -43,7 +69,7 @@ jobs:
     - name: Download coverage artifacts from the CI run
       uses: actions/download-artifact@v4
       with:
-        run-id: ${{ github.event.workflow_run.id }}
+        run-id: ${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}
         github-token: ${{ secrets.GITHUB_TOKEN }}
         pattern: coverage-*
         path: ./coverage
