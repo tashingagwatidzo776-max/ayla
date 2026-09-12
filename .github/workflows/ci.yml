@@ -182,7 +182,8 @@ jobs:
           echo "| This PR | ${pct}% (gate 60% ${gate_icon}) |"
           if [ -n "$base" ]; then
             base_run="${{ steps.baseline.outputs.baseline_run_id }}"
-            echo "| main (CI run [$base_run]($run_url)) | ${base}% |"
+            base_url="https://github.com/${{ github.repository }}/actions/runs/$base_run"
+            echo "| main (CI run [$base_run]($base_url)) | ${base}% |"
             delta=$(awk -v h="$pct" -v b="$base" 'BEGIN { printf "%+.1f", h - b }')
             icon="🟢"; [ "$(awk -v d="$delta" 'BEGIN { print (d+0 < 0) }')" = "1" ] && icon="🔴"
             echo "| Δ vs main | **${delta}%** ${icon} |"

@@ -102,3 +102,28 @@ granted to the repo; `403` means the token lacks admin rights.
 - The 60% gate lives inside the `coverage-report` job; see the step
   *Enforce minimum line coverage* in `ci.yml`. Raise the gate there (and in
   the matching `::error` message) when the measured coverage improves.
+
+## Creating a fine-grained PAT (step by step)
+
+1. GitHub → Settings → Developer settings → **Personal access tokens →
+   Fine-grained tokens** → *Generate new token*.
+2. **Token name** something auditable, e.g. `ayla-branch-protection`; set an
+   expiry you will actually remember.
+3. **Resource owner:** `tashingagwatidzo776-max`.
+4. **Repository access:** *Only select repositories* → `ayla`.
+5. **Permissions:** Repository permissions → **Administration: Read and
+   write** — this one permission covers both reading and updating branch
+   protection. Everything else can stay *No access*.
+6. Generate, copy the token (it is shown once), and keep it in your credential
+   helper or `GH_TOKEN` — never in the repo.
+
+The API call in this doc then works verbatim with `Authorization: Bearer
+<token>`. Failure modes: `404` ⇒ the token's repository list doesn't include
+`ayla` or *Administration* wasn't granted; `403` ⇒ token lacks admin rights;
+and on a **private** repo on the free plan the endpoint itself returns
+`403 "Upgrade to GitHub Pro or make this repository public"` — branch
+protection and Pages both need a public repo on the free plan, which is why
+`ayla` is public.
+
+The PAT is only needed when (re-)applying the rule via API or after a job
+rename; the protection rule itself persists until changed.
