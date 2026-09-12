@@ -5,17 +5,15 @@ using Tf.Core.Brain;
 namespace Tf.App.Infrastructure;
 
 /// <summary>
-/// Persists the Growth brain plan (risk %, daily target, floor, recovery
-/// ladder, cadence, restart policy, portfolio drawdown cap) as plain JSON
-/// under %APPDATA%\tf\data\growth-plan.json — no secrets here, so no
-/// encryption needed.
+/// Persists the Growth brain plan as JSON under %APPDATA%\tf\data\
+/// growth-plan.json — no secrets here, so no encryption needed. The file
+/// I/O lives here; (de)serialization and validation live in the headless
+/// <see cref="GrowthPlanJsonStore"/> so they stay unit-testable.
 /// </summary>
 public sealed class GrowthPlanStore
 {
     private static readonly string PlanPath =
         Path.Combine(SettingsService.DataDir, "growth-plan.json");
-
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     public GrowthPlan Load()
     {
@@ -26,9 +24,7 @@ public sealed class GrowthPlanStore
                 return GrowthPlan.Default;
             }
 
-            var json = File.ReadAllText(PlanPath);
-            var dto = JsonSerializer.Deserialize<GrowthPlanDto>(json, JsonOptions);
-            return dto?.ToPlan() ?? GrowthPlan.Default;
+            return GrowthPlanJsonStore.Load(File.ReadAllBytes(PlanPath));
         }
         catch
         {
@@ -39,48 +35,6 @@ public sealed class GrowthPlanStore
     public void Save(GrowthPlan plan)
     {
         Directory.CreateDirectory(SettingsService.DataDir);
-        var json = JsonSerializer.Serialize(GrowthPlanDto.From(plan), JsonOptions);
-        File.WriteAllText(PlanPath, json);
-    }
-
-    /// <summary>Settable mirror of <see cref="GrowthPlan"/> for JSON round-trips.</summary>
-    private sealed class GrowthPlanDto
-    {
-        public decimal StartBudget { get; set; } = 5.00m;
-        public double RiskFraction { get; set; } = 0.20;
-        public int MaxRecoverySteps { get; set; } = 3;
-        public double DailyTargetFraction { get; set; } = 1.00;
-        public double FloorFraction { get; set; } = 0.40;
-        public decimal MinStake { get; set; } = 1.00m;
-        public int IntervalMinutes { get; set; } = 1;
-        public int CooldownMinutesAfterLoss { get; set; } = 1;
-        public double FailureBackoffSeconds { get; set; } = 5.0;
-        public int MaxAutoRestarts { get; set; } = 3;
-        public double RestartBaseDelaySeconds { get; set; } = 5.0;
-        public double RestartBackoffFactor { get; set; } = 3.0;
-        public decimal? PortfolioDailyDrawdownCap { get; set; }
-
-        public GrowthPlan ToPlan() => new(
-            StartBudget, RiskFraction, MaxRecoverySteps, DailyTargetFraction,
-            FloorFraction, MinStake, IntervalMinutes, CooldownMinutesAfterLoss,
-            FailureBackoffSeconds, MaxAutoRestarts, RestartBaseDelaySeconds,
-            RestartBackoffFactor, PortfolioDailyDrawdownCap);
-
-        public static GrowthPlanDto From(GrowthPlan plan) => new()
-        {
-            StartBudget = plan.StartBudget,
-            RiskFraction = plan.RiskFraction,
-            MaxRecoverySteps = plan.MaxRecoverySteps,
-            DailyTargetFraction = plan.DailyTargetFraction,
-            FloorFraction = plan.FloorFraction,
-            MinStake = plan.MinStake,
-            IntervalMinutes = plan.IntervalMinutes,
-            CooldownMinutesAfterLoss = plan.CooldownMinutesAfterLoss,
-            FailureBackoffSeconds = plan.FailureBackoffSeconds,
-            MaxAutoRestarts = plan.MaxAutoRestarts,
-            RestartBaseDelaySeconds = plan.RestartBaseDelaySeconds,
-            RestartBackoffFactor = plan.RestartBackoffFactor,
-            PortfolioDailyDrawdownCap = plan.PortfolioDailyDrawdownCap
-        };
+        File.WriteAllBytes(PlanPath, GrowthPlanJsonStore.Save(plan));
     }
 }

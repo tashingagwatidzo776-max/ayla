@@ -122,14 +122,7 @@ public partial class OptimizerViewModel : ObservableObject
 
             var data = LoadData(50);
 
-            Func<IReadOnlyList<Tick>, LlmDecision> decideFunc = SelectedStrategy switch
-            {
-                "TrendFollowing" => window => TrendFollowingBrain.Decide(window, TrendFollowingBrain.TrendConfig.Default),
-                "Breakout" => window => BreakoutBrain.Decide(window, BreakoutBrain.BreakoutConfig.Default),
-                "MeanReversion" => window => MeanReversionBrain.Decide(window, MeanReversionBrain.MeanReversionConfig.Default),
-                "Growth" => window => LlmDecision.Hold("Growth brain requires session engine"),
-                _ => window => LlmDecision.Hold("Unknown strategy")
-            };
+            Func<IReadOnlyList<Tick>, LlmDecision> decideFunc = StrategyCatalog.ResolveDecideFunc(SelectedStrategy);
 
             var result = await Task.Run(() =>
                 _optimizer.RunBacktest(data, SelectedStrategy, decideFunc, StartBankroll, RiskFraction, MaxTrades));
@@ -162,29 +155,7 @@ public partial class OptimizerViewModel : ObservableObject
             var data = LoadData(100);
 
             // Define parameter ranges for each strategy
-            var ranges = SelectedStrategy switch
-            {
-                "TrendFollowing" => new Dictionary<string, (double min, double max, double step)>
-                {
-                    ["FastEma"] = (5, 15, 1),
-                    ["SlowEma"] = (15, 30, 1),
-                    ["MinAdx"] = (20, 35, 5)
-                },
-                "Breakout" => new Dictionary<string, (double min, double max, double step)>
-                {
-                    ["BollingerPeriod"] = (15, 25, 2),
-                    ["BollingerStdDev"] = (1.5, 2.5, 0.25),
-                    ["BreakoutThreshold"] = (0.3, 0.8, 0.1)
-                },
-                "MeanReversion" => new Dictionary<string, (double min, double max, double step)>
-                {
-                    ["RsiPeriod"] = (10, 20, 2),
-                    ["OversoldRsi"] = (25, 35, 2),
-                    ["OverboughtRsi"] = (65, 75, 2),
-                    ["MinZScore"] = (1.0, 2.0, 0.25)
-                },
-                _ => new Dictionary<string, (double min, double max, double step)>()
-            };
+            var ranges = StrategyCatalog.ResolveParameterRanges(SelectedStrategy);
 
             if (ranges.Count == 0)
             {
@@ -193,26 +164,7 @@ public partial class OptimizerViewModel : ObservableObject
             }
 
             Func<IReadOnlyList<Tick>, Dictionary<string, double>, LlmDecision> decideFunc =
-                (window, parameters) => SelectedStrategy switch
-                {
-                    "TrendFollowing" => TrendFollowingBrain.Decide(window,
-                        new TrendFollowingBrain.TrendConfig(
-                            FastEma: (int)parameters["FastEma"],
-                            SlowEma: (int)parameters["SlowEma"],
-                            MinAdx: parameters["MinAdx"])),
-                    "Breakout" => BreakoutBrain.Decide(window,
-                        new BreakoutBrain.BreakoutConfig(
-                            BollingerPeriod: (int)parameters["BollingerPeriod"],
-                            BollingerStdDev: parameters["BollingerStdDev"],
-                            BreakoutThreshold: parameters["BreakoutThreshold"])),
-                    "MeanReversion" => MeanReversionBrain.Decide(window,
-                        new MeanReversionBrain.MeanReversionConfig(
-                            RsiPeriod: (int)parameters["RsiPeriod"],
-                            OversoldRsi: parameters["OversoldRsi"],
-                            OverboughtRsi: parameters["OverboughtRsi"],
-                            MinZScore: parameters["MinZScore"])),
-                    _ => LlmDecision.Hold("Unknown")
-                };
+                StrategyCatalog.ResolveParameterizedDecideFunc(SelectedStrategy);
 
             var result = await Task.Run(() =>
                 _optimizer.Optimize(data, SelectedStrategy, decideFunc, ranges, OptimizationIterations));
@@ -242,32 +194,8 @@ public partial class OptimizerViewModel : ObservableObject
         }
     }
 
-    private IReadOnlyList<Tick> GenerateSyntheticData(int count)
-    {
-        var random = new Random(42);
-        var ticks = new List<Tick>();
-        var price = 1.10000;
-        var timestamp = DateTimeOffset.UtcNow.AddMinutes(-count);
-
-        for (int i = 0; i < count; i++)
-        {
-            // Random walk with mean reversion
-            price += (random.NextDouble() - 0.5) * 0.0001;
-            price = Math.Max(1.05, Math.Min(1.15, price));
-
-            ticks.Add(new Tick(
-                "frxEURUSD",
-                price,
-                price + random.NextDouble() * 0.00001,
-                price - random.NextDouble() * 0.00001,
-                timestamp.ToUnixTimeMilliseconds(),
-                5));
-
-            timestamp = timestamp.AddSeconds(5);
-        }
-
-        return ticks;
-    }
+    private IReadOnlyList<Tick> GenerateSyntheticData(int count) =>
+        StrategyCatalog.GenerateSyntheticData(count);
 }
 
 public class BacktestResultViewModel

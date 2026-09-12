@@ -75,60 +75,63 @@ public partial class HealthViewModel : ObservableObject
 
     private void RefreshInternal()
     {
-        Accounts.Clear();
-        ConnectedCount = 0;
-        TotalAccounts = _hub.Accounts.Count;
-        DegradedCount = 0;
-        PausedCount = 0;
-        RunningEngines = 0;
-
+        // The counting/formatting rules live in the headless
+        // HealthSummaryBuilder; this only maps the result onto observable
+        // properties and display rows.
+        var inputs = new List<AccountHealthInput>();
         foreach (var acct in _hub.Accounts)
         {
-            if (acct.IsConnected) ConnectedCount++;
-            if (acct.IsDegraded) DegradedCount++;
-            if (acct.IsPaused) PausedCount++;
-
-            var hasRunner = _hub.Runners.ContainsKey(acct.Config.Id);
-            if (hasRunner) RunningEngines++;
-
-            var tickCount = acct.Ticks.Count;
-            var cachedCount = _tickCache.GetTickCount(acct.Config.Symbol);
-
-            Accounts.Add(new AccountHealthRow
-            {
-                Name = acct.DisplayName,
-                LoginId = acct.LoginIdText,
-                Status = acct.StatusText,
-                Balance = acct.BalanceText,
-                IsConnected = acct.IsConnected,
-                IsDegraded = acct.IsDegraded,
-                IsPaused = acct.IsPaused,
-                HasRunner = hasRunner,
-                CircuitStatus = acct.CircuitStatus,
-                TickBuffer = $"{tickCount}/400",
-                TickBufferFill = tickCount / 400.0,
-                CachedTicks = $"{cachedCount:N0}",
-                Symbol = acct.Config.Symbol,
-                Brain = acct.Config.BrainKey
-            });
+            inputs.Add(new AccountHealthInput(
+                acct.Config.Id,
+                acct.DisplayName,
+                acct.LoginIdText,
+                acct.StatusText,
+                acct.BalanceText,
+                acct.IsConnected,
+                acct.IsDegraded,
+                acct.IsPaused,
+                _hub.Runners.ContainsKey(acct.Config.Id),
+                acct.CircuitStatus,
+                acct.Ticks.Count,
+                400,
+                _tickCache.GetTickCount(acct.Config.Symbol),
+                acct.Config.Symbol,
+                acct.Config.BrainKey));
         }
 
-        // Overall status
-        if (DegradedCount > 0)
-            OverallStatus = $"⚠ {DegradedCount} degraded";
-        else if (ConnectedCount == TotalAccounts)
-            OverallStatus = $"✓ All {TotalAccounts} accounts connected";
-        else if (ConnectedCount > 0)
-            OverallStatus = $"{ConnectedCount}/{TotalAccounts} connected";
-        else
-            OverallStatus = "No accounts connected";
-
-        // Cache stats
         var symbols = _tickCache.GetSymbols();
-        var totalTicks = symbols.Sum(s => _tickCache.GetTickCount(s));
-        CacheStats = symbols.Count > 0
-            ? $"{totalTicks:N0} ticks cached across {symbols.Count} symbol(s)"
-            : "No tick data cached yet";
+        var totalTicks = symbols.Sum(s => (long)_tickCache.GetTickCount(s));
+        var summary = HealthSummaryBuilder.Build(inputs, symbols.Count, totalTicks);
+
+        OverallStatus = summary.OverallStatus;
+        ConnectedCount = summary.ConnectedCount;
+        TotalAccounts = summary.TotalAccounts;
+        DegradedCount = summary.DegradedCount;
+        PausedCount = summary.PausedCount;
+        RunningEngines = summary.RunningEngines;
+        CacheStats = summary.CacheStats;
+
+        Accounts.Clear();
+        foreach (var row in summary.Rows)
+        {
+            Accounts.Add(new AccountHealthRow
+            {
+                Name = row.Name,
+                LoginId = row.LoginId,
+                Status = row.Status,
+                Balance = row.Balance,
+                IsConnected = row.IsConnected,
+                IsDegraded = row.IsDegraded,
+                IsPaused = row.IsPaused,
+                HasRunner = row.HasRunner,
+                CircuitStatus = row.CircuitStatus,
+                TickBuffer = row.TickBuffer,
+                TickBufferFill = row.TickBufferFill,
+                CachedTicks = row.CachedTicks,
+                Symbol = row.Symbol,
+                Brain = row.Brain
+            });
+        }
     }
 
     private void OnAccountsChanged()

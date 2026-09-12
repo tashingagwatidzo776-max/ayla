@@ -98,13 +98,13 @@ jobs:
     - name: Generate merged HTML coverage report
       run: dotnet tool run reportgenerator -- -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:"./coverage/report" -reporttypes:"HtmlInline_AzurePipelines;TextSummary"
 
-    - name: Enforce minimum line coverage (55%)
+    - name: Enforce minimum line coverage (60%)
       shell: bash
       run: |
         pct=$(grep -E '^  Line coverage:' ./coverage/report/Summary.txt | awk '{print $3}' | tr -d '%')
-        echo "Combined line coverage: ${pct}% (minimum 55%)"
-        awk -v p="$pct" 'BEGIN { exit (p+0 < 55) }' || {
-          echo "::error::Line coverage ${pct}% is below the 55% gate"
+        echo "Combined line coverage: ${pct}% (minimum 60%)"
+        awk -v p="$pct" 'BEGIN { exit (p+0 < 60) }' || {
+          echo "::error::Line coverage ${pct}% is below the 60% gate"
           exit 1
         }
 

@@ -25,22 +25,8 @@ public sealed record GrowthPlan(
 {
     public static GrowthPlan Default { get; } = new();
 
-    /// <summary>
-    /// Parses a portfolio daily-drawdown cap from free text ("$150", "150",
-    /// "blank"). Blank/whitespace → null (governor disabled); anything that is
-    /// not a positive number also disables it rather than throwing.
-    /// </summary>
-    public static decimal? TryCreateDrawdownCap(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
-
-        var cleaned = text.Trim().TrimStart('$').Replace(",", "");
-        return decimal.TryParse(cleaned, System.Globalization.CultureInfo.InvariantCulture, out var cap)
-            && cap > 0 ? cap : null;
-    }
+    /// <summary>Parses the portfolio daily-drawdown cap from free text.</summary>
+    public static decimal? TryCreateDrawdownCap(string? text) => PlanTextParser.TryCreateDrawdownCap(text);
 }
 
 /// <summary>

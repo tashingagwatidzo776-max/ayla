@@ -250,14 +250,26 @@ public sealed class UpdateInfo
 
 internal sealed class GitHubRelease
 {
+    // GitHub's releases API returns snake_case; without these mappings the
+    // properties never bind and every update check reports "no update".
+    [System.Text.Json.Serialization.JsonPropertyName("tag_name")]
     public string TagName { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonPropertyName("body")]
     public string Body { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonPropertyName("assets")]
     public List<GitHubAsset>? Assets { get; set; }
 }
 
 internal sealed class GitHubAsset
 {
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
     public string Name { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonPropertyName("browser_download_url")]
     public string BrowserDownloadUrl { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonPropertyName("size")]
     public long Size { get; set; }
 }
