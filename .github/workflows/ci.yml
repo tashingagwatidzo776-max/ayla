@@ -5,6 +5,21 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Nightly drift check: catches breakage that only shows up when the world
+  # moves — runner-image and dotnet SDK updates, and upstream API changes
+  # (Deriv WebSocket, LLM providers). The odd minute keeps it off the
+  # top-of-hour schedule crunch.
+  schedule:
+    - cron: '17 3 * * *'
+  # Schedules cannot be fired manually, so this dispatch hook exists to
+  # exercise the same pipeline on demand (e.g. right after a runner-image
+  # update lands).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read # download the baseline coverage artifact from main's last run
+  pull-requests: write # post/update the coverage-diff PR comment
 
 jobs:
   unit:
@@ -112,6 +127,84 @@ jobs:
           echo "::error::Line coverage ${pct}% is below the 60% gate"
           exit 1
         }
+
+    # Diff this PR's merged coverage against the last successful CI run on
+    # main so regressions are visible in-thread before merging. One comment
+    # per PR, updated in place on every push instead of stacking new ones.
+    - name: Resolve baseline coverage run on main
+      id: baseline
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        run_id=$(gh run list --repo "${{ github.repository }}" \
+          --workflow CI --branch main --event push --status success --limit 1 \
+          --json databaseId --jq '.[0].databaseId // empty')
+        echo "baseline_run_id=$run_id" >> "$GITHUB_OUTPUT"
+        echo "Baseline CI run on main: ${run_id:-none}"
+
+    - name: Download baseline coverage artifact
+      if: github.event_name == 'pull_request' && steps.baseline.outputs.baseline_run_id != ''
+      uses: actions/download-artifact@v4
+      with:
+        run-id: ${{ steps.baseline.outputs.baseline_run_id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        name: coverage-report
+        path: ./coverage/base
+
+    # Runs even when the 60% gate fails (!cancelled), so a failing PR still
+    # gets its numbers posted.
+    - name: Post coverage-diff comment on the PR
+      if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        summary=./coverage/report/Summary.txt
+        [ -f "$summary" ] || { echo "No coverage summary produced; skipping comment"; exit 0; }
+        pct=$(grep -E '^  Line coverage:' "$summary" | awk '{print $3}' | tr -d '%')
+        [ -n "$pct" ] || { echo "Could not parse head coverage; skipping comment"; exit 0; }
+
+        base=""
+        if [ -f ./coverage/base/Summary.txt ]; then
+          base=$(grep -E '^  Line coverage:' ./coverage/base/Summary.txt | awk '{print $3}' | tr -d '%')
+        fi
+
+        gate_icon="🔴"; [ "$(awk -v p="$pct" 'BEGIN { print (p+0 >= 60) }')" = "1" ] && gate_icon="✅"
+        run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+        {
+          echo "## 📊 Coverage report"
+          echo ""
+          echo "| | Line coverage |"
+          echo "|---|---|"
+          echo "| This PR | ${pct}% (gate 60% ${gate_icon}) |"
+          if [ -n "$base" ]; then
+            base_run="${{ steps.baseline.outputs.baseline_run_id }}"
+            echo "| main (CI run [$base_run]($run_url)) | ${base}% |"
+            delta=$(awk -v h="$pct" -v b="$base" 'BEGIN { printf "%+.1f", h - b }')
+            icon="🟢"; [ "$(awk -v d="$delta" 'BEGIN { print (d+0 < 0) }')" = "1" ] && icon="🔴"
+            echo "| Δ vs main | **${delta}%** ${icon} |"
+          else
+            echo "| main | *no baseline available yet* |"
+          fi
+          echo ""
+          echo 'Merged line coverage of the `unit` + `integration` runs. Full HTML report: the `coverage-report` [artifact]('"$run_url"') of this run.'
+          echo "<!-- coverage-diff -->"
+        } > comment.md
+        cat comment.md
+
+        number="${{ github.event.pull_request.number }}"
+        repo="${{ github.repository }}"
+        comment_id=$(gh api "repos/$repo/issues/$number/comments" \
+          --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("coverage-diff")) | .id' | tail -1)
+        if [ -n "$comment_id" ]; then
+          gh api -X PATCH "repos/$repo/issues/comments/$comment_id" -F body=@comment.md > /dev/null
+          echo "Updated coverage comment $comment_id"
+        else
+          gh pr comment "$number" --repo "$repo" --body-file comment.md
+        fi
 
     - name: Upload coverage report
       uses: actions/upload-artifact@v4

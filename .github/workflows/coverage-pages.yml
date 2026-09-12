@@ -3,24 +3,24 @@ name: Coverage Pages
 # Publishes the merged HTML coverage report to GitHub Pages, reusing the
 # cobertura artifacts the CI run already produced — tests are not re-run here.
 #
-# PAUSED: the repository is private and GitHub Pages for private repos needs a
-# paid plan ("Your current plan does not support GitHub Pages"). The workflow
-# no longer runs automatically; trigger it manually from Actions → Coverage
-# Pages → Run workflow (it picks up the latest successful CI run on main and
-# publishes the report). The merged report is also always downloadable as the
-# `coverage-report` artifact of each CI run.
+# Runs automatically after every successful CI run on main, and can also be
+# triggered manually from Actions → Coverage Pages → Run workflow (it then
+# picks up the latest successful CI run on main and publishes the report).
+# Site: https://tashingagwatidzo776-max.github.io/ayla/
 #
-# To re-enable automatic publication after upgrading the plan: create the
-# Pages site (Settings → Pages → Build and deployment → Source: GitHub
-# Actions, or POST /repos/{owner}/{repo}/pages {"build_type":"workflow"}) and
-# restore the workflow_run trigger below.
+# Pages needs a public repo on the free plan — the repo was made public and
+# the site created via POST /repos/{owner}/{repo}/pages {"build_type":"workflow"}
+# (Settings → Pages → Source: GitHub Actions shows the same toggle). Do not
+# delete the Pages site or flip the repo back to private, or auto-publish
+# breaks again; the merged report remains downloadable as the `coverage-report`
+# artifact of each CI run either way.
 
 on:
   workflow_dispatch:
-  # workflow_run:
-  #   workflows: [CI]
-  #   types: [completed]
-  #   branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
