@@ -54,7 +54,9 @@ jobs:
 
     # Fake-server E2E tests (DerivIntegrationFlowTests, GrowthRunnerEndToEndTests)
     # need no network and always run. Live-Deriv tests stay opt-in: they detect
-    # TF_DERIV_TOKEN / TF_OLLAMA_MODEL and pass through when unset.
+    # TF_DERIV_SMOKE / TF_DERIV_TOKEN and pass through when unset (Deriv also
+    # rejects anonymous handshakes from datacenter IPs, so the anonymous smoke
+    # test must never run on CI runners).
     - name: Test (Integration)
       run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration" --collect:"XPlat Code Coverage" --results-directory ./coverage
       env:
