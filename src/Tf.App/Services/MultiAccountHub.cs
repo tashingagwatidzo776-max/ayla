@@ -583,6 +583,7 @@ public sealed class MultiAccountHub
     private void OnRunnerSettled(GrowthRunner runner, Trade trade)
     {
         GrowthPlan plan;
+        decimal net, baseline;
         lock (_runnerLock)
         {
             if (_governorTripped)
@@ -591,6 +592,16 @@ public sealed class MultiAccountHub
             }
 
             plan = _plans.TryGetValue(runner.Connection.Config.Id, out var p) ? p : _hubPlan;
+
+            // One consistent settlement view decides BOTH the pre-trip
+            // warning and the trip: the combined net and baseline are read
+            // in the same lock window as the latch check, so a concurrent
+            // settlement can no longer trip the governor on a breach this
+            // check never saw (which silently skipped the owed warning).
+            // Every settlement's handler still evaluates the warning first
+            // on its own view, so the one-shot fires on exactly one view.
+            net = CombinedGrowthNetPnl();
+            baseline = GovernorBaseline();
         }
 
         var cap = plan.PortfolioDailyDrawdownCap;
@@ -602,12 +613,12 @@ public sealed class MultiAccountHub
         // Warn at 80% of the cap before tripping — a silent glide to the cap
         // gives no chance to pause engines manually. No-op while latched or
         // once fired for this arming cycle.
-        CheckGovernorWarning(CombinedGrowthNetPnl(), limit, GovernorBaseline());
+        CheckGovernorWarning(net, limit, baseline);
 
-        // TripGovernor re-checks the cap under the latch — a settlement on
-        // another account racing this one must not be lost to the gap
-        // between our combined-net read and the latch.
-        TripGovernor(CombinedGrowthNetPnl(), limit, GovernorBaseline(),
+        // TripGovernor re-checks the breach under the latch; the view passed
+        // here is the same one the warning saw, so a trip is never decided
+        // on a different settlement than the warning was.
+        TripGovernor(net, limit, baseline,
             runner.Connection.Config.Id, runner.Connection.DisplayName);
     }
 

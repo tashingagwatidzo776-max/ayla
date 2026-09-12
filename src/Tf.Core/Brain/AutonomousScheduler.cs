@@ -57,6 +57,47 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     // then has nothing to cancel and the loop would run uncancellable).
     private int _generation;
 
+    /// <summary>Granularity at which long waits re-check the kill switch —
+    /// engaging the switch must interrupt the inter-cycle interval (and the
+    /// failure backoff) within about one slice, not wait out the whole wait.</summary>
+    private static readonly TimeSpan SwitchCheckSlice = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Waits for <paramref name="total"/>, but returns early — and lets the
+    /// caller's loop-top checks act — as soon as the kill switch engages,
+    /// the scheduler is stopped (generation bump), or the token cancels.
+    /// A plain <c>Task.Delay</c> here would keep sleeping through a kill
+    /// switch until the full interval elapsed.
+    /// </summary>
+    private async Task DelayRespectingSwitchAsync(TimeSpan total, CancellationToken ct, int generation)
+    {
+        var deadline = DateTimeOffset.UtcNow + total;
+        while (true)
+        {
+            if (generation != Volatile.Read(ref _generation) ||
+                _riskContext().KillSwitchEngaged)
+            {
+                return;
+            }
+
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            var slice = remaining > SwitchCheckSlice ? SwitchCheckSlice : remaining;
+            try
+            {
+                await Task.Delay(slice, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
     /// <summary>
     /// Starts the loop. No-op if already running. The loop exits immediately
     /// when <see cref="RiskContext.KillSwitchEngaged"/> becomes true; call
@@ -112,15 +153,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
             var now = DateTimeOffset.UtcNow;
             if (now < _nextAllowedDecision)
             {
-                var remaining = _nextAllowedDecision - now;
-                try
-                {
-                    await Task.Delay(remaining, ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    // cancelled while waiting
-                }
+                await DelayRespectingSwitchAsync(_nextAllowedDecision - now, ct, generation);
                 continue;
             }
 
@@ -153,7 +186,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
 
                 try
                 {
-                    await Task.Delay(_failureBackoff, ct);
+                    await DelayRespectingSwitchAsync(_failureBackoff, ct, generation);
                 }
                 catch (OperationCanceledException)
                 {

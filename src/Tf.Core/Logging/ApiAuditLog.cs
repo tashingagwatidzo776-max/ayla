@@ -80,7 +80,14 @@ public sealed class ApiAuditLog : IDisposable
 
             foreach (var file in files)
             {
-                var lines = File.ReadAllLines(file);
+                // Read under the write lock: the flush timer may append to the
+                // newest file while we read it, and Windows forbids concurrent
+                // openers regardless of share mode (IOException).
+                string[] lines;
+                lock (_writeLock)
+                {
+                    lines = File.ReadAllLines(file);
+                }
                 foreach (var line in lines.Reverse())
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
@@ -105,19 +112,21 @@ public sealed class ApiAuditLog : IDisposable
 
     private void Flush(bool force = false)
     {
-        if (_queue.IsEmpty || (!force && _disposed)) return;
-
-        var batch = new List<AuditEntry>();
-        while (_queue.TryDequeue(out var entry))
-            batch.Add(entry);
-
-        if (batch.Count == 0) return;
-
-        var fileName = $"audit_{DateTime.UtcNow:yyyyMMdd}.jsonl";
+        if (_queue.IsEmpty || (!force && _disposed)) return;        var fileName = $"audit_{DateTime.UtcNow:yyyyMMdd}.jsonl";
         var filePath = Path.Combine(_logDir, fileName);
 
+        // Dequeue and write under one lock so a timer flush cannot race the
+        // final flush from Dispose onto the same file.
         lock (_writeLock)
         {
+            if (_queue.IsEmpty) return;
+
+            var batch = new List<AuditEntry>();
+            while (_queue.TryDequeue(out var entry))
+                batch.Add(entry);
+
+            if (batch.Count == 0) return;
+
             try
             {
                 using var writer = new StreamWriter(filePath, append: true);

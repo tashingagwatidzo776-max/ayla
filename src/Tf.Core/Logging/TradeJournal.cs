@@ -143,7 +143,14 @@ public sealed class TradeJournal : IDisposable
 
         foreach (var file in files)
         {
-            var lines = File.ReadAllLines(file);
+            // Read under the write lock: the flush timer may append to the
+            // newest file while we read it, and Windows forbids concurrent
+            // openers regardless of share mode (IOException).
+            string[] lines;
+            lock (_writeLock)
+            {
+                lines = File.ReadAllLines(file);
+            }
             foreach (var line in lines.Reverse())
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
@@ -220,17 +227,22 @@ public sealed class TradeJournal : IDisposable
     {
         if (_pending.IsEmpty) return;
 
-        var batch = new List<JournalEntry>();
-        while (_pending.TryDequeue(out var entry))
-            batch.Add(entry);
-
-        if (batch.Count == 0) return;
-
         var fileName = $"journal_{DateTime.UtcNow:yyyyMMdd}.jsonl";
         var filePath = Path.Combine(_journalDir, fileName);
 
+        // Dequeue and write under one lock: a timer flush overlapping the
+        // final flush from Dispose must not race two appenders onto the same
+        // file (IOException: file used by another process).
         lock (_writeLock)
         {
+            if (_pending.IsEmpty) return;
+
+            var batch = new List<JournalEntry>();
+            while (_pending.TryDequeue(out var entry))
+                batch.Add(entry);
+
+            if (batch.Count == 0) return;
+
             try
             {
                 using var writer = new StreamWriter(filePath, append: true);

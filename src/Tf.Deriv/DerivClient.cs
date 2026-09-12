@@ -48,6 +48,13 @@ public sealed class DerivClient : IAsyncDisposable
 
     public string Endpoint { get; set; } = DefaultEndpoint;
 
+    /// <summary>
+    /// How often <see cref="WaitForSettlementAsync"/> re-queries an open
+    /// contract. Production keeps the 2 s default; fake-server tests shorten
+    /// it so each settled trade does not pay a flat poll sleep.
+    /// </summary>
+    public TimeSpan SettlementPollInterval { get; set; } = TimeSpan.FromSeconds(2);
+
     /// <summary>Application id used in the handshake (public market data needs no token).</summary>
     public string AppId { get; set; } = AppSettings.DefaultAppId;
 
@@ -327,7 +334,7 @@ public sealed class DerivClient : IAsyncDisposable
                 throw new TimeoutException($"Contract {contractId} did not settle within the timeout.");
             }
 
-            await Task.Delay(2000, ct).ConfigureAwait(false);
+            await Task.Delay(SettlementPollInterval, ct).ConfigureAwait(false);
         }
     }
 

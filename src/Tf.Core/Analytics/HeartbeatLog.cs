@@ -13,6 +13,7 @@ public sealed class HeartbeatLog
     private readonly string _logDir;
     private readonly ConcurrentQueue<HeartbeatEntry> _entries = new();
     private readonly Timer _flushTimer;
+    private readonly object _writeLock = new();
 
     public HeartbeatLog(string dataDirectory)
     {
@@ -49,7 +50,14 @@ public sealed class HeartbeatLog
 
             foreach (var file in files)
             {
-                var lines = File.ReadAllLines(file);
+                // Read under the write lock: the flush timer may append to the
+                // newest file while we read it, and Windows forbids concurrent
+                // openers regardless of share mode (IOException).
+                string[] lines;
+                lock (_writeLock)
+                {
+                    lines = File.ReadAllLines(file);
+                }
                 foreach (var line in lines.Reverse())
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
@@ -101,24 +109,31 @@ public sealed class HeartbeatLog
     {
         if (_entries.IsEmpty) return;
 
-        var batch = new List<HeartbeatEntry>();
-        while (_entries.TryDequeue(out var entry))
-            batch.Add(entry);
-
-        if (batch.Count == 0) return;
-
         var fileName = $"heartbeat_{DateTime.UtcNow:yyyyMMdd}.jsonl";
         var filePath = Path.Combine(_logDir, fileName);
 
-        try
+        // Dequeue and write under one lock so a timer flush cannot race the
+        // final flush from Dispose onto the same file.
+        lock (_writeLock)
         {
-            using var writer = new StreamWriter(filePath, append: true);
-            foreach (var entry in batch)
+            if (_entries.IsEmpty) return;
+
+            var batch = new List<HeartbeatEntry>();
+            while (_entries.TryDequeue(out var entry))
+                batch.Add(entry);
+
+            if (batch.Count == 0) return;
+
+            try
             {
-                writer.WriteLine(JsonSerializer.Serialize(entry));
+                using var writer = new StreamWriter(filePath, append: true);
+                foreach (var entry in batch)
+                {
+                    writer.WriteLine(JsonSerializer.Serialize(entry));
+                }
             }
+            catch { /* best effort */ }
         }
-        catch { /* best effort */ }
     }
 
     public void Dispose()

@@ -25,7 +25,14 @@ jobs:
       run: dotnet build --no-restore --configuration Release
 
     - name: Test (Unit)
-      run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit"
+      run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit" --collect:"XPlat Code Coverage" --results-directory ./coverage
+
+    - name: Upload coverage artifact (Unit)
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-unit
+        path: ./coverage/**/coverage.cobertura.xml
+        if-no-files-found: warn
 
   integration:
     runs-on: windows-latest
@@ -49,8 +56,60 @@ jobs:
     # need no network and always run. Live-Deriv tests stay opt-in: they detect
     # TF_DERIV_TOKEN / TF_OLLAMA_MODEL and pass through when unset.
     - name: Test (Integration)
-      run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration"
+      run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration" --collect:"XPlat Code Coverage" --results-directory ./coverage
       env:
         TF_DERIV_TOKEN: ${{ secrets.TF_DERIV_TOKEN }}
         TF_DERIV_APP_ID: ${{ secrets.TF_DERIV_APP_ID }}
         TF_DERIV_SYMBOL: ${{ secrets.TF_DERIV_SYMBOL }}
+
+    - name: Upload coverage artifact (Integration)
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-integration
+        path: ./coverage/**/coverage.cobertura.xml
+        if-no-files-found: warn
+
+  # Merges both jobs' cobertura files into one HTML report and gates the
+  # build on a minimum line-coverage floor (measured at 53.2% when the
+  # gate was introduced; 52% stays below the baseline with headroom for
+  # run-to-run variance while still catching real regressions).
+  coverage-report:
+    runs-on: windows-latest
+    needs: [unit, integration]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Download coverage artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: coverage-*
+        path: ./coverage
+        merge-multiple: true
+
+    - name: Restore dotnet tools
+      run: dotnet tool restore
+
+    - name: Generate merged HTML coverage report
+      run: dotnet tool run reportgenerator -- -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:"./coverage/report" -reporttypes:"HtmlInline_AzurePipelines;TextSummary"
+
+    - name: Enforce minimum line coverage (52%)
+      shell: bash
+      run: |
+        pct=$(grep -E '^  Line coverage:' ./coverage/report/Summary.txt | awk '{print $3}' | tr -d '%')
+        echo "Combined line coverage: ${pct}% (minimum 52%)"
+        awk -v p="$pct" 'BEGIN { exit (p+0 < 52) }' || {
+          echo "::error::Line coverage ${pct}% is below the 52% gate"
+          exit 1
+        }
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: ./coverage/report/

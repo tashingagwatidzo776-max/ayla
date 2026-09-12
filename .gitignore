@@ -20,3 +20,6 @@ Desktop.ini
 # Preview artifacts
 *.html
 *.png
+# Test runners and coverage collection
+TestResults/
+coverage/
