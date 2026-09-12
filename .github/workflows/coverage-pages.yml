@@ -75,7 +75,10 @@ jobs:
         path: ./coverage
         merge-multiple: true
 
+    # bash: pwsh mangles -name:"value" into two arguments, which
+    # ReportGenerator rejects with "No report files specified".
     - name: Generate merged HTML coverage report
+      shell: bash
       run: dotnet tool run reportgenerator -- -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:"./site" -reporttypes:"HtmlInline_AzurePipelines;TextSummary"
 
     - name: Setup Pages

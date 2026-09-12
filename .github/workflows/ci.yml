@@ -97,7 +97,10 @@ jobs:
     - name: Restore dotnet tools
       run: dotnet tool restore
 
+    # bash: pwsh mangles -name:"value" into two arguments, which
+    # ReportGenerator rejects with "No report files specified".
     - name: Generate merged HTML coverage report
+      shell: bash
       run: dotnet tool run reportgenerator -- -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:"./coverage/report" -reporttypes:"HtmlInline_AzurePipelines;TextSummary"
 
     - name: Enforce minimum line coverage (60%)
