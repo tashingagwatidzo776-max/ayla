@@ -13,8 +13,20 @@ on:
     - cron: '17 3 * * *'
   # Schedules cannot be fired manually, so this dispatch hook exists to
   # exercise the same pipeline on demand (e.g. right after a runner-image
-  # update lands).
+  # update lands). inputs.drift_drill additionally rehearses the drift-alert
+  # path (open/update/close the ci-drift-drill issue) without waiting for
+  # real drift.
   workflow_dispatch:
+    inputs:
+      drift_drill:
+        description: 'Drift drill: simulate a failing scheduled run to rehearse the alert'
+        type: boolean
+        default: false
+      drift_drill_mode:
+        description: 'Drill mode (auto: resolve when a drill issue is open, else open one)'
+        type: choice
+        default: auto
+        options: [auto, fail, resolve]
 
 permissions:
   contents: read
@@ -269,63 +281,76 @@ jobs:
     needs: [unit, integration, coverage-report]
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v4
     - name: Open or update the drift issue
       shell: bash
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: fail
+        DRILL_LABEL: ci-drift
+        ISSUE_TITLE: 'Nightly CI drift alert: scheduled run is failing'
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        TITLE: 'Nightly CI drift alert: scheduled run is failing'
-        LABEL: ci-drift
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
         NEEDS_JSON: ${{ toJSON(needs) }}
       run: |
-        failing=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result == "failure") | .key' | paste -sd ', ' -)
-        marker='<!-- nightly-drift-alert -->'
-        body=$(mktemp)
-        {
-          echo "$marker"
-          echo "# Nightly CI drift alert"
-          echo ""
-          echo "The scheduled CI run completed with failures — this usually means the environment drifted, not that someone broke main."
-          echo ""
-          echo "- Run: [${{ github.run_id }}]($RUN_URL) (scheduled, run #${{ github.run_number }})"
-          echo "- Commit: ${{ github.sha }}"
-          echo "- Failing jobs: ${failing:-unknown}"
-          echo ""
-          echo "Recent scheduled runs: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/ci.yml?query=event%3Aschedule"
-          echo ""
-          echo "What changed upstream: runner-image releases (actions/runner-images), the .NET 8 SDK patch level on windows-latest, or the Deriv WebSocket API / LLM provider endpoints. Once fixed, the next green scheduled run closes this issue automatically."
-        } > "$body"
-        cat "$body"
-
-        gh label create "$LABEL" --repo "${{ github.repository }}" \
-          --description 'Scheduled CI run failing — possible environment drift' \
-          --color D93F0B --force 2>/dev/null || true
-
-        existing=$(gh issue list --repo "${{ github.repository }}" --state open --label "$LABEL" --json number --jq '.[0].number')
-        if [ -n "$existing" ]; then
-          gh issue comment "$existing" --repo "${{ github.repository }}" --body-file "$body"
-          echo "Updated drift issue #$existing"
-        else
-          gh issue create --repo "${{ github.repository }}" --title "$TITLE" \
-            --body-file "$body" --label "$LABEL" --assignee "${{ github.repository_owner }}"
-        fi
+        export FAILING_JOBS=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result == "failure") | .key' | paste -sd ', ' -)
+        bash scripts/drift-alert.sh
 
   drift-resolved:
     if: ${{ !cancelled() && success() && github.event_name == 'schedule' }}
     needs: [unit, integration, coverage-report]
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v4
     - name: Close the drift issue
       shell: bash
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: resolve
+        DRILL_LABEL: ci-drift
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+      run: bash scripts/drift-alert.sh
+
+  # On-demand rehearsal of the drift-alert path (Actions → CI → Run workflow
+  # → "Drift drill"): unit/integration/coverage-report run normally and then
+  # the drill simulates the alert side of a failing (or, via a second drill
+  # on an open issue, a green) scheduled run using the ci-drift-drill label,
+  # leaving the real ci-drift issue untouched. Skipped for every other event.
+  drift-drill:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.drift_drill }}
+    needs: [unit, integration, coverage-report]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Decide drill mode
+      id: probe
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        MODE_INPUT: ${{ inputs.drift_drill_mode }}
       run: |
-        existing=$(gh issue list --repo "${{ github.repository }}" --state open --label ci-drift --json number --jq '.[0].number')
-        if [ -n "$existing" ]; then
-          gh issue close "$existing" --repo "${{ github.repository }}" \
-            --comment "Scheduled CI run [${{ github.run_id }}]($RUN_URL) is green again — closing automatically."
-          echo "Closed drift issue #$existing"
-        else
-          echo "No open drift issue; nothing to close"
+        # 'auto' resolves when a drill issue is already open and opens/updates
+        # one otherwise; fail/resolve force a specific leg of the cycle.
+        if [ "$MODE_INPUT" != "auto" ]; then
+          echo "mode=$MODE_INPUT" >> "$GITHUB_OUTPUT"
+          echo "Drill mode (forced): $MODE_INPUT"
+          exit 0
         fi
+        open=$(gh issue list --repo "${{ github.repository }}" --state open --label ci-drift-drill --json number --jq '.[0].number')
+        echo "mode=$([ -n "$open" ] && echo resolve || echo fail)" >> "$GITHUB_OUTPUT"
+        echo "Drill mode: $([ -n "$open" ] && echo resolve || echo fail)"
+    - name: Rehearse the drift alert
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: ${{ steps.probe.outputs.mode }}
+        DRILL_LABEL: ci-drift-drill
+        ISSUE_TITLE: '[Drill] Nightly CI drift alert rehearsal'
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+        FAILING_JOBS: 'unit, integration (simulated by the drift drill)'
+      run: bash scripts/drift-alert.sh

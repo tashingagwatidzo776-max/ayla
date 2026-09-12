@@ -1,0 +1,9 @@
+epoch_seconds,label,detail
+1789228112,CI jobs split,kill-switch and loss-lifecycle E2E tests; unit/integration split (9a07926)
+1789228113,First coverage gate,coverage gate introduced (03349b1)
+1789228113,Gate to 55%,coverage 53% -> 57% (bc31730)
+1789228114,Gate to 60%,headless extraction from WPF-bound code (abc7276)
+1789228114,Pages workflow,architecture boundary test + Coverage Pages (22e5a69)
+1789228501,Pages paused,private repo: free plan has no Pages (2b40223)
+1789231871,Pages re-enabled,repo public; coverage comments + nightly CI (fbf1995)
+1789234995,Trend page,coverage trend chart + drift alerts (2bf0e30)
