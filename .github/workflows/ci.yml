@@ -315,13 +315,14 @@ jobs:
       run: bash scripts/drift-alert.sh
 
   # On-demand rehearsal of the drift-alert path (Actions → CI → Run workflow
-  # → "Drift drill"): unit/integration/coverage-report run normally and then
-  # the drill simulates the alert side of a failing (or, via a second drill
-  # on an open issue, a green) scheduled run using the ci-drift-drill label,
-  # leaving the real ci-drift issue untouched. Skipped for every other event.
+  # → "Drift drill"): simulates the alert side of a failing (or, via a second
+  # drill on an open issue, a green) scheduled run using the ci-drift-drill
+  # label, leaving the real ci-drift issue untouched. Runs standalone (no
+  # needs) so a rehearsal takes minutes instead of a full CI cycle — the CI
+  # chain itself is verified by every push and PR. Skipped for every other
+  # event.
   drift-drill:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.drift_drill }}
-    needs: [unit, integration, coverage-report]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
