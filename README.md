@@ -5,7 +5,8 @@ A WPF desktop application for automated binary-options trading on the [Deriv](ht
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![.NET](https://img.shields.io/badge/.NET-8.0-windows-purple)
 [![CI](https://github.com/tashingagwatidzo776-max/ayla/actions/workflows/ci.yml/badge.svg)](https://github.com/tashingagwatidzo776-max/ayla/actions/workflows/ci.yml)
-[![Coverage Pages](https://img.shields.io/badge/coverage-report-blue?logo=readthedocs)](https://tashingagwatidzo776-max.github.io/ayla/)
+[![Coverage report](https://img.shields.io/badge/coverage-report-blue?logo=readthedocs)](https://tashingagwatidzo776-max.github.io/ayla/)
+[![Coverage trend](https://img.shields.io/badge/coverage-trend-0969DA?logo=chartdotjs)](https://tashingagwatidzo776-max.github.io/ayla/trend.html)
 
 ## Features
 
