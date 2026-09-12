@@ -453,6 +453,12 @@ public sealed class MultiAccountHub
     /// crossing itself is covered by the integration tests).</summary>
     internal void TestRaiseGovernorWarning(decimal used) => PortfolioGovernorWarning?.Invoke(used);
 
+    /// <summary>Test seam: raises <see cref="RestartStateChanged"/> so the
+    /// restart banners on the Growth tab can be exercised headlessly (the
+    /// real ladder needs broker failures and is covered by the E2E tests).</summary>
+    internal void TestRaiseRestartStateChanged(Guid accountId, int attempt, bool gaveUp) =>
+        RestartStateChanged?.Invoke(accountId, attempt, gaveUp);
+
     /// <summary>Cancels a scheduled automatic restart, if one is pending.</summary>
     private void CancelPendingRestart(Guid accountId)
     {

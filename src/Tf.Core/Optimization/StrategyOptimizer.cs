@@ -214,7 +214,7 @@ public sealed class StrategyOptimizer
                     bestParams[prop.Name] = prop.Value.GetDouble();
             }
 
-            var bestResult = new BacktestResult { StrategyName = strategyName };
+            var bestResult = new BacktestResult { StrategyName = strategyName, StartBankroll = 5m, EndBankroll = 5m };
             if (root.TryGetProperty("BestResult", out var br))
             {
                 bestResult.StartBankroll = br.TryGetProperty("StartBankroll", out var sb) ? sb.GetDecimal() : 5m;
@@ -253,6 +253,7 @@ public sealed class StrategyOptimizer
         {
             StrategyName = strategyName,
             BestParameters = bestParams,
+            TotalIterations = allResults.Count,
             BestResult = new
             {
                 bestResult.StartBankroll,

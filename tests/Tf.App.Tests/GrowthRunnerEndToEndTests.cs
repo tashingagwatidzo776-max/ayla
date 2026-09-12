@@ -1279,6 +1279,11 @@ public class GrowthRunnerEndToEndTests
                 else
                 {
                     // The fifth win crosses $10: the session stops itself.
+                    // Wait for the settlement to land on the engine (it is
+                    // applied just after the store write the wait above
+                    // observed) before asserting the trip.
+                    await WaitForAsync(() => runner.Engine!.Bankroll >= runner.Engine.Target,
+                        TimeSpan.FromSeconds(5), "final bankroll crossing the target");
                     Assert.True(runner.Engine!.TargetHit, "$11.43 must reach the $10.00 target");
                     Assert.False(runner.Engine.FloorHit);
                     Assert.False(runner.Engine.CanTrade);

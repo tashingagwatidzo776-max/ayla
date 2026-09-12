@@ -208,13 +208,6 @@ public sealed partial class GrowthViewModel : ObservableObject
     private void StartAll()
     {
         var autonomy = AutonomyEnabled;
-        if (!autonomy)
-        {
-            StatusMessage =
-                "Autonomy is OFF (Settings → Autonomy). Growth engines will run decisions only — " +
-                "no trades are placed until you enable it.";
-        }
-
         var plan = BuildPlan();
         var started = 0;
         foreach (var connection in _hub.Accounts)
@@ -236,9 +229,15 @@ public sealed partial class GrowthViewModel : ObservableObject
             }
         }
 
-        StatusMessage = started == 0
+        // The autonomy notice must survive the result line — it used to be a
+        // dead store overwritten by the status below before ever being seen.
+        StatusMessage = (started == 0
             ? "No connected demo accounts to run — connect accounts on this tab first."
-            : $"Growth engine started on {started} account(s). Watch the activity log below.";
+            : $"Growth engine started on {started} account(s). Watch the activity log below.")
+            + (autonomy
+                ? ""
+                : " Autonomy is OFF (Settings → Autonomy): engines run decisions only — " +
+                  "no trades are placed until you enable it.");
     }
 
     [RelayCommand]
