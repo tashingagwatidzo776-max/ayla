@@ -20,6 +20,7 @@ permissions:
   contents: read
   actions: read # download the baseline coverage artifact from main's last run
   pull-requests: write # post/update the coverage-diff PR comment
+  issues: write # drift-alert opens/updates/closes the nightly drift issue
 
 jobs:
   unit:
