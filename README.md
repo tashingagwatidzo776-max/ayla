@@ -189,6 +189,8 @@ tf/
 4. Run `dotnet test` to verify
 5. Submit a pull request
 
+CI runs on every PR and posts a coverage-diff comment (this PR's merged line coverage vs the last successful run on `main`, against the 60% gate); a nightly scheduled run at 03:17 UTC catches drift such as runner/SDK updates and upstream API changes.
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
