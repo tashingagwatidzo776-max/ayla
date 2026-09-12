@@ -118,6 +118,42 @@ jobs:
       shell: bash
       run: dotnet tool run reportgenerator -- -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:"./coverage/report" -reporttypes:"HtmlInline_AzurePipelines;TextSummary"
 
+    # Rebuild the coverage history for the Pages trend chart: pull the
+    # Summary.txt out of each recent successful main run's coverage-report
+    # artifact, add this run's own numbers, and emit a tiny CSV that the
+    # Coverage Pages workflow turns into a chart. Deliberately placed before
+    # the 60% gate step so the history is still uploaded when the gate fails.
+    - name: Rebuild coverage history
+      if: github.ref == 'refs/heads/main'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        mkdir -p ./trend
+        printf 'epoch_seconds,run_id,line_coverage\n' > ./trend/coverage-trend.csv
+        this_pct=$(grep -E '^  Line coverage:' ./coverage/report/Summary.txt | awk '{print $3}' | tr -d '%')
+        printf '%s,%s,%s\n' "$(date +%s)" "${{ github.run_id }}" "$this_pct" >> ./trend/coverage-trend.csv
+
+        # Older runs, newest first; keep the 30 most recent data points.
+        run_ids=$(gh run list --repo "${{ github.repository }}" \
+          --workflow CI --branch main --event push --status success --limit 31 \
+          --json databaseId --jq '.[].databaseId')
+        for id in $run_ids; do
+          [ "$id" = "${{ github.run_id }}" ] && continue
+          rm -rf ./history && mkdir -p ./history
+          if gh run download "$id" --repo "${{ github.repository }}" --name coverage-report -D ./history 2>/dev/null \
+             && [ -f ./history/Summary.txt ]; then
+            pct=$(grep -E '^  Line coverage:' ./history/Summary.txt | awk '{print $3}' | tr -d '%')
+            [ -n "$pct" ] || continue
+            created=$(gh run view "$id" --repo "${{ github.repository }}" --json createdAt --jq .createdAt)
+            ts=$(date -d "$created" +%s)
+            printf '%s,%s,%s\n' "$ts" "$id" "$pct" >> ./trend/coverage-trend.csv
+            echo "history point: run $id -> ${pct}%"
+          fi
+        done
+        sort -t, -k1 -n -o ./trend/coverage-trend.csv ./trend/coverage-trend.csv
+        cat ./trend/coverage-trend.csv
+
     - name: Enforce minimum line coverage (60%)
       shell: bash
       run: |
@@ -191,7 +227,8 @@ jobs:
             echo "| main | *no baseline available yet* |"
           fi
           echo ""
-          echo 'Merged line coverage of the `unit` + `integration` runs. Full HTML report: the `coverage-report` [artifact]('"$run_url"') of this run.'
+          site="https://${{ github.repository_owner }}.github.io/${GITHUB_REPOSITORY##*/}/trend.html"
+          echo 'Merged line coverage of the `unit` + `integration` runs. Full HTML report: the `coverage-report` [artifact]('"$run_url"') of this run. Trend over time: the [coverage history page]('"$site"').'
           echo "<!-- coverage-diff -->"
         } > comment.md
         cat comment.md
@@ -212,3 +249,82 @@ jobs:
       with:
         name: coverage-report
         path: ./coverage/report/
+
+    - name: Upload coverage trend history
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-trend
+        path: ./trend/coverage-trend.csv
+        if-no-files-found: warn
+
+  # Nightly drift sentinel: a scheduled run failing usually means the *world*
+  # changed (runner image, SDK, upstream API) rather than a PR, so a quiet
+  # red X on Actions would go unnoticed. Post an open issue with the run link
+  # and failing jobs; update it if a later scheduled run fails too; close it
+  # automatically once a scheduled run goes green again (job is skipped
+  # otherwise, so push/PR/dispatch runs never touch the issue).
+  drift-alert:
+    if: ${{ !cancelled() && failure() && github.event_name == 'schedule' }}
+    needs: [unit, integration, coverage-report]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Open or update the drift issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        TITLE: 'Nightly CI drift alert: scheduled run is failing'
+        LABEL: ci-drift
+        NEEDS_JSON: ${{ toJSON(needs) }}
+      run: |
+        failing=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result == "failure") | .key' | paste -sd ', ' -)
+        marker='<!-- nightly-drift-alert -->'
+        body=$(mktemp)
+        {
+          echo "$marker"
+          echo "# Nightly CI drift alert"
+          echo ""
+          echo "The scheduled CI run completed with failures — this usually means the environment drifted, not that someone broke main."
+          echo ""
+          echo "- Run: [${{ github.run_id }}]($RUN_URL) (scheduled, run #${{ github.run_number }})"
+          echo "- Commit: ${{ github.sha }}"
+          echo "- Failing jobs: ${failing:-unknown}"
+          echo ""
+          echo "Recent scheduled runs: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/ci.yml?query=event%3Aschedule"
+          echo ""
+          echo "What changed upstream: runner-image releases (actions/runner-images), the .NET 8 SDK patch level on windows-latest, or the Deriv WebSocket API / LLM provider endpoints. Once fixed, the next green scheduled run closes this issue automatically."
+        } > "$body"
+        cat "$body"
+
+        gh label create "$LABEL" --repo "${{ github.repository }}" \
+          --description 'Scheduled CI run failing — possible environment drift' \
+          --color D93F0B --force 2>/dev/null || true
+
+        existing=$(gh issue list --repo "${{ github.repository }}" --state open --label "$LABEL" --json number --jq '.[0].number')
+        if [ -n "$existing" ]; then
+          gh issue comment "$existing" --repo "${{ github.repository }}" --body-file "$body"
+          echo "Updated drift issue #$existing"
+        else
+          gh issue create --repo "${{ github.repository }}" --title "$TITLE" \
+            --body-file "$body" --label "$LABEL" --assignee "${{ github.repository_owner }}"
+        fi
+
+  drift-resolved:
+    if: ${{ !cancelled() && success() && github.event_name == 'schedule' }}
+    needs: [unit, integration, coverage-report]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Close the drift issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        existing=$(gh issue list --repo "${{ github.repository }}" --state open --label ci-drift --json number --jq '.[0].number')
+        if [ -n "$existing" ]; then
+          gh issue close "$existing" --repo "${{ github.repository }}" \
+            --comment "Scheduled CI run [${{ github.run_id }}]($RUN_URL) is green again — closing automatically."
+          echo "Closed drift issue #$existing"
+        else
+          echo "No open drift issue; nothing to close"
+        fi
