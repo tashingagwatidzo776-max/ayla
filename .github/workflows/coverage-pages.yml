@@ -81,6 +81,37 @@ jobs:
       shell: bash
       run: dotnet tool run reportgenerator -- -reports:"./coverage/**/coverage.cobertura.xml" -targetdir:"./site" -reporttypes:"HtmlInline_AzurePipelines;TextSummary"
 
+    - name: Download coverage trend history
+      continue-on-error: true # no coverage-trend artifact yet -> single-point fallback below
+      uses: actions/download-artifact@v4
+      with:
+        run-id: ${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        name: coverage-trend
+        path: ./trend
+
+    # CI has been uploading the history CSV since the trend feature landed;
+    # the fallback synthesizes a single point from this run's own summary so
+    # the page works even before the next CI run.
+    - name: Collect trend data
+      shell: bash
+      run: |
+        mkdir -p ./site
+        if [ -f ./trend/coverage-trend.csv ]; then
+          cp ./trend/coverage-trend.csv ./site/coverage-trend.csv
+        else
+          echo 'No coverage-trend artifact; synthesizing a single point from this run'
+          pct=$(grep -E '^  Line coverage:' ./site/Summary.txt | awk '{print $3}' | tr -d '%')
+          printf 'epoch_seconds,run_id,line_coverage\n' > ./site/coverage-trend.csv
+          [ -n "$pct" ] && printf '%s,%s,%s\n' "$(date +%s)" "${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}" "$pct" >> ./site/coverage-trend.csv
+        fi
+        cat ./site/coverage-trend.csv
+
+    - name: Generate the coverage trend page
+      env:
+        GATE: '60'
+      run: python scripts/generate_trend.py
+
     - name: Setup Pages
       uses: actions/configure-pages@v5
 
