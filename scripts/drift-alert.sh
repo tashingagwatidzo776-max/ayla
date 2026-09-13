@@ -2,8 +2,11 @@
 # Shared logic for the nightly drift alert and the on-demand drift drill.
 #
 # Modes:
-#   fail     open (or update) the ci-drift issue for a failing scheduled run
-#   resolve  close the open ci-drift issue for a green scheduled run
+#   fail     open (or update) the $DRILL_LABEL issue for a failing run
+#   resolve  post a keyword-safe 'run went green' note on the open
+#            $DRILL_LABEL issue and leave it open; set DRIFT_RESOLVE_CLOSE=1
+#            to also close it after posting (the drift drill sets this so it
+#            can rehearse the close leg)
 #
 # Inputs via environment:
 #   DRIFT_MODE      'fail' | 'resolve'
@@ -24,6 +27,9 @@
 #
 # Flake throttle: when the failing test is already recorded on the open
 # ci-drift issue, further failures add nothing — the update is skipped.
+# Disabled for health checks (DRIFT_NO_FLAKE=1): dispatch runs have no
+# scheduled-run counterpart, so flake detection is unreliable there and a
+# known-flake label must never be able to silence a health check.
 #
 # Requires GH_TOKEN and gh. Idempotent: repeated 'fail' runs append to the
 # same issue; 'resolve' is a no-op when there is nothing open.
@@ -49,7 +55,7 @@ label_color() { # label_name
 
 ensure_label() { # label_name [description]
   gh label create "$1" --repo "$GITHUB_REPOSITORY" \
-    --description "${2:-Scheduled CI run failing - possible environment drift}" \
+    --description "${2:-CI run failing - drift or health-check issue}" \
     --color "$(label_color "$1")" --force >/dev/null 2>&1 || true
 }
 
@@ -75,9 +81,9 @@ classify_and_summarize() {
   # anywhere in the line rather than anchoring to line start.
   TEST_ID=$(grep -aoE 'Failed [A-Za-z0-9_.]+\.[A-Za-z0-9_]+' "$log" | head -1 | cut -d' ' -f2 || true)
   if [ -n "$TEST_ID" ]; then
-    CLASS="test"
-    # Flake: the exact commit already had a green CI run elsewhere.
-    if [ "$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$COMMIT_SHA" \
+    if [ "${DRIFT_NO_FLAKE:-0}" = "1" ]; then
+      : # health checks: never mislabel as flake (and never throttle)
+    elif [ "$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$COMMIT_SHA" \
             --json conclusion --jq '[.[] | select(.conclusion == "success")] | length' 2>/dev/null || echo 0)" -gt 0 ]; then
       CLASS="flake"
     fi
@@ -107,11 +113,29 @@ if [ "$DRIFT_MODE" = "resolve" ]; then
   ensure_label "$DRILL_LABEL"
   existing=$(open_issue_for_label "$DRILL_LABEL")
   if [ -n "$existing" ]; then
-    gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
-      --comment "CI run [${RUN_NUMBER}](${RUN_URL}) is green again — closing automatically."
-    echo "Closed drift issue #$existing"
+    # Keyword-safe green note: the durable, visible record that the pipeline
+    # is healthy again. Worded without closing keywords and without '#N'
+    # references, so GitHub's closing-keyword detection has nothing to act
+    # on — visibility must not depend on it (it has falsely closed the alert
+    # issue twice via PR-body text at merge time).
+    note=$(mktemp)
+    {
+      echo "<!-- ${DRILL_LABEL}-green -->"
+      echo "✅ **Run went green.** CI run [${RUN_NUMBER}](${RUN_URL}) on \`${COMMIT_SHA}\` completed successfully — the pipeline is healthy again as of this run."
+      echo ""
+      echo "This issue is being left open on purpose: the note above is the record that the failure stopped. It is taken down by a human after review (or by DRIFT_RESOLVE_CLOSE=1 on the resolve job), never by closing-keyword text."
+    } > "$note"
+    gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$note"
+    rm -f "$note"
+    if [ "${DRIFT_RESOLVE_CLOSE:-0}" = "1" ]; then
+      gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+        --comment "Resolved after review — the green run recorded above shows the pipeline healthy again."
+      echo "Closed drift issue #$existing (DRIFT_RESOLVE_CLOSE=1)"
+    else
+      echo "Posted green note on drift issue #$existing; left open"
+    fi
   else
-    echo "No open $DRILL_LABEL issue; nothing to close"
+    echo "No open $DRILL_LABEL issue; nothing to do"
   fi
   exit 0
 fi
@@ -177,7 +201,7 @@ trap 'rm -f "$body"' EXIT
   echo ""
   echo "Recent scheduled runs: ${server}/${GITHUB_REPOSITORY}/actions/workflows/ci.yml?query=event%3Aschedule"
   echo ""
-  echo "What changed upstream: runner-image releases (actions/runner-images), the .NET 8 SDK patch level on windows-latest, or the Deriv WebSocket API / LLM provider endpoints. Once fixed, the next green scheduled run closes this issue automatically."
+  echo "What changed upstream: runner-image releases (actions/runner-images), the .NET 8 SDK patch level on windows-latest, or the Deriv WebSocket API / LLM provider endpoints. Once fixed, the next green scheduled run (or weekly health check) posts a 'went green' note on this issue; the issue stays open for review — that record is deliberately never a closing keyword."
   if [ -n "$EXCERPT" ]; then
     echo ""
     echo "### Error summary (from the failing job's log)"
