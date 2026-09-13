@@ -8,3 +8,6 @@ epoch_seconds,label,detail
 1789231871,Pages re-enabled,repo public; coverage comments + nightly CI (fbf1995)
 1789234995,Trend page,coverage trend chart + drift alerts (2bf0e30)
 1789258611,Drift alert fired,nightly schedule run #25 failed -> auto-opened issue #9; midnight-window test flake found and fixed
+1789311533,Green-note policy,drift-resolved posts keyword-safe 'went green' notes and never auto-closes; on-demand dispatch health check added (a0d1184)
+1789319148,Schedule watchdog,daily no-show check + weekly dispatched health check; drift coverage no longer depends on scheduler delivery (f7615b4)
+1789322344,Scheduler outage,five consecutive slots dropped or >1h40m late (2026-09-12 to 13); nightly #25 arrived late and failed, alerting on issue #9; runbook written, health check dispatched by hand
