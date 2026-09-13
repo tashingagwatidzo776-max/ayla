@@ -1,0 +1,78 @@
+name: Schedule watchdog
+
+# GitHub delivers scheduled workflows on a best-effort basis — under load,
+# slots get delayed for hours or dropped silently. This watchdog runs on its
+# own tiny schedule and answers one question: did last night's CI nightly
+# actually arrive? Verdicts:
+#
+#   no-show  no schedule-event CI run within the window (26h = 24h + margin
+#            for documented lateness) — recorded on the drift issue, or a
+#            new issue is opened if none exists
+#   resolve  the latest schedule run succeeded — post the keyword-safe
+#            "run went green" note on an open drift issue (record-only)
+#   skip     the latest run failed (its own drift-alert job owns the issue)
+#            or is still in progress (defer to its verdict)
+#
+# The watchdog's own cron deliberately sits on the top of the hour: a
+# dropped CI slot must not be able to silence the thing that reports it.
+# Dispatch with window_hours=0 to rehearse the no-show leg, or a huge
+# window to rehearse the resolve leg.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      window_hours:
+        description: 'Look-back window in hours for the arrival check (0 rehearses no-show)'
+        type: string
+        default: '26'
+
+permissions:
+  actions: read # read CI run history for the arrival check
+  issues: write # record no-show / post green notes on the drift issue
+
+jobs:
+  no-show-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check whether last night's scheduled CI run arrived
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        NOSHOW_WINDOW_HOURS: ${{ inputs.window_hours || '26' }}
+      run: |
+        repo="${{ github.repository }}"
+        latest=$(gh run list --repo "$repo" --workflow CI --event schedule --limit 10 \
+          --json databaseId,runNumber,headSha,createdAt,conclusion \
+          --jq 'sort_by(.createdAt) | reverse | .[0] // empty')
+        mode=no-show
+        rid=""; rnum=""; rsha=""
+        if [ -n "$latest" ]; then
+          rid=$(jq -r .databaseId <<<"$latest")
+          rnum=$(jq -r .runNumber <<<"$latest")
+          rsha=$(jq -r .headSha <<<"$latest")
+          created=$(jq -r .createdAt <<<"$latest")
+          ts=$(date -d "$created" +%s)
+          now=$(date +%s)
+          echo "latest schedule run: #$rnum ($created, $(( (now - ts) / 3600 ))h old, conclusion: $(jq -r '.conclusion // "in-progress"' <<<"$latest"))"
+          if [ $((now - ts)) -lt $((NOSHOW_WINDOW_HOURS * 3600)) ]; then
+            case "$(jq -r '.conclusion // ""' <<<"$latest")" in
+              success)  mode=resolve ;;
+              *)        mode=skip ;; # failed -> its drift-alert owns the issue; in-progress -> defer
+            esac
+          fi
+        else
+          echo "no schedule-event CI runs exist at all"
+        fi
+        echo "watchdog verdict: $mode"
+        [ "$mode" = "skip" ] && exit 0
+        # Both recorded verdicts flow through the shared alert script:
+        # resolve = keyword-safe green note, no-show = missing-run note
+        # (opens the ci-drift issue if none is open).
+        DRIFT_MODE=$mode \
+        RUN_URL="https://github.com/$repo/actions/runs/$rid" \
+        RUN_NUMBER="$rnum" \
+        COMMIT_SHA="$rsha" \
+        bash scripts/drift-alert.sh
