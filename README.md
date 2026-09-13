@@ -8,6 +8,17 @@ A WPF desktop application for automated binary-options trading on the [Deriv](ht
 [![Coverage report](https://img.shields.io/badge/coverage-report-blue?logo=readthedocs)](https://tashingagwatidzo776-max.github.io/ayla/)
 [![Coverage trend](https://img.shields.io/badge/coverage-trend-0969DA?logo=chartdotjs)](https://tashingagwatidzo776-max.github.io/ayla/trend.html)
 
+## Pipeline health
+
+| What | Where |
+|---|---|
+| Coverage trend & milestones chart | [trend.html on GitHub Pages](https://tashingagwatidzo776-max.github.io/ayla/trend.html) — one point per successful `main` run, annotated with gate raises and notable episodes |
+| Drift alert (nightly failures, missed runs, recovery notes) | [open `ci-drift` issues](https://github.com/tashingagwatidzo776-max/ayla/issues?q=is%3Aissue+is%3Aopen+label%3Aci-drift) — empty means the pipeline is healthy |
+| Scheduler-outage runbook | [`docs/scheduler-outage-runbook.md`](docs/scheduler-outage-runbook.md) — what a no-show verdict means and what to dispatch |
+| Drift-alert policy | [`docs/drift-alert.md`](docs/drift-alert.md) — classification, green notes, throttling |
+
+Health checks (nightly 03:17 UTC, weekly dispatch, or manual via **Actions → CI → Run workflow → CI health check**) run the full pipeline and post to the drift issue on both failure *and* recovery, so a glance at the issues list answers "is CI healthy right now?".
+
 ## Features
 
 ### Trading Engines
