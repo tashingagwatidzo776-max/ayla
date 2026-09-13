@@ -44,7 +44,7 @@ if [ "$DRIFT_MODE" != "no-show" ]; then
   : "${RUN_NUMBER:?}"
   : "${COMMIT_SHA:?}"
 fi
-: "${DRILL_LABEL:?}"
+: "${DRILL_LABEL:=ci-drift}" # watchdog no-show calls omit it; every real caller means the ci-drift issue
 : "${ISSUE_TITLE:=}" # only used by fail mode
 : "${FAILING_JOBS:=}"
 : "${GH_RUN_ID:=}"
