@@ -11,10 +11,6 @@ on:
   # top-of-hour schedule crunch.
   schedule:
     - cron: '17 3 * * *'
-    # TEMPORARY observation slot (see PR #24): lets the drift-alert close leg
-    # be proven on a real schedule event this session. Remove after use -
-    # the nightly at 03:17 stays in place the whole time.
-    - cron: '59 18 * * *'
   # Schedules cannot be fired manually, so this dispatch hook exists to
   # exercise the same pipeline on demand (e.g. right after a runner-image
   # update lands). inputs.drift_drill additionally rehearses the drift-alert
@@ -356,6 +352,29 @@ jobs:
       run: |
         export FAILING_JOBS=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result == "failure") | .key' | paste -sd ', ' -)
         bash scripts/drift-alert.sh
+
+  # Green half of the health check: a passing dispatched run records the
+  # same keyword-safe 'run went green' note drift-resolved posts for the
+  # nightly, so a manual/weekly health check provides recovery visibility
+  # even when the scheduler never delivers the nightly slot. No-op when no
+  # drift issue is open (resolve mode handles the empty case itself).
+  ci-health-check-green:
+    if: ${{ !cancelled() && success() && github.event_name == 'workflow_dispatch' && inputs.health_check }}
+    needs: [unit, integration, coverage-report]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Post 'run went green' note on the drift issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: resolve
+        DRILL_LABEL: ci-drift
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+        DRIFT_RESOLVE_CLOSE: '0' # record health, never auto-close: visibility must not depend on closing-keyword detection
+      run: bash scripts/drift-alert.sh
 
   # On-demand rehearsal of the drift-alert path (Actions → CI → Run workflow
   # → "Drift drill"): simulates the alert side of a failing (or, via a second

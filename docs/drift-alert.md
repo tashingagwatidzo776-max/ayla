@@ -36,9 +36,9 @@ The failing job's log is classified when the alert is raised:
 
 ## Recovery: green notes, never auto-close
 
-When the nightly (or a health check) goes green again, the
-`drift-resolved`/watchdog path posts a keyword-safe comment on the open
-issue:
+When the nightly, the watchdog, or a passing health check goes green,
+the `drift-resolved`/watchdog/`ci-health-check-green` path posts a
+keyword-safe comment on the open issue:
 
 > ✅ **Run went green.** CI run *N* completed successfully …
 
@@ -53,7 +53,8 @@ review. It is deliberately *not* closed automatically:
 The close path still exists and is exercised by the drill:
 `DRIFT_RESOLVE_CLOSE=1` posts the note **and** closes the issue. The
 `drift-drill` job sets it (resolve-mode drills rehearse the full
-open → note → close cycle); the real `drift-resolved` job sets it to `0`.
+open → note → close cycle); the real `drift-resolved` and
+`ci-health-check-green` jobs set it to `0`.
 
 ## Scheduler distrust: watchdog and weekly dispatch
 
@@ -76,6 +77,9 @@ loop "scheduled run closes the alert" can never be relied on alone:
   dispatches the CI pipeline on `main` with the **CI health check** input
   and confirms the run registered. This gives drift coverage a second,
   independent delivery path that does not depend on schedule events at all.
+  A passing health check also posts the green note (via
+  `ci-health-check-green`), so recovery visibility has the same
+  scheduler-independent path as failure detection.
 
 ## On-demand rehearsal (drift drill)
 
@@ -88,8 +92,9 @@ one otherwise; `fail`/`resolve` force a leg.
 
 1. Failures open or update one `ci-drift` issue; repeats of a known flake
    are throttled.
-2. Green runs post a keyword-safe note; nobody and nothing closes the issue
-   by keyword.
+2. Green runs post a keyword-safe note — from the nightly, the watchdog,
+   or a passing health check; nobody and nothing closes the issue by
+   keyword.
 3. The issue is closed by a human (or `DRIFT_RESOLVE_CLOSE=1` in the drill).
 4. A missing nightly is itself an alert (no-show), not a silent pass.
 5. Every record — fail, green, no-show — is a comment, so the issue body

@@ -62,6 +62,10 @@ curl -X PUT \
 `contexts` must match the job names in `ci.yml` exactly. If the repo later
 renames a job, update the protection rule in the same change.
 
+Merging your own PR as a solo maintainer (GitHub rejects self-approval with
+422) uses a documented temporary relaxation — see
+`docs/solo-maintainer-merges.md`.
+
 ## Notes
 
 - The `coverage-report` job is the gate: it consumes both test jobs' cobertura
