@@ -73,6 +73,11 @@ loop "scheduled run closes the alert" can never be relied on alone:
     `drift-alert`/`drift-resolved` jobs own the issue.
   Rehearse via dispatch: `window_hours=0` forces the no-show leg; a huge
   window forces the resolve leg.
+- **Staleness flag** (same watchdog run, second verdict): an open drift
+  issue whose newest comment of *any* kind is older than 48h is flagged
+  with a stale-alert comment — every nightly since either went unrecorded
+  (scheduler) or nobody looked. The comment records the gap; the issue
+  itself is untouched and stays open for a human.
 - **Weekly health check** (`ci-health-check-weekly.yml`, Mondays 06:23 UTC)
   dispatches the CI pipeline on `main` with the **CI health check** input
   and confirms the run registered. This gives drift coverage a second,
@@ -97,5 +102,7 @@ one otherwise; `fail`/`resolve` force a leg.
    keyword.
 3. The issue is closed by a human (or `DRIFT_RESOLVE_CLOSE=1` in the drill).
 4. A missing nightly is itself an alert (no-show), not a silent pass.
-5. Every record — fail, green, no-show — is a comment, so the issue body
-   plus history tells the whole story.
+5. Every record — fail, green, no-show, stale — is a comment, so the issue
+   body plus history tells the whole story.
+6. An open alert that goes quiet for 48h gets flagged by the watchdog;
+   silence is itself a finding, never a pass.

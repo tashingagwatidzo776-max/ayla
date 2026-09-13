@@ -112,6 +112,16 @@ jobs:
         GATE: '60'
       run: python scripts/generate_trend.py
 
+    # health.json + health-status.html describe the run being published:
+    # gate passing + zero open ci-drift issues = healthy. The README
+    # dashboard links here as the live status page.
+    - name: Generate the pipeline health page
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        PAGES_RUN_ID: ${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}
+        PAGES_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion || 'success' }}
+      run: python scripts/generate_health.py
+
     - name: Setup Pages
       uses: actions/configure-pages@v5
 

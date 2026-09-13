@@ -11,3 +11,4 @@ epoch_seconds,label,detail
 1789311533,Green-note policy,drift-resolved posts keyword-safe 'went green' notes and never auto-closes; on-demand dispatch health check added (a0d1184)
 1789319148,Schedule watchdog,daily no-show check + weekly dispatched health check; drift coverage no longer depends on scheduler delivery (f7615b4)
 1789322344,Scheduler outage,five consecutive slots dropped or >1h40m late (2026-09-12 to 13); nightly #25 arrived late and failed, alerting on issue #9; runbook written, health check dispatched by hand
+1789333475,Drift episode retired,the ci-drift issue taken down by hand after the first keyword-safe green note (health check run #66); health status page + staleness flagging complete the loop (69c939c)
