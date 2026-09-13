@@ -72,3 +72,23 @@ renames a job, update the protection rule in the same change.
 - On private repos, ensure Actions are enabled under
   **Settings → Actions → General**; the windows-latest runners bill against
   the free per-account minutes quota.
+
+## Gotchas (learned 2026-09-13)
+
+**Merging a PR can close issues you only *mentioned*.** GitHub's closing-keyword
+detection runs against PR titles, bodies, and commit messages at merge time:
+any phrase where `close(s|d)`, `fix(es|ed)`, or `resolve(s|d)` immediately
+precedes an issue reference (including `closes issue #N`) closes that issue the
+moment the PR merges. This bit twice — both times a PR body said a workflow
+would `auto-close` the drift issue, and GitHub closed it at merge instead of
+letting `drift-resolved` do it. When describing future workflow actions, keep
+the keyword away from the reference: write "issue #9's closure will follow via
+the workflow", not "this lets the workflow auto-close #9".
+
+**Scheduled workflow runs are best-effort.** GitHub documents that `schedule`
+events can be delayed or dropped under scheduler load. Observed in practice:
+one slot fired 1h40m late, and two fully armed slots in a single day never
+fired at all. Never build time-adjacent automation on the cron minute, and
+when something must be proven *now*, use a `workflow_dispatch` entry point
+(see the drift drill in `.github/workflows/ci.yml`) instead of waiting for a
+schedule event.
