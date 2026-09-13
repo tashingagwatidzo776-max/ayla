@@ -393,4 +393,8 @@ jobs:
         RUN_NUMBER: ${{ github.run_number }}
         COMMIT_SHA: ${{ github.sha }}
         FAILING_JOBS: 'unit, integration (simulated by the drift drill)'
+        # resolve-mode drills rehearse the complete cycle: post the green note
+        # AND take the drill issue down (the real drift-resolved job leaves the
+        # issue open; the drill must still prove the close path works).
+        DRIFT_RESOLVE_CLOSE: '1'
       run: bash scripts/drift-alert.sh
