@@ -67,7 +67,12 @@ jobs:
           echo "no schedule-event CI runs exist at all"
         fi
         echo "watchdog verdict: $mode"
-        [ "$mode" = "skip" ] && exit 0
+        # Guard must not use `[ x ] && exit 0`: under the runner's default
+        # `bash -e`, a false test would exit 1 and kill the step before the
+        # alert script ever runs.
+        if [ "$mode" = "skip" ]; then
+          exit 0
+        fi
         # Both recorded verdicts flow through the shared alert script:
         # resolve = keyword-safe green note, no-show = missing-run note
         # (opens the ci-drift issue if none is open).
