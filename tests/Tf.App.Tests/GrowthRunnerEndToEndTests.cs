@@ -739,8 +739,14 @@ public class GrowthRunnerEndToEndTests
             var plan = GrowthPlan.Default with { CooldownMinutesAfterLoss = 0 };
 
             // ── Seed one settled loss "today": engine replays bankroll $4, streak 1. ──
+            // AddMinutes(-30) straddles midnight right after 00:00 UTC, and the
+            // daily replay then skips the seed (flaked in the 00:16 UTC scheduled
+            // run) — so clamp the seed into today while keeping it in the past.
+            var seedTime = DateTimeOffset.UtcNow.AddMinutes(-30);
+            if (seedTime.Date != DateTimeOffset.UtcNow.Date)
+                seedTime = DateTimeOffset.UtcNow.AddMinutes(-1);
             store.Add(MakeGrowthTrade(config.Id, "Daily Cap Demo", "GROWTH-SEED-1",
-                1.00m, -1.00m, DateTimeOffset.UtcNow.AddMinutes(-30)));
+                1.00m, -1.00m, seedTime));
 
             await runner.StartAsync(plan);
             Assert.Equal(4.00m, runner.Engine!.Bankroll);
