@@ -402,3 +402,16 @@ jobs:
         # issue open; the drill must still prove the close path works).
         DRIFT_RESOLVE_CLOSE: '1'
       run: bash scripts/drift-alert.sh
+
+  # Static lint for this repo's automation bug classes (the ones that
+  # produced real failed watchdog runs): invalid `gh --json` field names,
+  # undeclared or unvalidated workflow_dispatch inputs, and script callers
+  # missing a script's required env vars. Fast, no .NET toolchain needed.
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Lint workflows and scripts
+      run: |
+        python3 -m pip install --quiet pyyaml
+        python3 scripts/lint_workflows.py
