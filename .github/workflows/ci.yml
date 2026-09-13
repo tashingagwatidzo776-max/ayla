@@ -27,6 +27,10 @@ on:
         type: choice
         default: auto
         options: [auto, fail, resolve]
+      health_check:
+        description: 'CI health check: run the full pipeline on demand; failures alert like a scheduled run'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -273,9 +277,10 @@ jobs:
   # Nightly drift sentinel: a scheduled run failing usually means the *world*
   # changed (runner image, SDK, upstream API) rather than a PR, so a quiet
   # red X on Actions would go unnoticed. Post an open issue with the run link
-  # and failing jobs; update it if a later scheduled run fails too; close it
-  # automatically once a scheduled run goes green again (job is skipped
-  # otherwise, so push/PR/dispatch runs never touch the issue).
+  # and failing jobs; update it if a later scheduled run fails too; when a
+  # scheduled run goes green, record it with a keyword-safe 'went green'
+  # note and leave the issue open for human takedown (the job is skipped on
+  # push/PR runs, so they never touch the issue).
   drift-alert:
     if: ${{ !cancelled() && failure() && github.event_name == 'schedule' }}
     needs: [unit, integration, coverage-report]
@@ -304,7 +309,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Close the drift issue
+    - name: Post 'run went green' note on the drift issue
       shell: bash
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -313,7 +318,40 @@ jobs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         RUN_NUMBER: ${{ github.run_number }}
         COMMIT_SHA: ${{ github.sha }}
+        DRIFT_RESOLVE_CLOSE: '0' # record health, never auto-close: visibility must not depend on closing-keyword detection
       run: bash scripts/drift-alert.sh
+
+  # Scheduler-independent drift coverage: GitHub delivers schedule events on
+  # a best-effort basis (three consecutive armed slots here were dropped or
+  # fired >1h late), so the nightly cron alone cannot be trusted to catch
+  # drift. Dispatching a run with the "CI health check" input runs the same
+  # pipeline on demand; a failure alerts exactly like a scheduled run would
+  # — same issue, same log-excerpt classification. Flake detection is
+  # disabled (DRIFT_NO_FLAKE=1): an earlier green run on the same commit
+  # means nothing about the environment *now*, and mislabeling real drift as
+  # a known flake could throttle the alert into silence.
+  ci-health-check:
+    if: ${{ !cancelled() && failure() && github.event_name == 'workflow_dispatch' && inputs.health_check }}
+    needs: [unit, integration, coverage-report]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Open or update the drift issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: fail
+        DRILL_LABEL: ci-drift
+        ISSUE_TITLE: 'Nightly CI drift alert: scheduled run is failing'
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+        GH_RUN_ID: ${{ github.run_id }}
+        DRIFT_NO_FLAKE: '1'
+        NEEDS_JSON: ${{ toJSON(needs) }}
+      run: |
+        export FAILING_JOBS=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result == "failure") | .key' | paste -sd ', ' -)
+        bash scripts/drift-alert.sh
 
   # On-demand rehearsal of the drift-alert path (Actions → CI → Run workflow
   # → "Drift drill"): simulates the alert side of a failing (or, via a second
