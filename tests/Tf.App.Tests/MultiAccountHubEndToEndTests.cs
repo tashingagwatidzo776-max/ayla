@@ -587,12 +587,18 @@ public class MultiAccountHubEndToEndTests
             await WaitForAsync(() => server.ConnectionCount == 0,
                 TimeSpan.FromSeconds(5), "the socket drop");
 
-            // The hub stops each runner whose connection went down.
+            // The hub stops each runner whose connection went down. The hub
+            // removes the runner from Runners before it journals the stop, so
+            // both the removal and the journal line are awaited — asserting
+            // immediately after removal races the hub's bookkeeping under
+            // runner load.
             await WaitForAsync(
                 () => !hub.Runners.ContainsKey(configA.Id) && !hub.Runners.ContainsKey(configB.Id),
                 TimeSpan.FromSeconds(10), "hub stopping runners after the disconnect");
-            Assert.Contains("Stopped — account disconnected.", runnerA!.LastActivity);
-            Assert.Contains("Stopped — account disconnected.", runnerB!.LastActivity);
+            await WaitForAsync(() => runnerA!.LastActivity.Contains("Stopped — account disconnected."),
+                TimeSpan.FromSeconds(10), "alpha journal notes the disconnect");
+            await WaitForAsync(() => runnerB!.LastActivity.Contains("Stopped — account disconnected."),
+                TimeSpan.FromSeconds(10), "beta journal notes the disconnect");
 
             // The DerivClients reconnect and re-authorize by themselves.
             await WaitForAsync(() => connectionA.IsConnected && connectionB.IsConnected,
