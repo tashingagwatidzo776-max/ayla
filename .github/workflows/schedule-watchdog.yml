@@ -12,6 +12,10 @@ name: Schedule watchdog
 #            "run went green" note on an open drift issue (record-only)
 #   skip     the latest run failed (its own drift-alert job owns the issue)
 #            or is still in progress (defer to its verdict)
+#   stale    an open ci-drift issue has had no workflow comment for 48h
+#            (checked after the arrival verdict) — nothing went green and
+#            nothing failed *today*; the alert just went quiet. A comment
+#            on the issue marks the gap; the issue itself is untouched.
 #
 # The watchdog's own cron deliberately sits on the top of the hour: a
 # dropped CI slot must not be able to silence the thing that reports it.
@@ -94,3 +98,17 @@ jobs:
         RUN_NUMBER="$rnum" \
         COMMIT_SHA="$rsha" \
         bash scripts/drift-alert.sh
+
+    # Second verdict, independent of the first: is the open drift issue
+    # being maintained at all? A failure alert with no workflow comment for
+    # 48h means every nightly since either went unrecorded (scheduler) or
+    # nobody looked — flag the gap, leave the issue open for a human.
+    - name: Flag a stale open drift issue
+      if: ${{ always() }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: stale
+        DRILL_LABEL: ci-drift
+        STALE_HOURS: '48'
+      run: bash scripts/drift-alert.sh

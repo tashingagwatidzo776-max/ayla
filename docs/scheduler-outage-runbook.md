@@ -14,6 +14,7 @@ Reads in two minutes; assumes the setup documented in `docs/drift-alert.md`.
    | `resolve` | Nightly ran and was green; a ✅ "Run went green" note was posted on an open issue | Nothing. If the alert issue's story is complete, retire it (see `docs/drift-alert.md`) |
    | `skip` | Nightly ran but **failed** (or was mid-run); the CI run's own `drift-alert` job owns the issue | Nothing yet — let the CI run's alert land, then triage the failure there |
    | `no-show` | No schedule run within the 26h window; a ⏰ "Scheduled run never arrived" note was posted | The scheduler dropped the slot. Read on |
+   | `stale` | An open drift issue's newest comment is older than 48h — the alert went quiet without resolution | Look at the thread, then triage it or retire it properly. The watchdog has already commented |
 
 2. **Check the run itself**, never just the verdict: the watchdog log line
    `latest schedule run: #N (...h old, conclusion: ...)` tells you exactly

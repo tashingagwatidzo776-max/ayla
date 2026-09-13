@@ -10,9 +10,15 @@
 #   no-show  the scheduled run never arrived (scheduler dropped the slot):
 #            post a keyword-safe note on the open issue, or open one if
 #            none exists. No log/classification — nothing ran to examine.
+#   stale    (watchdog only) the open issue's newest comment of any kind is
+#            older than STALE_HOURS — the alert has gone quiet and nobody
+#            has touched it. Comments on the issue and leaves it exactly
+#            as it is. No-op when nothing is open.
 #
 # Inputs via environment:
-#   DRIFT_MODE      'fail' | 'resolve'
+#   DRIFT_MODE      'fail' | 'resolve' | 'no-show' | 'stale'
+#   STALE_HOURS     (stale mode) quiet period before an open alert counts as
+#                   stale (default 48)
 #   RUN_URL         URL of the CI run that produced the verdict
 #   RUN_NUMBER      CI run number, for the alert body
 #   COMMIT_SHA      commit the run was on
@@ -38,8 +44,8 @@
 # same issue; 'resolve' is a no-op when there is nothing open.
 set -euo pipefail
 
-: "${DRIFT_MODE:?DRIFT_MODE must be 'fail', 'resolve', or 'no-show'}"
-if [ "$DRIFT_MODE" != "no-show" ]; then
+: "${DRIFT_MODE:?DRIFT_MODE must be 'fail', 'resolve', 'no-show', or 'stale'}"
+if [ "$DRIFT_MODE" != "no-show" ] && [ "$DRIFT_MODE" != "stale" ]; then
   : "${RUN_URL:?}"
   : "${RUN_NUMBER:?}"
   : "${COMMIT_SHA:?}"
@@ -142,6 +148,47 @@ if [ "$DRIFT_MODE" = "resolve" ]; then
   else
     echo "No open $DRILL_LABEL issue; nothing to do"
   fi
+  exit 0
+fi
+
+if [ "$DRIFT_MODE" = "stale" ]; then
+  # Staleness flag: an open drift issue with no workflow comment for
+  # STALE_HOURS means every nightly since either went unrecorded (scheduler
+  # dropping slots again) or nobody looked. Comment and leave the issue
+  # exactly as it is — the gap is recorded, never repaired silently.
+  existing=$(open_issue_for_label "$DRILL_LABEL")
+  if [ -z "$existing" ]; then
+    echo "No open $DRILL_LABEL issue; staleness check is a no-op"
+    exit 0
+  fi
+  # The alert counts as stale when the newest comment of ANY kind (workflow
+  # or human) is older than the threshold: an actively tended thread is not
+  # stale, whatever wrote the last word. Only bot comments would mis-flag
+  # an issue a human is already triaging.
+  newest=$(gh api "repos/$GITHUB_REPOSITORY/issues/$existing/comments?per_page=100" \
+    --jq 'sort_by(.created_at) | reverse | .[0].created_at // empty')
+  if [ -n "$newest" ]; then
+    ts=$(date -d "$newest" +%s)
+    hours=$(( ($(date +%s) - ts) / 3600 ))
+    echo "newest workflow comment on #$existing: $newest ($hours h ago)"
+  else
+    hours=999999
+    echo "open drift issue #$existing has no workflow comments at all"
+  fi
+  if [ "$hours" -lt "${STALE_HOURS:-48}" ]; then
+    echo "Issue #$existing is fresh; nothing to do"
+    exit 0
+  fi
+  note=$(mktemp)
+  {
+    echo "<!-- ${DRILL_LABEL}-stale -->"
+    echo "🧭 **Stale alert check.** The newest workflow comment on this issue was ${hours}h ago (threshold: ${STALE_HOURS:-48}h)."
+    echo ""
+    echo "Nothing went green and nothing failed today — the alert has gone quiet. Scheduled runs may be being dropped again (see the scheduler-outage runbook), or the issue needs human triage. It stays open until reviewed."
+  } > "$note"
+  gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$note"
+  rm -f "$note"
+  echo "Posted staleness note on drift issue #$existing; left open"
   exit 0
 fi
 
