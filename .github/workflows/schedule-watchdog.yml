@@ -45,13 +45,13 @@ jobs:
       run: |
         repo="${{ github.repository }}"
         latest=$(gh run list --repo "$repo" --workflow CI --event schedule --limit 10 \
-          --json databaseId,runNumber,headSha,createdAt,conclusion \
+          --json databaseId,number,headSha,createdAt,conclusion \
           --jq 'sort_by(.createdAt) | reverse | .[0] // empty')
         mode=no-show
         rid=""; rnum=""; rsha=""
         if [ -n "$latest" ]; then
           rid=$(jq -r .databaseId <<<"$latest")
-          rnum=$(jq -r .runNumber <<<"$latest")
+          rnum=$(jq -r .number <<<"$latest")
           rsha=$(jq -r .headSha <<<"$latest")
           created=$(jq -r .createdAt <<<"$latest")
           ts=$(date -d "$created" +%s)
