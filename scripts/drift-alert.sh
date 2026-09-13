@@ -7,6 +7,9 @@
 #            $DRILL_LABEL issue and leave it open; set DRIFT_RESOLVE_CLOSE=1
 #            to also close it after posting (the drift drill sets this so it
 #            can rehearse the close leg)
+#   no-show  the scheduled run never arrived (scheduler dropped the slot):
+#            post a keyword-safe note on the open issue, or open one if
+#            none exists. No log/classification — nothing ran to examine.
 #
 # Inputs via environment:
 #   DRIFT_MODE      'fail' | 'resolve'
@@ -35,10 +38,12 @@
 # same issue; 'resolve' is a no-op when there is nothing open.
 set -euo pipefail
 
-: "${DRIFT_MODE:?DRIFT_MODE must be 'fail' or 'resolve'}"
-: "${RUN_URL:?}"
-: "${RUN_NUMBER:?}"
-: "${COMMIT_SHA:?}"
+: "${DRIFT_MODE:?DRIFT_MODE must be 'fail', 'resolve', or 'no-show'}"
+if [ "$DRIFT_MODE" != "no-show" ]; then
+  : "${RUN_URL:?}"
+  : "${RUN_NUMBER:?}"
+  : "${COMMIT_SHA:?}"
+fi
 : "${DRILL_LABEL:?}"
 : "${ISSUE_TITLE:=}" # only used by fail mode
 : "${FAILING_JOBS:=}"
@@ -136,6 +141,33 @@ if [ "$DRIFT_MODE" = "resolve" ]; then
     fi
   else
     echo "No open $DRILL_LABEL issue; nothing to do"
+  fi
+  exit 0
+fi
+
+if [ "$DRIFT_MODE" = "no-show" ]; then
+  ensure_label "$DRILL_LABEL"
+  existing=$(open_issue_for_label "$DRILL_LABEL")
+  note=$(mktemp)
+  {
+    echo "<!-- ${DRILL_LABEL}-noshow -->"
+    echo "⏰ **Scheduled run never arrived.** As of ${NOSHOW_CHECKED_AT:-$(date -u '+%Y-%m-%d %H:%M UTC')}, no schedule-event CI run exists in the past ${NOSHOW_WINDOW_HOURS:-26} hours."
+    echo ""
+    echo "GitHub delivers scheduled workflows on a best-effort basis — under load, slots can be delayed by hours or dropped entirely (observed repeatedly in this repo). The nightly gate itself did not run, so no drift verdict exists for last night."
+    echo ""
+    echo "Options: dispatch a run manually with the **CI health check** input for on-demand coverage, or wait for the next nightly slot. This note records the gap; nothing is taken down automatically."
+  } > "$note"
+  if [ -n "$existing" ]; then
+    gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$note"
+    rm -f "$note"
+    echo "Posted no-show note on drift issue #$existing"
+  else
+    gh issue create --repo "$GITHUB_REPOSITORY" \
+      --title "${ISSUE_TITLE:-Nightly CI drift alert: scheduled run did not arrive}" \
+      --body-file "$note" --label "$DRILL_LABEL" \
+      --assignee "${GITHUB_REPOSITORY_OWNER:-}"
+    rm -f "$note"
+    echo "Opened no-show drift issue"
   fi
   exit 0
 fi

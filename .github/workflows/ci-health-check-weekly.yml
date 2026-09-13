@@ -1,0 +1,47 @@
+name: Weekly CI health check
+
+# Drift coverage must not depend on a single delivery path. GitHub's
+# schedule events are best-effort (slots here have been dropped entirely or
+# delivered hours late), so this workflow adds a second, independent way
+# for drift to be caught: every Monday it dispatches the CI pipeline on
+# main with the "CI health check" input. That run executes the full
+# unit/integration/coverage chain; if it fails, the ci-health-check job
+# alerts exactly like a failing nightly would (same drift issue, same
+# log-excerpt classification). The dispatch itself is verified — this
+# repository has already seen one silent non-delivery too many.
+
+on:
+  schedule:
+    - cron: '23 6 * * 1' # Mondays 06:23 UTC — clear of the top-of-hour crunch and of the 06:00 watchdog
+  workflow_dispatch: {} # manual override / rehearsal
+
+permissions:
+  contents: read
+  actions: write # dispatch the CI workflow and verify the run registered
+
+jobs:
+  weekly-health-check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Dispatch the CI health check and confirm it registered
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        repo="${{ github.repository }}"
+        gh workflow run ci.yml --repo "$repo" --ref main -f health_check=true
+        echo "CI health check dispatched on main; confirming the run registered..."
+        confirmed=""
+        for i in $(seq 1 12); do
+          sleep 10
+          confirmed=$(gh run list --repo "$repo" --workflow CI \
+            --event workflow_dispatch --created ">$(date -u -d '-3 minutes' +%Y-%m-%dT%H:%M:%SZ)" \
+            --json databaseId --jq 'length' 2>/dev/null || echo 0)
+          [ "${confirmed:-0}" -ge 1 ] && break
+        done
+        if [ "${confirmed:-0}" -ge 1 ]; then
+          echo "Confirmed: the dispatched CI run is registered."
+        else
+          echo "::error::Dispatched CI run did not register within 2 minutes — delivery path is broken"
+          exit 1
+        fi
