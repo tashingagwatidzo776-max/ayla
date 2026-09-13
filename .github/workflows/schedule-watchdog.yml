@@ -43,6 +43,19 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         NOSHOW_WINDOW_HOURS: ${{ inputs.window_hours || '26' }}
       run: |
+        # window_hours is a free-text dispatch input that is used in
+        # arithmetic below; a non-numeric value would die mid-step with a
+        # cryptic expansion error. Validate up front (schedule runs default
+        # to 26 via the env fallback).
+        case "$NOSHOW_WINDOW_HOURS" in
+          ''|*[!0-9]*)
+            echo "::error::window_hours must be a non-negative integer (got '$NOSHOW_WINDOW_HOURS')"
+            exit 1 ;;
+        esac
+        if [ "$NOSHOW_WINDOW_HOURS" -gt 720 ]; then
+          echo "::error::window_hours too large (max 720h = 30 days of run history)"
+          exit 1
+        fi
         repo="${{ github.repository }}"
         latest=$(gh run list --repo "$repo" --workflow CI --event schedule --limit 10 \
           --json databaseId,number,headSha,createdAt,conclusion \
