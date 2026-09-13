@@ -10,7 +10,7 @@ on:
   # (Deriv WebSocket, LLM providers). The odd minute keeps it off the
   # top-of-hour schedule crunch.
   schedule:
-    - cron: '17 7 * * *'
+    - cron: '17 11 * * *'
   # Schedules cannot be fired manually, so this dispatch hook exists to
   # exercise the same pipeline on demand (e.g. right after a runner-image
   # update lands). inputs.drift_drill additionally rehearses the drift-alert
