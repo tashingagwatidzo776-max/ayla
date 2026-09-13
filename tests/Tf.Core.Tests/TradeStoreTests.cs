@@ -43,9 +43,12 @@ public class TradeStoreTests
         var store = new TradeStore(dir);
         var now = DateTimeOffset.Now;
 
-        store.Add(SampleTrade(Guid.NewGuid(), ContractStatus.Won, 0.95m, now.AddMinutes(-3)));
-        store.Add(SampleTrade(Guid.NewGuid(), ContractStatus.Won, 0.90m, now.AddMinutes(-2)));
-        store.Add(SampleTrade(Guid.NewGuid(), ContractStatus.Lost, -1.00m, now.AddMinutes(-1)));
+        // Seed "today" trades at noon, not relative to now: AddMinutes(-1)
+        // lands on yesterday for runs that start between 00:00 and 00:03 UTC.
+        var today = now.Date.AddHours(12);
+        store.Add(SampleTrade(Guid.NewGuid(), ContractStatus.Won, 0.95m, today));
+        store.Add(SampleTrade(Guid.NewGuid(), ContractStatus.Won, 0.90m, today.AddMinutes(1)));
+        store.Add(SampleTrade(Guid.NewGuid(), ContractStatus.Lost, -1.00m, today.AddMinutes(2)));
         store.Add(SampleTrade(Guid.NewGuid(), ContractStatus.Lost, -1.00m, now.AddDays(-1))); // yesterday
 
         var summary = store.SummaryFor(now);
@@ -66,7 +69,10 @@ public class TradeStoreTests
         var store = new TradeStore(dir);
         var accountA = Guid.NewGuid();
         var accountB = Guid.NewGuid();
-        var settled = DateTimeOffset.Now.AddMinutes(-2);
+        // Noon today: the daily summary below filters by calendar day, and a
+        // relative seed would fall on yesterday for runs starting just after
+        // midnight UTC.
+        var settled = DateTimeOffset.Now.Date.AddHours(12);
 
         Trade T(Guid id, Guid? account, string source) => SampleTrade(id, ContractStatus.Won, 0.95m, settled) with
         {
