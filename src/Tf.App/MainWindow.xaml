@@ -87,10 +87,17 @@
                                     <TextBlock Text="{Binding Brain.StatusText}" />
                                 </StackPanel>
                             </Border>
-                            <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                            <!-- Growth drill-down: the pill doubles as the account selector;
+                                 the chosen account's session history shows in the portfolio card below. -->
+                            <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
+                                    ToolTip="Pick an account to drill into its growth sessions">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="Growth: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding Dashboard.GrowthStatus}" />
+                                    <TextBlock Text="{Binding Dashboard.GrowthStatus}" Margin="0,0,6,0" />
+                                    <ComboBox ItemsSource="{Binding Dashboard.AccountSummaries}"
+                                              SelectedItem="{Binding Dashboard.SelectedAccount}"
+                                              MinWidth="110" FontSize="11"
+                                              Visibility="{Binding Dashboard.HasGrowthAccounts, Converter={StaticResource BoolToVis}}" />
                                 </StackPanel>
                             </Border>
                             <Border Style="{StaticResource StatusPill}">
@@ -138,6 +145,12 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- Account drill-down: session history, stakes and win streak for the
+                                 account picked in the Growth pill, straight from the trade store. -->
+                            <TextBlock Text="{Binding Dashboard.AccountDetailsText}"
+                                       Margin="0,8,0,0" FontFamily="Consolas" FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
                         </StackPanel>
                     </Border>
 
