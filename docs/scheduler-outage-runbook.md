@@ -35,7 +35,9 @@ noticing. The no-show note on the issue records the gap; it is not a pass.
    dropped nightly.
 2. **Drift drill** (only to verify the *alerting* machinery): Actions → CI
    → Run workflow → *Drift drill*; uses the `ci-drift-drill` label and
-   never touches the real issue.
+   never touches the real issue. Tick *Staleness drill* too when the
+   staleness flag itself needs exercise — it runs both flag branches
+   against a real (throwaway) drill issue.
 3. **Watchdog re-run** — Actions → Schedule watchdog → Run workflow, with
    `window_hours=0` to force the no-show leg or a large value (e.g. `9999`)
    to force the resolve leg. Rehearsal/debug only; never use it to

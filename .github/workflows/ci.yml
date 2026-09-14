@@ -27,6 +27,10 @@ on:
         type: choice
         default: auto
         options: [auto, fail, resolve]
+      stale_drill:
+        description: 'Staleness drill: also rehearse the watchdog 48h staleness flag (requires Drift drill enabled)'
+        type: boolean
+        default: false
       health_check:
         description: 'CI health check: run the full pipeline on demand; failures alert like a scheduled run'
         type: boolean
@@ -421,6 +425,51 @@ jobs:
         # issue open; the drill must still prove the close path works).
         DRIFT_RESOLVE_CLOSE: '1'
       run: bash scripts/drift-alert.sh
+
+    # Rehearses the watchdog's staleness verdict against a real issue — the
+    # same drill-issue isolation as the drift drill (ci-drift-drill label,
+    # real ci-drift issue never touched). Two legs, so one drill visit
+    # exercises both branches of the flag logic against the real API:
+    #   leg 1  STALE_HOURS=0    threshold 0h forces the flag branch (the note
+    #                           is posted even on a just-commented issue)
+    #   leg 2  STALE_HOURS huge threshold above any real age forces the
+    #                           fresh no-op branch
+    # (The third branch — no open issue — is the watchdog's daily live state
+    # and was proven on real runs already.)
+    - name: Rehearse the staleness flag
+      if: ${{ inputs.stale_drill }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        repo="${{ github.repository }}"
+        # The flag only acts on an OPEN drill issue; guarantee the flag branch
+        # is exercised by creating a throwaway issue when none is open (and
+        # closing only that one afterwards — a pre-existing drill issue from
+        # the fail leg above is left to its own resolve lifecycle).
+        gh label create ci-drift-drill --repo "$repo" --color D93F0B --force >/dev/null 2>&1 || true
+        existing=$(gh issue list --repo "$repo" --state open --label ci-drift-drill --json number --jq '.[0].number' || true)
+        created=""
+        if [ -z "$existing" ]; then
+          url=$(gh issue create --repo "$repo" \
+            --title '[Drill] Staleness rehearsal issue' \
+            --body 'Temporary issue created by the staleness drill so the 48h flag path can be rehearsed against a real issue; closed by the drill itself.' \
+            --label ci-drift-drill)
+          existing=${url##*/}
+          created="$existing"
+          echo "created throwaway drill issue #$existing"
+        else
+          echo "reusing open drill issue #$existing"
+        fi
+        echo "== leg 1: forced flag (STALE_HOURS=0) =="
+        DRIFT_MODE=stale DRILL_LABEL=ci-drift-drill STALE_HOURS=0 bash scripts/drift-alert.sh
+        echo "== leg 2: forced fresh no-op (threshold above any real age) =="
+        DRIFT_MODE=stale DRILL_LABEL=ci-drift-drill STALE_HOURS=999999 bash scripts/drift-alert.sh
+        if [ -n "$created" ]; then
+          gh issue close "$created" --repo "$repo" \
+            --comment 'Staleness drill complete: the flag leg and the fresh no-op leg both ran against a real issue; taking the throwaway issue down.'
+          echo "closed throwaway drill issue #$created"
+        fi
 
   # Static lint for this repo's automation bug classes (the ones that
   # produced real failed watchdog runs): invalid `gh --json` field names,
