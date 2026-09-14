@@ -406,7 +406,10 @@ jobs:
           echo "Drill mode (forced): $MODE_INPUT"
           exit 0
         fi
-        open=$(gh issue list --repo "${{ github.repository }}" --state open --label ci-drift-drill --json number --jq '.[0].number')
+        # REST issues list, not the search-backed `gh issue list`: the search
+        # index lags creation, and this probe runs moments after a drill leg
+        # may have created/opened an issue.
+        open=$(gh api "repos/${{ github.repository }}/issues?state=open&labels=ci-drift-drill&per_page=1" --jq '.[0].number // empty')
         echo "mode=$([ -n "$open" ] && echo resolve || echo fail)" >> "$GITHUB_OUTPUT"
         echo "Drill mode: $([ -n "$open" ] && echo resolve || echo fail)"
     - name: Rehearse the drift alert
@@ -448,7 +451,7 @@ jobs:
         # closing only that one afterwards — a pre-existing drill issue from
         # the fail leg above is left to its own resolve lifecycle).
         gh label create ci-drift-drill --repo "$repo" --color D93F0B --force >/dev/null 2>&1 || true
-        existing=$(gh issue list --repo "$repo" --state open --label ci-drift-drill --json number --jq '.[0].number' || true)
+        existing=$(gh api "repos/$repo/issues?state=open&labels=ci-drift-drill&per_page=1" --jq '.[0].number // empty')
         created=""
         if [ -z "$existing" ]; then
           url=$(gh issue create --repo "$repo" \

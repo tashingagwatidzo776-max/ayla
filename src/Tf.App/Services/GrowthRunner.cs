@@ -10,6 +10,19 @@ namespace Tf.App.Services;
 
 // BrainRegistry is in Tf.Core.Brain namespace
 
+/// <summary>
+/// One growth runner's display state, taken for the dashboard's growth pill.
+/// Bankroll fields are null while no session engine exists (runner never
+/// started) — consumers fall back to the activity line then.
+/// </summary>
+public sealed record GrowthRunnerSnapshot(
+    string Name,
+    bool IsRunning,
+    string Activity,
+    decimal? Bankroll,
+    decimal? StartBankroll,
+    decimal? Target);
+
 /// <summary>Why a growth scheduler self-exited.</summary>
 public enum GrowthExitReason
 {
@@ -63,6 +76,21 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             LastActivity = activity;
         }
     }
+
+    /// <summary>Test seam: attaches a real engine so status composition can be
+    /// exercised headlessly — <see cref="GrowthSessionEngine"/> is public and pure,
+    /// so tests drive real bankroll/target math without a live session.</summary>
+    internal void TestAttachEngine(GrowthSessionEngine engine) => _engine = engine;
+
+    /// <summary>Display state for dashboard composition (safe from any thread;
+    /// engine stats are null until the session starts).</summary>
+    public GrowthRunnerSnapshot Snapshot => new(
+        Connection.DisplayName,
+        IsRunning,
+        LastActivity,
+        _engine?.Bankroll,
+        _engine?.StartBankroll,
+        _engine?.Target);
 
     /// <summary>Raised per cycle with a human-readable activity line (any thread).</summary>
     public event Action<string>? Activity;

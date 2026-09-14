@@ -104,29 +104,58 @@ public sealed partial class DashboardViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Rebuilds GrowthStatus from the hub's growth runners: the activity line
-    /// of each currently-running runner, or a single idle line when none are.
+    /// Rebuilds GrowthStatus from the hub's growth runners: per runner, the
+    /// account name, live P/L and progress toward the session target (from
+    /// the session engine when one exists), falling back to the latest
+    /// activity line otherwise — or a single idle line when none are running.
     /// Pure with respect to the hub snapshot, so it is unit-testable
     /// (GrowthActivity fires per brain cycle — this recomputes from state,
     /// never appends, so bursts cannot duplicate or corrupt the text).
     /// </summary>
     internal void UpdateGrowthStatusFromHub()
     {
-        if (_hub is null)
+        GrowthStatus = ComposeGrowthStatus(
+            _hub?.AllRunners.Values.Select(r => r.Snapshot).ToArray());
+    }
+
+    /// <summary>Pure composer for the growth pill text; internal for tests.</summary>
+    internal static string ComposeGrowthStatus(GrowthRunnerSnapshot[]? runners)
+    {
+        var running = (runners ?? [])
+            .Where(r => r.IsRunning)
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (running.Length == 0)
         {
-            GrowthStatus = "Idle — no growth runners";
-            return;
+            return "Idle — no growth runners";
         }
 
-        var running = _hub.AllRunners.Values
-            .Where(r => r.IsRunning)
-            .Select(r => r.LastActivity)
-            .Where(text => !string.IsNullOrWhiteSpace(text))
-            .ToList();
+        return string.Join("  •  ", running.Select(DescribeRunner));
+    }
 
-        GrowthStatus = running.Count == 0
-            ? "Idle — no growth runners"
-            : string.Join("  •  ", running);
+    private static string DescribeRunner(GrowthRunnerSnapshot r)
+    {
+        if (r.Bankroll is null || r.StartBankroll is null || r.Target is null)
+        {
+            // No engine yet (just started): the activity line is the best truth.
+            return $"{r.Name}: {r.Activity}";
+        }
+
+        var bankroll = r.Bankroll.Value;
+        var start = r.StartBankroll.Value;
+        var target = r.Target.Value;
+
+        var pnl = bankroll - start;
+        var pnlText = pnl >= 0 ? $"+${pnl:0.##}" : $"-${Math.Abs(pnl):0.##}";
+
+        var span = target - start;
+        var pct = span <= 0
+            ? 100m
+            : Math.Clamp((bankroll - start) / span * 100m, 0m, 100m);
+
+        var targetText = pct >= 100m ? "target reached" : $"{pct:0.#}% to target";
+        return $"{r.Name} {pnlText} · ${bankroll:0.##} · {targetText}";
     }
 
     /// <summary>Refreshes the growth status after any growth activity line.</summary>

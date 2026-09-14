@@ -109,6 +109,19 @@ against it, and closes exactly that issue afterwards — a pre-existing drill
 issue is left to its own resolve lifecycle. (The third branch — no open
 issue — is the watchdog's normal state and is exercised live every day.)
 
+## Weekly drills (automatic rehearsal)
+
+Rehearsed paths decay silently if nobody remembers to run them, so the
+`Weekly drills` workflow dispatches the drift drill (auto mode) and the
+staleness drill against main every **Wednesday 05:41 UTC** — clear of the
+Monday health check, the nightly, and the watchdog. The wrapper verifies the
+dispatch registered (this repo has seen silent non-delivery), waits for the
+run's verdict, and on any non-success files a triage issue under the
+`ci-drills` label through the same `drift-alert.sh` path as the nightly —
+log excerpt and classification included. A red drill is drift like any
+other. Manual override: Actions → Weekly drills → Run workflow (either leg
+can be deselected).
+
 ## Policy summary
 
 1. Failures open or update one `ci-drift` issue; repeats of a known flake
