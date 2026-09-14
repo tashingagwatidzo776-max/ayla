@@ -71,8 +71,21 @@ ensure_label() { # label_name [description]
 }
 
 open_issue_for_label() { # label_name -> prints issue number or empty
-  gh issue list --repo "$GITHUB_REPOSITORY" --state open --label "$1" \
-    --json number --jq '.[0].number'
+  # REST issues API, not the search-backed `gh issue list`: the search index
+  # lags behind creation by seconds-to-minutes, so an issue created moments
+  # ago (drill legs, alert bursts) is invisible to it. The live staleness
+  # drill proved this — both legs ran 0.3s after creating their issue and
+  # the search-backed lookup returned nothing. REST list is consistent
+  # immediately. Search stays as a fallback in case REST filtering ever
+  # misses a case it should see.
+  local number
+  number=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$1&per_page=1" \
+    --jq '.[0].number // empty' 2>/dev/null || true)
+  if [ -z "$number" ]; then
+    number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label "$1" \
+      --json number --jq '.[0].number' 2>/dev/null || true)
+  fi
+  printf '%s' "$number"
 }
 
 classify_and_summarize() {
