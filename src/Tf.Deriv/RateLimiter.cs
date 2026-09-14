@@ -10,14 +10,18 @@ public sealed class RateLimiter
     private readonly int _maxRequestsPerSecond;
     private readonly Queue<DateTimeOffset> _timestamps = new();
     private readonly object _sync = new();
+    private readonly TimeProvider _time;
 
     /// <summary>
     /// Creates a rate limiter. Deriv's WebSocket limit is roughly 60
-    /// requests per minute per connection.
+    /// requests per minute per connection. Pass a custom
+    /// <see cref="TimeProvider"/> to drive the clock deterministically in
+    /// tests (production uses <see cref="TimeProvider.System"/>).
     /// </summary>
-    public RateLimiter(int maxRequestsPerSecond = 5)
+    public RateLimiter(int maxRequestsPerSecond = 5, TimeProvider? timeProvider = null)
     {
         _maxRequestsPerSecond = maxRequestsPerSecond;
+        _time = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -31,7 +35,7 @@ public sealed class RateLimiter
             var waitMs = 10;
             lock (_sync)
             {
-                var now = DateTimeOffset.UtcNow;
+                var now = _time.GetUtcNow();
 
                 // Remove timestamps older than 1 second.
                 while (_timestamps.Count > 0 && (now - _timestamps.Peek()).TotalSeconds >= 1)
@@ -54,10 +58,14 @@ public sealed class RateLimiter
             }
 
             // Sleep until the window actually drains instead of polling at a
-            // fixed 50ms tick: waking late relative to the drain skews grant
+            // fixed tick: waking late relative to the drain skews grant
             // cadence and wastes rate budget, which shows up as a lower
-            // sustained average than the nominal limit.
-            await Task.Delay(waitMs, ct).ConfigureAwait(false);
+            // sustained average than the nominal limit. An injected clock
+            // makes this fully deterministic in tests.
+            var tcs = new TaskCompletionSource();
+            using var timer = _time.CreateTimer(
+                _ => tcs.TrySetResult(), null, TimeSpan.FromMilliseconds(waitMs), Timeout.InfiniteTimeSpan);
+            await tcs.Task.WaitAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -68,7 +76,7 @@ public sealed class RateLimiter
         {
             lock (_sync)
             {
-                var now = DateTimeOffset.UtcNow;
+                var now = _time.GetUtcNow();
                 while (_timestamps.Count > 0 && (now - _timestamps.Peek()).TotalSeconds >= 1)
                     _timestamps.Dequeue();
                 return _timestamps.Count;
