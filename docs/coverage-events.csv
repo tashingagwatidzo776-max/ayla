@@ -10,5 +10,7 @@ epoch_seconds,label,detail
 1789258611,Drift alert fired,nightly schedule run #25 failed -> auto-opened issue #9; midnight-window test flake found and fixed
 1789311533,Green-note policy,drift-resolved posts keyword-safe 'went green' notes and never auto-closes; on-demand dispatch health check added (a0d1184)
 1789319148,Schedule watchdog,daily no-show check + weekly dispatched health check; drift coverage no longer depends on scheduler delivery (f7615b4)
-1789322344,Scheduler outage,five consecutive slots dropped or >1h40m late (2026-09-12 to 13); nightly #25 arrived late and failed, alerting on issue #9; runbook written, health check dispatched by hand
+1789322344,Scheduler outage,"five consecutive slots dropped or >1h40m late (2026-09-12 to 13); nightly #25 arrived late and failed, alerting on issue #9; runbook written, health check dispatched by hand"
 1789333475,Drift episode retired,the ci-drift issue taken down by hand after the first keyword-safe green note (health check run #66); health status page + staleness flagging complete the loop (69c939c)
+1789335055,Live health page,every Pages deploy regenerates health.json + a status page; README renders a dynamic healthy/unhealthy badge from it (465ff92)
+1789335055,Staleness flag,watchdog flags an open drift issue with no comments for 48h; drillable on demand via the staleness drill (465ff92)

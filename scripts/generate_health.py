@@ -73,9 +73,10 @@ def main() -> None:
     ]
 
     gate_passing = line_pct >= GATE
+    healthy = bool(gate_passing and not open_drift)
     health = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "healthy": bool(gate_passing and not open_drift),
+        "healthy": healthy,
         "coverage": {
             "line_pct": line_pct,
             "gate_pct": GATE,
@@ -91,10 +92,20 @@ def main() -> None:
             "open_issues": open_drift,
             "healthy": not open_drift,
         },
+        # shields.io endpoint-badge fields, so the README can render a
+        # dynamic healthy/unhealthy badge straight from health.json.
+        "schemaVersion": 1,
+        "label": "pipeline",
+        "message": ("healthy" if healthy else "unhealthy"),
+        "color": ("brightgreen" if healthy else "red"),
+        "namedLogo": "githubactions",
     }
 
-    cls = "ok" if health["healthy"] else "bad"
-    emoji = "\u2705" if health["healthy"] else "\u26a0\ufe0f"
+    # The human-readable verdict line (emoji + class) is derived from the
+    # same boolean as the badge fields above, so the badge, the status page,
+    # and health.json can never disagree.
+    cls = "ok" if healthy else "bad"
+    emoji = "\u2705" if healthy else "\u26a0\ufe0f"
     cov_cls = "ok" if gate_passing else "bad"
     drift_cls = "ok" if not open_drift else "bad"
     rows = "".join(

@@ -93,6 +93,22 @@ the real API using the `ci-drift-drill` label (the real `ci-drift` issue is
 never touched). `auto` mode resolves when a drill issue is open and opens
 one otherwise; `fail`/`resolve` force a leg.
 
+## Staleness drill
+
+Tick *Staleness drill* (with *Drift drill* enabled) to rehearse the
+watchdog's 48h staleness flag against a real issue — both branches in one
+dispatch, isolated on `ci-drift-drill`:
+
+1. **Forced flag** (`STALE_HOURS=0`): the flag note is posted even if the
+   issue was commented a second ago, so the branch runs on every drill.
+2. **Forced fresh no-op**: a threshold above any real age proves the quiet
+   branch.
+
+If no drill issue is open the drill creates a throwaway one, runs both legs
+against it, and closes exactly that issue afterwards — a pre-existing drill
+issue is left to its own resolve lifecycle. (The third branch — no open
+issue — is the watchdog's normal state and is exercised live every day.)
+
 ## Policy summary
 
 1. Failures open or update one `ci-drift` issue; repeats of a known flake
@@ -103,6 +119,8 @@ one otherwise; `fail`/`resolve` force a leg.
 3. The issue is closed by a human (or `DRIFT_RESOLVE_CLOSE=1` in the drill).
 4. A missing nightly is itself an alert (no-show), not a silent pass.
 5. Every record — fail, green, no-show, stale — is a comment, so the issue
+   body alone is the audit log. The staleness flag and the drill can be
+   exercised at any time via the staleness drill.
    body plus history tells the whole story.
 6. An open alert that goes quiet for 48h gets flagged by the watchdog;
    silence is itself a finding, never a pass.
