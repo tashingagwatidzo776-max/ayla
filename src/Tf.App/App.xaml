@@ -12,6 +12,7 @@
             <infra:NullToVisibilityConverter x:Key="NullToVisibility" />
             <infra:CountToVisibilityConverter x:Key="CountToVisibility" />
             <infra:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibility" />
+            <BooleanToVisibilityConverter x:Key="BoolToVis" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -116,11 +116,15 @@ Rehearsed paths decay silently if nobody remembers to run them, so the
 staleness drill against main every **Wednesday 05:41 UTC** — clear of the
 Monday health check, the nightly, and the watchdog. The wrapper verifies the
 dispatch registered (this repo has seen silent non-delivery), waits for the
-run's verdict, and on any non-success files a triage issue under the
-`ci-drills` label through the same `drift-alert.sh` path as the nightly —
-log excerpt and classification included. A red drill is drift like any
-other. Manual override: Actions → Weekly drills → Run workflow (either leg
-can be deselected).
+run's verdict, and then **verifies the drill-issue lifecycle itself**: in
+auto mode the fail leg must leave the `[Drill]` alert issue open (this week's
+half of the open→resolve alternation), and the resolve leg must close it
+with the keyword-safe green note present — so the alert→green→close cycle
+cannot silently stop alternating (a no-op leg, a missing note, or closing-
+keyword text falsely closing the issue all fail the wrapper loudly, filing a
+triage issue under the `ci-drills` label like any other drift). A red drill
+is drift like any other. Manual override: Actions → Weekly drills → Run
+workflow (either leg can be deselected).
 
 ## Policy summary
 

@@ -105,6 +105,13 @@ jobs:
           printf 'epoch_seconds,run_id,line_coverage\n' > ./site/coverage-trend.csv
           [ -n "$pct" ] && printf '%s,%s,%s\n' "$(date +%s)" "${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}" "$pct" >> ./site/coverage-trend.csv
         fi
+        # Bankroll trajectory (optional): the trade store lives on the machine
+        # where the app runs, so its export is a committed file refreshed by
+        # scripts/export_bankroll.py (see that script's docstring). A missing
+        # file simply means the chart has no money axis yet.
+        if [ -f ./docs/growth-bankroll.csv ]; then
+          cp ./docs/growth-bankroll.csv ./site/growth-bankroll.csv
+        fi
         cat ./site/coverage-trend.csv
 
     - name: Generate the coverage trend page

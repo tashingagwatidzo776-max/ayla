@@ -1,8 +1,10 @@
 """Generate the coverage-trend page for the GitHub Pages site.
 
-Reads ./site/coverage-trend.csv (columns: epoch_seconds,run_id,line_coverage),
-writes ./site/trend.html — a self-contained Chart.js page showing the
-trajectory of combined line coverage on main against the CI gate.
+Reads ./site/coverage-trend.csv (columns: epoch_seconds,run_id,line_coverage)
+and — when present — ./site/growth-bankroll.csv (columns: epoch_seconds,account,
+bankroll), writes ./site/trend.html — a self-contained Chart.js page showing
+the trajectory of combined line coverage on main against the CI gate, with the
+app's daily growth-bankroll deltas from the trade store plotted alongside.
 
 Used by .github/workflows/coverage-pages.yml; can also be run locally.
 """
@@ -48,6 +50,74 @@ events_js = json.dumps(
     [{"x": ts * 1000, "label": lbl, "detail": det} for ts, lbl, det in events]
 )
 
+# Optional growth-bankroll trajectory (site/growth-bankroll.csv: one row per
+# account per day, exported from the trade store by the Pages workflow) — the
+# app's real money curve, plotted on its own axis so the two stories (code
+# health, bankroll growth) are visible against each other. Missing file means
+# no bankroll layer yet.
+bank = []
+if os.path.exists("./site/growth-bankroll.csv"):
+    with open("./site/growth-bankroll.csv", newline="") as f:
+        for r in csv.DictReader(f):
+            try:
+                bank.append((int(r["epoch_seconds"]), r["account"], float(r["bankroll"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+
+bank_by_acct = {}
+for ts, acct, val in bank:
+    bank_by_acct.setdefault(acct, []).append((ts, val))
+for acct in bank_by_acct:
+    bank_by_acct[acct].sort()
+    if len(bank_by_acct[acct]) > MAX_POINTS:
+        bank_by_acct[acct] = bank_by_acct[acct][-MAX_POINTS:]
+
+# Total across accounts per timestamp (accounts share the daily export tick).
+bank_total_pts = {}
+for acct, pts_a in bank_by_acct.items():
+    for ts, val in pts_a:
+        bank_total_pts[ts] = round(bank_total_pts.get(ts, 0.0) + val, 2)
+bank_total = sorted(bank_total_pts.items())[-MAX_POINTS:]
+
+BANK_COLORS = ["#1a7f37", "#8250df", # green, purple — gray family is CI coverage
+               "#bf3989", "#d4a72c", "#0550ae", "#e16f24"]
+bank_datasets_js = json.dumps([
+    {
+        "label": acct,
+        "data": [{"x": ts * 1000, "y": val} for ts, val in pts_a],
+        "borderColor": BANK_COLORS[i % len(BANK_COLORS)],
+        "backgroundColor": BANK_COLORS[i % len(BANK_COLORS)] + "22",
+        "borderDash": [6, 4],
+        "borderWidth": 1.5,
+        "pointRadius": 2,
+        "tension": 0.25,
+        "yAxisID": "y1",
+    }
+    for i, (acct, pts_a) in enumerate(sorted(bank_by_acct.items()))
+])
+
+# The money axis only exists when there is bankroll data — the page shape
+# must not change (a bare right axis) on days with nothing to plot.
+xy_scales = (
+    "x: { type: 'time', adapters: {date: {locale: 'en-US'}}, "
+    "time: {unit: 'day', tooltipFormat: 'yyyy-MM-dd HH:mm'}, "
+    "title: {display: true, text: 'CI run date'} }, "
+    "y: { beginAtZero: true, suggestedMax: 100, "
+    "title: {display: true, text: 'Line coverage %'} }"
+)
+scales_js = xy_scales + (
+    ", y1: { position: 'right', beginAtZero: true, "
+    "grid: { drawOnChartArea: false }, "
+    "title: {display: true, text: 'Bankroll ($)'} }"
+    if bank_by_acct else ""
+)
+bank_note = "" if not bank_by_acct else (
+    "<p>Dashed lines (right axis): the app's growth-bankroll trajectory from "
+    "the trade store, one point per account per day — "
+    + " · ".join(sorted(bank_by_acct))
+    + ". Exported by the Pages deploy.</p>"
+)
+
 # Chart.js pinned to an exact version from the jsDelivr CDN — no build step.
 js_url = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 
@@ -75,6 +145,7 @@ body = f"""<!DOCTYPE html>
   <div class="card">Gate<b>{GATE:.0f}%</b></div>
 </div>
 <canvas id="trend" height="110"></canvas>
+{bank_note}
 {'' if not events else '<h2>Timeline</h2><ul>' + ''.join(f'<li><b>{lbl}</b> &mdash; {det}</li>' for _, lbl, det in events) + '</ul>'}
 <p>Each point is one successful CI run on <code>main</code> (newest {len(pts)}).
 The gate is enforced by the <code>coverage-report</code> job.
@@ -84,6 +155,7 @@ History data: <a href="./coverage-trend.csv">coverage-trend.csv</a></p>
 <script>
 const points = {data};
 const events = {events_js};
+const bankSets = {bank_datasets_js};
 const vlines = {{
   id: 'vlines',
   afterDatasetsDraw(chart) {{
@@ -113,15 +185,14 @@ new Chart(document.getElementById('trend'), {{
     pointRadius: 3,
     borderColor: '#0969da',
     backgroundColor: '#0969da22'
-  }}]}},
+  }}, ...bankSets]}},
   options: {{
     parsing: false,
-    scales: {{
-      x: {{ type: 'time', adapters: {{date: {{locale: 'en-US'}}}}, time: {{unit: 'day', tooltipFormat: 'yyyy-MM-dd HH:mm'}}, title: {{display: true, text: 'CI run date'}} }},
-      y: {{ beginAtZero: true, suggestedMax: 100, title: {{display: true, text: 'Line coverage %'}} }}
-    }},
+    scales: {{ {scales_js} }},
     plugins: {{
-      tooltip: {{ callbacks: {{ label: c => c.parsed.y + '% (run ' + points[c.dataIndex].run + ')' }} }}
+      tooltip: {{ callbacks: {{ label: c => c.dataset.yAxisID === 'y1'
+        ? (c.dataset.label + ': $' + c.parsed.y.toFixed(2))
+        : (c.parsed.y + '% (run ' + points[c.dataIndex].run + ')') }} }}
     }}
   }}
 }});

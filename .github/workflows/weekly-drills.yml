@@ -53,6 +53,14 @@ jobs:
           exit 0
         fi
 
+        # Which leg will this week's auto-mode drill pick? Same probe as
+        # ci.yml's drift-drill step (open drill issue → resolve, none → fail),
+        # recorded BEFORE dispatching so the wait step can verify the whole
+        # alert→green→close lifecycle against the expected half of the cycle.
+        open_before=$(gh api "repos/${{ github.repository }}/issues?state=open&labels=ci-drift-drill&per_page=1" --jq '.[0].number // empty')
+        echo "mode=$([ -n "$open_before" ] && echo resolve || echo fail)" >> "$GITHUB_OUTPUT"
+        echo "Expected drill leg: $([ -n "$open_before" ] && echo resolve || echo fail) (open drill issue before dispatch: ${open_before:-none})"
+
         args=(--ref main)
         args+=(-f drift_drill=true -f drift_drill_mode=auto)
         if [ "$want_stale" = "true" ]; then args+=(-f stale_drill=true); fi
@@ -75,13 +83,14 @@ jobs:
         echo "Confirmed: drill run $run_id is registered."
         echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
-    - name: Wait for the drill run and record its verdict
+    - name: Wait for the drill run, verify the lifecycle, record the verdict
       id: wait
       if: ${{ steps.dispatch.outputs.run_id != '' }}
       shell: bash
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        MODE: ${{ steps.dispatch.outputs.mode }}
       run: |
         repo="${{ github.repository }}"
         for i in $(seq 1 30); do
@@ -91,6 +100,48 @@ jobs:
         done
         conclusion=$(gh run view "$RUN_ID" --repo "$repo" --json conclusion -q '.conclusion // "unknown"' 2>/dev/null || echo unknown)
         echo "drill run $RUN_ID verdict: $conclusion"
+
+        # The drill must not just pass — the alert lifecycle must alternate.
+        # Auto mode picks one half each week: fail opens/updates the drill
+        # alert and leaves it open; resolve posts the green note and closes
+        # it. If that cycle ever stops alternating (a leg silently no-ops,
+        # close-keyword text falsely closes, the green note goes missing),
+        # the wrapper fails loudly and files a triage issue below.
+        if [ "$conclusion" = "success" ]; then
+          label=ci-drift-drill
+          open_after=$(gh api "repos/$repo/issues?state=open&labels=$label&per_page=1" --jq '.[0].number // empty' 2>/dev/null || true)
+          # Newest closed rehearsal issue, skipping the staleness throwaway
+          # (created and closed inside the same drill run on purpose).
+          closed=$(gh api "repos/$repo/issues?state=closed&labels=$label&per_page=20" \
+            --jq '.[] | select(.title == "[Drill] Nightly CI drift alert rehearsal") | .number' 2>/dev/null | head -1 || true)
+          green=0
+          if [ -n "$closed" ]; then
+            comments=$(gh api "repos/$repo/issues/$closed/comments" --paginate --jq '.[].body' 2>/dev/null || true)
+            case "$comments" in *"<!-- $label-green -->"*) green=1 ;; esac
+          fi
+          problems=""
+          if [ "$MODE" = "fail" ]; then
+            if [ -z "$open_after" ]; then
+              problems="fail leg did not leave the drill alert issue open; "
+            fi
+          fi
+          if [ "$MODE" = "resolve" ]; then
+            if [ -n "$open_after" ]; then
+              problems="resolve leg left a drill alert issue open (#$open_after); "
+            fi
+            if [ "$green" = "0" ]; then
+              problems="${problems}no green note on the closed drill issue (#${closed:-none}); "
+            fi
+          fi
+          if [ -n "$problems" ]; then
+            echo "::error::Drill lifecycle incomplete: ${problems}(mode=$MODE, run $RUN_ID)"
+            echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Drill lifecycle verified (mode=$MODE): open alert=${open_after:-none}, closed=#${closed:-none}, green note=$green"
+        fi
+
         echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
         echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
         if [ "$conclusion" != "success" ]; then

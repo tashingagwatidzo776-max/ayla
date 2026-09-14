@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Tf.App.Controls;
 using Tf.App.Services;
+using Tf.Core;
 using Tf.Core.Models;
 using Tf.Deriv;
 
@@ -13,6 +15,7 @@ public sealed partial class DashboardViewModel : ObservableObject
 {
     private readonly DerivClient _client;
     private readonly MultiAccountHub? _hub;
+    private readonly TradeStore? _trades;
     private readonly Dispatcher _dispatcher;
     private readonly Infrastructure.NotificationService? _notifications;
     private readonly Infrastructure.WebhookService? _webhook;
@@ -60,6 +63,30 @@ public sealed partial class DashboardViewModel : ObservableObject
     [ObservableProperty]
     private string combinedGrowthPnlText = "$0.00";
 
+    /// <summary>
+    /// The account chosen in the dashboard's growth drill-down; its session
+    /// history, stakes and win streak are composed into AccountDetailsText.
+    /// </summary>
+    [ObservableProperty]
+    private string? selectedAccount;
+
+    partial void OnSelectedAccountChanged(string? value) => UpdateAccountDetails();
+
+    /// <summary>One line per account that has growth history (drill-down choices).</summary>
+    public ObservableCollection<string> AccountSummaries { get; } = new();
+
+    /// <summary>True once any account has growth history or a running runner;
+    /// gates the drill-down selector's visibility.</summary>
+    public bool HasGrowthAccounts => AccountSummaries.Count > 0;
+
+    /// <summary>The selected account's drill-down: session history, stakes,
+    /// win streak — composed from the trade store.</summary>
+    [ObservableProperty]
+    private string accountDetailsText = "Select an account to see its session history.";
+
+    /// <summary>Account display name → the store id its growth trades carry.</summary>
+    private readonly Dictionary<string, Guid?> _growthAccountIds = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Per-account risk-rail summary lines for the dashboard card.</summary>
     public ObservableCollection<string> RiskRailAlerts { get; } = new();
 
@@ -68,10 +95,12 @@ public sealed partial class DashboardViewModel : ObservableObject
 
     public DashboardViewModel(DerivClient client, MultiAccountHub? hub = null,
         Infrastructure.NotificationService? notifications = null,
-        Infrastructure.WebhookService? webhook = null)
+        Infrastructure.WebhookService? webhook = null,
+        TradeStore? trades = null)
     {
         _client = client;
         _hub = hub;
+        _trades = trades;
         _notifications = notifications;
         _webhook = webhook;
         _dispatcher = Dispatcher.CurrentDispatcher;
@@ -81,10 +110,17 @@ public sealed partial class DashboardViewModel : ObservableObject
         _client.BalanceUpdated += OnBalanceUpdated;
         _client.ErrorReceived += OnErrorReceived;
 
+        // New settlements refresh the drill-down for the selected account.
+        if (_trades is not null)
+        {
+            _trades.TradeAdded += OnTradeAddedForDetails;
+        }
+
         if (_hub is not null)
         {
             _hub.GrowthActivity += OnGrowthActivity;
             _hub.GrowthActivity += OnGrowthActivityForGrowthStatus;
+            _hub.GrowthActivity += OnGrowthActivityForDetails;
             _hub.PortfolioGovernorTripped += OnGovernorTripped;
             _hub.PortfolioGovernorWarning += OnGovernorWarning;
             _hub.GovernorRearmed += OnGovernorRearmed;
@@ -116,6 +152,93 @@ public sealed partial class DashboardViewModel : ObservableObject
     {
         GrowthStatus = ComposeGrowthStatus(
             _hub?.AllRunners.Values.Select(r => r.Snapshot).ToArray());
+    }
+
+    /// <summary>
+    /// Refreshes the growth drill-down after any growth activity line: new
+    /// runners become selectable, and a selected runner's live session shows
+    /// its running state. Cheap by design — one store read per refresh.
+    /// </summary>
+    private void OnGrowthActivityForDetails(Services.GrowthRunner _, string __) =>
+        OnUiThread(() =>
+        {
+            RebuildAccountChoices();
+            UpdateAccountDetails();
+        });
+
+    /// <summary>
+    /// Rebuilds the selected account's drill-down text from the trade store:
+    /// today's session (trade count, win streak, running P/L, current and
+    /// peak stake), the last five sessions, and the running win rate.
+    /// Sessions are delimited by the daily reset (the engine starts fresh at
+    /// StartBudget each day), so history reads as one session per day —
+    /// which is exactly how the runner itself scopes a bankroll session.
+    /// </summary>
+    internal void UpdateAccountDetails()
+    {
+        // All settled growth trades across accounts. ForAccount(null) would be
+        // wrong here: it selects the primary (null-id) account, not "all".
+        var allGrowth = (_trades?.Trades ?? [])
+            .Where(t => t.Source == TradeSource.Growth)
+            .ToArray();
+        AccountDetailsText = ComposeAccountDetails(
+            SelectedAccount, _growthAccountIds.GetValueOrDefault(SelectedAccount ?? ""), allGrowth);
+    }
+
+    /// <summary>Pure composer for the drill-down text; internal for tests.</summary>
+    internal static string ComposeAccountDetails(
+        string? account, Guid? accountId, IReadOnlyList<Trade> growthTrades)
+    {
+        if (account is null)
+        {
+            return "Select an account to see its session history.";
+        }
+
+        var mine = growthTrades
+            .Where(t => t.AccountId == accountId)
+            .OrderBy(t => t.SettledAt)
+            .ToArray();
+
+        if (mine.Length == 0)
+        {
+            return $"{account}: no settled growth trades yet.";
+        }
+
+        var sb = new StringBuilder();
+        sb.Append(account).Append(" — ");
+
+        // Sessions: one per day (the engine's daily reset is the boundary).
+        var sessions = mine
+            .GroupBy(t => t.SettledAt.Date)
+            .OrderByDescending(g => g.Key)
+            .ToArray();
+
+        var today = sessions[0].ToArray();
+        var wins = today.Count(t => t.IsWin);
+        var streak = 0;
+        for (var i = today.Length - 1; i >= 0 && today[i].IsWin == today[^1].IsWin; i--)
+        {
+            streak++;
+        }
+        var streakText = today[^1].IsWin ? $"{streak}-win streak" : $"{streak}-loss streak";
+        var pnl = today.Sum(t => t.Profit);
+        var stakes = today.Select(t => t.Stake).ToArray();
+        sb.Append($"today: {today.Length} trades · {wins}W/{today.Length - wins}L · {streakText} · ")
+          .Append($"P/L {(pnl >= 0 ? "+" : "−")}${Math.Abs(pnl):0.00} · stake ${stakes.Min():0.##}–${stakes.Max():0.##}");
+
+        // Last five prior sessions, most recent first.
+        foreach (var s in sessions.Skip(1).Take(5))
+        {
+            var list = s.ToArray();
+            var sPnl = list.Sum(t => t.Profit);
+            sb.Append($"\n  {s.Key:MMM d}: {list.Length} trades · {list.Count(t => t.IsWin)}W/{list.Length - list.Count(t => t.IsWin)}L · ")
+              .Append($"P/L {(sPnl >= 0 ? "+" : "−")}${Math.Abs(sPnl):0.00}");
+        }
+
+        var totalWins = mine.Count(t => t.IsWin);
+        var winRate = (double)totalWins * 100 / mine.Length;
+        sb.Append($"\n  running win rate: {winRate:0.#}% over {mine.Length} trades");
+        return sb.ToString();
     }
 
     /// <summary>Pure composer for the growth pill text; internal for tests.</summary>
@@ -162,11 +285,64 @@ public sealed partial class DashboardViewModel : ObservableObject
     private void OnGrowthActivityForGrowthStatus(Services.GrowthRunner _, string __) =>
         OnUiThread(UpdateGrowthStatusFromHub);
 
+    /// <summary>Refreshes the drill-down choices after a settlement (a new
+    /// account's first growth trade makes it selectable).</summary>
+    private void OnTradeAddedForDetails(Trade trade)
+    {
+        if (trade.Source == TradeSource.Growth)
+        {
+            OnUiThread(() =>
+            {
+                RebuildAccountChoices();
+                UpdateAccountDetails();
+            });
+        }
+    }
+
     /// <summary>Refreshes the growth status when a runner starts or stops.</summary>
     private void OnRestartStateChangedForGrowthStatus(Guid _, int __, bool ___) =>
         OnUiThread(UpdateGrowthStatusFromHub);
 
     private void OnAccountsChangedForSummary() => OnUiThread(RefreshPortfolioSummary);
+
+    /// <summary>
+    /// Rebuilds the drill-down account list: every growth runner plus every
+    /// account that has settled growth trades in the store, with its store id.
+    /// Auto-selects the first account once any exist, so the panel is alive
+    /// without a manual click.
+    /// </summary>
+    private void RebuildAccountChoices()
+    {
+        _growthAccountIds.Clear();
+
+        foreach (var runner in _hub?.AllRunners.Values ?? Enumerable.Empty<Services.GrowthRunner>())
+        {
+            _growthAccountIds.TryAdd(runner.Connection.DisplayName, runner.Connection.Config.Id);
+        }
+
+        foreach (var trade in _trades?.Trades ?? Enumerable.Empty<Trade>())
+        {
+            if (trade.Source == TradeSource.Growth && trade.AccountName is not null)
+            {
+                _growthAccountIds.TryAdd(trade.AccountName, trade.AccountId);
+            }
+        }
+
+        var names = _growthAccountIds.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (names.SequenceEqual(AccountSummaries, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        AccountSummaries.Clear();
+        foreach (var name in names)
+        {
+            AccountSummaries.Add(name);
+        }
+
+        OnPropertyChanged(nameof(HasGrowthAccounts));
+        SelectedAccount ??= names.FirstOrDefault();
+    }
 
     private void OnGrowthActivity(Services.GrowthRunner _, string __) =>
         OnUiThread(RefreshPortfolioSummary);
@@ -231,6 +407,8 @@ public sealed partial class DashboardViewModel : ObservableObject
 
         // Same feed keeps the dashboard's growth-status line current.
         UpdateGrowthStatusFromHub();
+        RebuildAccountChoices();
+        UpdateAccountDetails();
     }
 
     /// <summary>Builds one alert line per currently latched risk rail.</summary>
