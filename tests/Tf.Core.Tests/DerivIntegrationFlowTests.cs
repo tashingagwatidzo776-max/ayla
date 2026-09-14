@@ -386,7 +386,9 @@ public class DerivIntegrationFlowTests
         private readonly Func<JsonElement, string?>? _tickGenerator;
         private readonly List<string> _received = new();
         private readonly object _sync = new();
+        private readonly SemaphoreSlim _sendGate = new(1, 1);
         private Task? _runTask;
+        private CancellationToken _ct;
 
         public FlowFakeServer(Func<JsonElement, string> responder, CancellationToken ct = default,
             Func<JsonElement, string?>? tickGenerator = null)
@@ -402,6 +404,7 @@ public class DerivIntegrationFlowTests
 
         public Task RunAsync(CancellationToken ct = default)
         {
+            _ct = ct;
             _runTask ??= Task.Run(() => RunCoreAsync(ct), CancellationToken.None);
             return _runTask;
         }
@@ -439,20 +442,41 @@ public class DerivIntegrationFlowTests
                         await ws.WebSocket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
                     }
 
-                    // For tick subscriptions, the req_id is already handled by _responder.
-                    // Now stream tick data if a tick generator is provided.
+                    // Ticks stream from a dedicated background pump so the
+                    // receive loop stays free to answer later requests (e.g.
+                    // a proposal after subscribing) and never starves a test's
+                    // delivery window under CI load. Closed with the loop.
                     if (isTicksSub && _tickGenerator != null)
                     {
-                        for (var i = 0; i < 5 && !ct.IsCancellationRequested; i++)
+                        var wsRef = ws.WebSocket;
+                        var rootClone = root.Clone(); // survives doc disposal
+                        _ = Task.Run(async () =>
                         {
-                            await Task.Delay(100, ct);
-                            var tickJson = _tickGenerator(root);
-                            if (!string.IsNullOrEmpty(tickJson))
+                            try
                             {
-                                var tickBytes = Encoding.UTF8.GetBytes(tickJson);
-                                await ws.WebSocket.SendAsync(tickBytes, WebSocketMessageType.Text, true, ct);
+                                while (!_ct.IsCancellationRequested)
+                                {
+                                    await Task.Delay(100, _ct);
+                                    var tickJson = _tickGenerator(rootClone);
+                                    if (!string.IsNullOrEmpty(tickJson))
+                                    {
+                                        var tickBytes = Encoding.UTF8.GetBytes(tickJson);
+                                        await _sendGate.WaitAsync(_ct);
+                                        try
+                                        {
+                                            await wsRef.SendAsync(tickBytes, WebSocketMessageType.Text, true, _ct);
+                                        }
+                                        finally
+                                        {
+                                            _sendGate.Release();
+                                        }
+                                    }
+                                }
                             }
-                        }
+                            catch (OperationCanceledException) { }
+                            catch (WebSocketException) { }
+                            catch (ObjectDisposedException) { }
+                        }, CancellationToken.None);
                     }
                 }
             }

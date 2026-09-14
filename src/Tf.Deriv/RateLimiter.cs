@@ -28,6 +28,7 @@ public sealed class RateLimiter
     {
         while (true)
         {
+            var waitMs = 10;
             lock (_sync)
             {
                 var now = DateTimeOffset.UtcNow;
@@ -46,13 +47,17 @@ public sealed class RateLimiter
 
                 // Calculate wait time until the oldest request expires.
                 var oldest = _timestamps.Peek();
-                var waitMs = (int)(1000 - (now - oldest).TotalMilliseconds) + 10;
+                waitMs = (int)(1000 - (now - oldest).TotalMilliseconds) + 10;
                 if (waitMs <= 0) waitMs = 10;
 
                 // Release lock before awaiting.
             }
 
-            await Task.Delay(50, ct).ConfigureAwait(false);
+            // Sleep until the window actually drains instead of polling at a
+            // fixed 50ms tick: waking late relative to the drain skews grant
+            // cadence and wastes rate budget, which shows up as a lower
+            // sustained average than the nominal limit.
+            await Task.Delay(waitMs, ct).ConfigureAwait(false);
         }
     }
 
