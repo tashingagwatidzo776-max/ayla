@@ -47,10 +47,10 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: '8.0.x'
 
@@ -64,7 +64,7 @@ jobs:
       run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit" --collect:"XPlat Code Coverage" --results-directory ./coverage
 
     - name: Upload coverage artifact (Unit)
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: coverage-unit
         path: ./coverage/**/coverage.cobertura.xml
@@ -75,10 +75,10 @@ jobs:
     needs: unit
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: '8.0.x'
 
@@ -101,7 +101,7 @@ jobs:
         TF_DERIV_SYMBOL: ${{ secrets.TF_DERIV_SYMBOL }}
 
     - name: Upload coverage artifact (Integration)
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: coverage-integration
         path: ./coverage/**/coverage.cobertura.xml
@@ -116,15 +116,15 @@ jobs:
     needs: [unit, integration]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: '8.0.x'
 
     - name: Download coverage artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: coverage-*
         path: ./coverage
@@ -203,7 +203,7 @@ jobs:
 
     - name: Download baseline coverage artifact
       if: github.event_name == 'pull_request' && steps.baseline.outputs.baseline_run_id != ''
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         run-id: ${{ steps.baseline.outputs.baseline_run_id }}
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -266,13 +266,13 @@ jobs:
         fi
 
     - name: Upload coverage report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: coverage-report
         path: ./coverage/report/
 
     - name: Upload coverage trend history
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: coverage-trend
         path: ./trend/coverage-trend.csv
@@ -290,7 +290,7 @@ jobs:
     needs: [unit, integration, coverage-report]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Open or update the drift issue
       shell: bash
       env:
@@ -312,7 +312,7 @@ jobs:
     needs: [unit, integration, coverage-report]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Post 'run went green' note on the drift issue
       shell: bash
       env:
@@ -339,7 +339,7 @@ jobs:
     needs: [unit, integration, coverage-report]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Open or update the drift issue
       shell: bash
       env:
@@ -367,7 +367,7 @@ jobs:
     needs: [unit, integration, coverage-report]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Post 'run went green' note on the drift issue
       shell: bash
       env:
@@ -391,7 +391,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.drift_drill }}
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Decide drill mode
       id: probe
       shell: bash
@@ -478,7 +478,7 @@ jobs:
   workflow-lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Lint workflows and scripts
       run: |
         python3 -m pip install --quiet pyyaml

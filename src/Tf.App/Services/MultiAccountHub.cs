@@ -113,6 +113,28 @@ public sealed class MultiAccountHub
 
     public IReadOnlyDictionary<Guid, GrowthRunner> Runners => _runners;
 
+    /// <summary>
+    /// All growth runners the hub knows about — accounts started here
+    /// (<see cref="Runners"/>) plus externally-run runners registered via
+    /// <see cref="ObserveRunner"/>. Snapshot taken under the runner lock;
+    /// when a connection appears in both, the started runner wins.
+    /// </summary>
+    public IReadOnlyDictionary<Guid, GrowthRunner> AllRunners
+    {
+        get
+        {
+            lock (_runnerLock)
+            {
+                var merged = new Dictionary<Guid, GrowthRunner>(_runners);
+                foreach (var (id, runner) in _observedRunners)
+                {
+                    merged.TryAdd(id, runner);
+                }
+                return merged;
+            }
+        }
+    }
+
     /// <summary>Automatic restart attempts already made per account.
     /// Returns a snapshot — the live dictionary is mutated under the runner
     /// lock from background threads.</summary>
@@ -458,6 +480,12 @@ public sealed class MultiAccountHub
     /// real ladder needs broker failures and is covered by the E2E tests).</summary>
     internal void TestRaiseRestartStateChanged(Guid accountId, int attempt, bool gaveUp) =>
         RestartStateChanged?.Invoke(accountId, attempt, gaveUp);
+
+    /// <summary>Test seam: raises <see cref="GrowthActivity"/> so the
+    /// dashboard's brain-status line can be exercised headlessly (a real
+    /// activity line needs a live trading session).</summary>
+    internal void TestRaiseGrowthActivity(GrowthRunner runner, string line) =>
+        GrowthActivity?.Invoke(runner, line);
 
     /// <summary>Cancels a scheduled automatic restart, if one is pending.</summary>
     private void CancelPendingRestart(Guid accountId)

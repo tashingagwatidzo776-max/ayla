@@ -20,14 +20,20 @@ public sealed partial class DashboardViewModel : ObservableObject
     [ObservableProperty]
     private string statusText = "Disconnected";
 
+    /// <summary>
+    /// Live growth-runner state: one line per running growth runner (its last
+    /// activity), or an idle line when nothing trades. Kept current from the
+    /// hub's events; the dashboard "Growth:" pill binds to this. The
+    /// autonomous brain's state has its own pill (Brain tab VM).
+    /// </summary>
+    [ObservableProperty]
+    private string growthStatus = "Idle — no growth runners";
+
     [ObservableProperty]
     private string balanceText = "—";
 
     [ObservableProperty]
     private string symbolText = "—";
-
-    [ObservableProperty]
-    private string brainStatus = "Idle — brain arrives in M3";
 
     [ObservableProperty]
     private string lastPriceText = "—";
@@ -78,10 +84,12 @@ public sealed partial class DashboardViewModel : ObservableObject
         if (_hub is not null)
         {
             _hub.GrowthActivity += OnGrowthActivity;
+            _hub.GrowthActivity += OnGrowthActivityForGrowthStatus;
             _hub.PortfolioGovernorTripped += OnGovernorTripped;
             _hub.PortfolioGovernorWarning += OnGovernorWarning;
             _hub.GovernorRearmed += OnGovernorRearmed;
             _hub.RestartStateChanged += OnRestartStateChanged;
+            _hub.RestartStateChanged += OnRestartStateChangedForGrowthStatus;
             _hub.AccountsChanged += OnAccountsChangedForSummary;
 
             // A governor latch restored from the journal fires its event
@@ -94,6 +102,40 @@ public sealed partial class DashboardViewModel : ObservableObject
             RefreshPortfolioSummary();
         }
     }
+
+    /// <summary>
+    /// Rebuilds GrowthStatus from the hub's growth runners: the activity line
+    /// of each currently-running runner, or a single idle line when none are.
+    /// Pure with respect to the hub snapshot, so it is unit-testable
+    /// (GrowthActivity fires per brain cycle — this recomputes from state,
+    /// never appends, so bursts cannot duplicate or corrupt the text).
+    /// </summary>
+    internal void UpdateGrowthStatusFromHub()
+    {
+        if (_hub is null)
+        {
+            GrowthStatus = "Idle — no growth runners";
+            return;
+        }
+
+        var running = _hub.AllRunners.Values
+            .Where(r => r.IsRunning)
+            .Select(r => r.LastActivity)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToList();
+
+        GrowthStatus = running.Count == 0
+            ? "Idle — no growth runners"
+            : string.Join("  •  ", running);
+    }
+
+    /// <summary>Refreshes the growth status after any growth activity line.</summary>
+    private void OnGrowthActivityForGrowthStatus(Services.GrowthRunner _, string __) =>
+        OnUiThread(UpdateGrowthStatusFromHub);
+
+    /// <summary>Refreshes the growth status when a runner starts or stops.</summary>
+    private void OnRestartStateChangedForGrowthStatus(Guid _, int __, bool ___) =>
+        OnUiThread(UpdateGrowthStatusFromHub);
 
     private void OnAccountsChangedForSummary() => OnUiThread(RefreshPortfolioSummary);
 
@@ -157,6 +199,9 @@ public sealed partial class DashboardViewModel : ObservableObject
         }
 
         NotifyOnRiskRailChange(previous, alerts);
+
+        // Same feed keeps the dashboard's growth-status line current.
+        UpdateGrowthStatusFromHub();
     }
 
     /// <summary>Builds one alert line per currently latched risk rail.</summary>

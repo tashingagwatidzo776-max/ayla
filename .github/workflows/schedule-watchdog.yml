@@ -40,7 +40,7 @@ jobs:
   no-show-check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Check whether last night's scheduled CI run arrived
       shell: bash
       env:

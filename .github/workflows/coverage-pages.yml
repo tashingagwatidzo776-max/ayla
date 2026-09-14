@@ -41,7 +41,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # On manual dispatch there is no triggering CI run, so resolve the latest
     # successful CI run on main instead.
@@ -59,7 +59,7 @@ jobs:
         echo "Publishing coverage from CI run $run_id"
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: '8.0.x'
 
@@ -67,7 +67,7 @@ jobs:
       run: dotnet tool restore
 
     - name: Download coverage artifacts from the CI run
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         run-id: ${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -83,7 +83,7 @@ jobs:
 
     - name: Download coverage trend history
       continue-on-error: true # no coverage-trend artifact yet -> single-point fallback below
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         run-id: ${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -123,13 +123,13 @@ jobs:
       run: python scripts/generate_health.py
 
     - name: Setup Pages
-      uses: actions/configure-pages@v5
+      uses: actions/configure-pages@v6
 
     - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
+      uses: actions/upload-pages-artifact@v5
       with:
         path: ./site
 
     - name: Deploy to GitHub Pages
       id: deployment
-      uses: actions/deploy-pages@v4
+      uses: actions/deploy-pages@v5

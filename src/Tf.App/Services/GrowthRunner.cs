@@ -53,6 +53,17 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private string lastActivity = "Not started — press Start all.";
 
+    /// <summary>Test seam: forces the runner's visible running state and
+    /// activity line without a live session (mirrors the hub's TestRaise* pattern).</summary>
+    internal void TestSetRunningState(bool running, string? activity = null)
+    {
+        IsRunning = running;
+        if (activity is not null)
+        {
+            LastActivity = activity;
+        }
+    }
+
     /// <summary>Raised per cycle with a human-readable activity line (any thread).</summary>
     public event Action<string>? Activity;
 

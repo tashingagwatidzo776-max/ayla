@@ -87,6 +87,12 @@
                                     <TextBlock Text="{Binding Brain.StatusText}" />
                                 </StackPanel>
                             </Border>
+                            <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Growth: " Foreground="{StaticResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding Dashboard.GrowthStatus}" />
+                                </StackPanel>
+                            </Border>
                             <Border Style="{StaticResource StatusPill}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="Mode: " Foreground="{StaticResource TextSecondaryBrush}" />
