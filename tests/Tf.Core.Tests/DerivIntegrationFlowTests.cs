@@ -63,7 +63,7 @@ public class DerivIntegrationFlowTests
         var ticks = new List<Tick>();
         client.TickReceived += t => ticks.Add(t);
         await client.SubscribeTicksAsync("frxEURUSD", cts.Token);
-        await Task.Delay(500, cts.Token);
+        await WaitUntilAsync(() => ticks.Count > 0, cts.Token);
         Assert.NotEmpty(ticks);
         Assert.Equal("frxEURUSD", ticks[0].Symbol);
 
@@ -116,7 +116,7 @@ public class DerivIntegrationFlowTests
         var receivedTicks = new ConcurrentBag<Tick>();
         client.TickReceived += t => receivedTicks.Add(t);
         await client.SubscribeTicksAsync("frxEURUSD", cts.Token);
-        await Task.Delay(2000, cts.Token);
+        await WaitUntilAsync(() => receivedTicks.Count >= 2, cts.Token);
 
         Assert.True(receivedTicks.Count >= 2,
             $"Expected at least 2 ticks but got {receivedTicks.Count}");
@@ -144,7 +144,7 @@ public class DerivIntegrationFlowTests
         Tick? received = null;
         client.TickReceived += t => received = t;
         await client.SubscribeTicksAsync("frxGBPUSD", cts.Token);
-        await Task.Delay(500, cts.Token);
+        await WaitUntilAsync(() => received is not null, cts.Token);
 
         Assert.NotNull(received);
         Assert.Equal(1.27000, received!.Quote, 5);
@@ -370,7 +370,7 @@ public class DerivIntegrationFlowTests
         Tick? received = null;
         client.TickReceived += t => received = t;
         await client.SubscribeTicksAsync("frxEURUSD", cts.Token);
-        await Task.Delay(500, cts.Token);
+        await WaitUntilAsync(() => received is not null, cts.Token);
 
         Assert.NotNull(received);
         Assert.Equal(received!.Quote, received.Ask, 5);
@@ -378,6 +378,21 @@ public class DerivIntegrationFlowTests
     }
 
     // ─── Fake Server ──────────────────────────────────────
+
+    /// <summary>
+    /// Polls until the condition holds (or 5s pass), replacing fixed sleeps
+    /// that raced fake-server deliveries: a delivery arriving late no longer
+    /// fails the test, and an early arrival finishes in ~25ms instead of
+    /// waiting out the full sleep.
+    /// </summary>
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25, ct);
+        }
+    }
 
     private sealed class FlowFakeServer : IAsyncDisposable
     {

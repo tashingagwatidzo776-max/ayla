@@ -71,12 +71,19 @@ public class AutonomousSchedulerTests
             () => Array.Empty<string>(),
             r => { cycles++; last = r; });
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var run = scheduler.StartAsync(cts.Token);
 
         // First cycle runs immediately; subsequent ones wait for the 1-minute
-        // interval, so within 3s exactly one cycle should have completed.
-        await Task.Delay(1500);
+        // interval. Wait for the first cycle via deadline polling instead of a
+        // fixed sleep (a loaded CI runner can exceed 1.5s before the callback
+        // runs), then stop before the next interval — the interval is far
+        // longer than any plausible first-cycle delay, so exactly one cycle.
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (cycles == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25, cts.Token);
+        }
         scheduler.Stop();
         await run;
 
@@ -97,12 +104,18 @@ public class AutonomousSchedulerTests
             () => Array.Empty<string>(),
             _ => cycles++);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var run = scheduler.StartAsync(cts.Token);
 
-        await Task.Delay(500);          // let the first cycle fire
+        // Let the first cycle fire via deadline polling (no fixed sleep),
+        // then stop. StartAsync returns when the loop exits.
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (cycles == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25, cts.Token);
+        }
         scheduler.Stop();
-        await run;                       // StartAsync returns when the loop exits
+        await run;
 
         Assert.False(scheduler.IsRunning);
         Assert.Equal(1, cycles);         // stopped before the next interval
