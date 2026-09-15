@@ -69,6 +69,14 @@ public partial class App : System.Windows.Application
         services.AddSingleton<WebhookService>();
         services.AddSingleton(_ => new TradeJournal(Path.Combine(SettingsService.DataDir, "journal")));
         services.AddSingleton(_ => new PerformanceTracker(Path.Combine(SettingsService.DataDir, "analytics")));
+        // Keeps the growth-bankroll CSV (the trend page's money axis) fresh on
+        // every settled trade — no manual export_bankroll.py run needed. The
+        // canonical copy lives in app data; docs/ is updated best-effort so a
+        // checkout-run app stages the Pages input for commit.
+        services.AddSingleton(sp => new BankrollCsvFile(
+            sp.GetRequiredService<TradeStore>(),
+            BankrollCsvFile.FindRepoDocsPath(AppContext.BaseDirectory),
+            Path.Combine(SettingsService.DataDir, "growth-bankroll.csv")));
         services.AddSingleton(sp =>
             new MultiAccountHub(
                 sp.GetRequiredService<AccountVault>(),
@@ -130,6 +138,10 @@ public partial class App : System.Windows.Application
         var provider = services.BuildServiceProvider();
         Ioc.Default.ConfigureServices(provider);
 
+        // Eagerly start the growth-bankroll CSV auto-refresh (nothing else
+        // depends on it): writes the initial export and hooks settled trades.
+        _ = provider.GetRequiredService<BankrollCsvFile>();
+
         var window = new MainWindow
         {
             DataContext = provider.GetRequiredService<MainViewModel>()
@@ -167,7 +179,8 @@ public partial class App : System.Windows.Application
             Ioc.Default.GetService<ApiAuditLog>(),
             Ioc.Default.GetService<NotificationService>(),
             Ioc.Default.GetService<WebhookService>(),
-            Ioc.Default.GetService<AutoUpdater>()
+            Ioc.Default.GetService<AutoUpdater>(),
+            Ioc.Default.GetService<BankrollCsvFile>()
         ];
 
         foreach (var d in disposables)

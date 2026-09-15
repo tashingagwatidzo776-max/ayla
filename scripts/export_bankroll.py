@@ -8,8 +8,11 @@ StartBudget reset), and writes docs/growth-bankroll.csv:
     epoch_seconds,account,bankroll
 
 The Pages deploy copies this file into the site and the trend chart plots it
-on the money axis, next to nightly coverage. Run it on the machine where the
-app trades (the store is local); commit the result so CI can publish it:
+on the money axis, next to nightly coverage. The app refreshes this file
+automatically on every settled trade (Tf.Core Analytics.BankrollCsvFile),
+writing both the app-data copy and this committed one when it runs from a
+checkout — commit the refreshed file so CI can publish it. This script
+remains for backfill and machines without the app:
 
     python scripts/export_bankroll.py            # real store
     python scripts/export_bankroll.py -o /tmp/x.csv --store DIR
