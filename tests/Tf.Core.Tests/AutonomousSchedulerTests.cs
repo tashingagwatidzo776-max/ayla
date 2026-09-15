@@ -3,6 +3,15 @@ using Tf.Core.Models;
 
 namespace Tf.Core.Tests;
 
+/// <summary>
+/// Deterministic tests for the autonomous decision loop. The scheduler takes
+/// an injected <see cref="TimeProvider"/>, so every test drives the shared
+/// <see cref="TestVirtualClock"/> — interval gating, failure backoff, kill
+/// switch interrupts and stop semantics are all verified on fake time that
+/// moves only when the test advances it, with exact timestamps. No wall-clock
+/// bound anywhere: nothing here can flake under CI load, and the whole suite
+/// runs in milliseconds instead of waiting out real intervals.
+/// </summary>
 [Trait("Category", "Unit")]
 public class AutonomousSchedulerTests
 {
@@ -40,17 +49,40 @@ public class AutonomousSchedulerTests
             Task.FromResult(_json);
     }
 
+    /// <summary>AppSettings with the 1-minute interval every test here assumes.</summary>
+    private static AppSettings IntervalSettings() =>
+        new() { DecisionIntervalMinutes = 1, AutonomyEnabled = true };
+
+    private static RiskContext Risk(bool killSwitch) =>
+        new(KillSwitchEngaged: killSwitch, 0, 1000m, 0m, 0, null, null);
+
+    /// <summary>Pumps queued await continuations (xUnit's sync context defers
+    /// them) until the condition holds. Purely cooperative — no sleeps — so
+    /// observation is immediate and load-independent; the 5s wall-clock bound
+    /// exists only to fail fast instead of hanging if the loop wedges.</summary>
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            for (var i = 0; i < 10; i++) await Task.Yield();
+        }
+    }
+
+    // ─── Kill switch ─────────────────────────────────────
+
     [Fact]
     public async Task KillSwitchEngaged_ExitsImmediately_WithoutCycles()
     {
         var cycles = 0;
         var scheduler = new AutonomousScheduler(
             BuildBrain("{\"direction\":\"HOLD\",\"confidence\":0,\"stake\":0,\"reasoning\":\"test\"}", StubDeriv()),
-            () => new AppSettings { DecisionIntervalMinutes = 1, AutonomyEnabled = true },
+            IntervalSettings,
             () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
-            () => new RiskContext(KillSwitchEngaged: true, 0, 1000m, 0m, 0, null, null),
+            () => Risk(killSwitch: true),
             () => Array.Empty<string>(),
-            _ => cycles++);
+            _ => cycles++,
+            timeProvider: new TestVirtualClock());
 
         await scheduler.StartAsync();
 
@@ -59,65 +91,181 @@ public class AutonomousSchedulerTests
     }
 
     [Fact]
+    public async Task KillSwitchEngagedMidInterval_EndsTheWaitAtNextSlice()
+    {
+        var cycles = 0;
+        var kill = false;
+        var clock = new TestVirtualClock();
+        var scheduler = new AutonomousScheduler(
+            BuildBrain("{\"direction\":\"HOLD\",\"confidence\":0.5,\"stake\":0,\"reasoning\":\"flat\"}", StubDeriv()),
+            IntervalSettings,
+            () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
+            () => Risk(kill),
+            () => Array.Empty<string>(),
+            _ => cycles++,
+            timeProvider: clock);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // hang safety net only
+        var run = scheduler.StartAsync(cts.Token);
+
+        await WaitUntilAsync(() => cycles == 1);
+        clock.Advance(5_000);          // five virtual seconds of the interval pass — still waiting
+        await WaitUntilAsync(() => clock.CurrentMs() >= 5_000);
+
+        kill = true;                   // engage mid-interval
+        clock.Advance(1_000);          // the next ≤1s switch-check slice fires the check
+        await run;                     // loop exits without running a second cycle
+
+        Assert.False(scheduler.IsRunning);
+        Assert.Equal(1, cycles);
+    }
+
+    // ─── Interval gating ─────────────────────────────────
+
+    [Fact]
     public async Task RunsOneCycle_ThenWaitsForNextInterval()
     {
         var cycles = 0;
         BrainCycleResult? last = null;
+        var clock = new TestVirtualClock();
+        var cycleMs = new List<long>();
         var scheduler = new AutonomousScheduler(
             BuildBrain("{\"direction\":\"HOLD\",\"confidence\":0.5,\"stake\":0,\"reasoning\":\"flat\"}", StubDeriv()),
-            () => new AppSettings { DecisionIntervalMinutes = 1, AutonomyEnabled = true },
+            IntervalSettings,
             () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
-            () => new RiskContext(KillSwitchEngaged: false, 0, 1000m, 0m, 0, null, null),
+            () => Risk(killSwitch: false),
             () => Array.Empty<string>(),
-            r => { cycles++; last = r; });
+            r => { cycles++; last = r; cycleMs.Add(clock.CurrentMs()); },
+            timeProvider: clock);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var run = scheduler.StartAsync(cts.Token);
 
-        // First cycle runs immediately; subsequent ones wait for the 1-minute
-        // interval. Wait for the first cycle via deadline polling instead of a
-        // fixed sleep (a loaded CI runner can exceed 1.5s before the callback
-        // runs), then stop before the next interval — the interval is far
-        // longer than any plausible first-cycle delay, so exactly one cycle.
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (cycles == 0 && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(25, cts.Token);
-        }
-        scheduler.Stop();
+        await WaitUntilAsync(() => cycles == 1); // first cycle runs immediately at t=0
+        scheduler.Stop();                        // stop before the interval elapses (fake time hasn't moved)
         await run;
 
         Assert.Equal(1, cycles);
         Assert.NotNull(last);
         Assert.Equal(BrainDirection.Hold, last!.Decision.Direction);
+        Assert.Equal(0, cycleMs[0]);             // first cycle exactly at virtual t=0
     }
+
+    [Fact]
+    public async Task SecondCycle_WaitsForFullInterval_ThenRunsExactlyAtGate()
+    {
+        var cycles = 0;
+        var clock = new TestVirtualClock();
+        var cycleMs = new List<long>();
+        var scheduler = new AutonomousScheduler(
+            BuildBrain("{\"direction\":\"HOLD\",\"confidence\":0.5,\"stake\":0,\"reasoning\":\"flat\"}", StubDeriv()),
+            IntervalSettings,
+            () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
+            () => Risk(killSwitch: false),
+            () => Array.Empty<string>(),
+            _ => { cycles++; cycleMs.Add(clock.CurrentMs()); },
+            timeProvider: clock);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = scheduler.StartAsync(cts.Token);
+
+        await WaitUntilAsync(() => cycles == 1);
+
+        clock.Advance(59_999);                   // 1ms short of the 1-minute gate
+        await WaitUntilAsync(() => clock.CurrentMs() >= 59_999);
+        Assert.Equal(1, cycles);                 // gate holds: no early cycle
+
+        clock.Advance(1);                        // land exactly on the 60s gate
+        await WaitUntilAsync(() => cycles == 2);
+        scheduler.Stop();
+        await run;
+
+        Assert.Equal(2, cycles);
+        Assert.Equal(0, cycleMs[0]);
+        Assert.Equal(60_000, cycleMs[1]);        // second cycle exactly one interval later
+    }
+
+    // ─── Stop semantics ──────────────────────────────────
 
     [Fact]
     public async Task Stop_EndsTheLoop()
     {
         var cycles = 0;
+        var clock = new TestVirtualClock();
         var scheduler = new AutonomousScheduler(
             BuildBrain("{\"direction\":\"HOLD\",\"confidence\":0.3,\"stake\":0,\"reasoning\":\"x\"}", StubDeriv()),
-            () => new AppSettings { DecisionIntervalMinutes = 1, AutonomyEnabled = true },
+            IntervalSettings,
             () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
-            () => new RiskContext(KillSwitchEngaged: false, 0, 1000m, 0m, 0, null, null),
+            () => Risk(killSwitch: false),
             () => Array.Empty<string>(),
-            _ => cycles++);
+            _ => cycles++,
+            timeProvider: clock);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var run = scheduler.StartAsync(cts.Token);
 
-        // Let the first cycle fire via deadline polling (no fixed sleep),
-        // then stop. StartAsync returns when the loop exits.
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (cycles == 0 && DateTime.UtcNow < deadline)
+        await WaitUntilAsync(() => cycles == 1); // first cycle fired
+        scheduler.Stop();                        // before the next interval
+        await run;                               // StartAsync returns when the loop exits
+
+        Assert.False(scheduler.IsRunning);
+        Assert.Equal(1, cycles);
+    }
+
+    // ─── Failure backoff ─────────────────────────────────
+
+    /// <summary>
+    /// Replaces the wall-clock backoff behavior with exact virtual timestamps:
+    /// a decide that always throws retries on the default 5s backoff schedule
+    /// (t=0, 5000, 10000) and exits after the default 3 consecutive failures.
+    /// StartAsync completes on its own — no Stop needed.
+    /// </summary>
+    [Fact]
+    public async Task FailedCycles_BackOffOnSchedule_ThenExitAfterMaxConsecutiveFailures()
+    {
+        var attempts = 0;
+        var attemptMs = new List<long>();
+        var clock = new TestVirtualClock();
+        var brain = new TradingBrain(
+            (_, _, _, _) =>
+            {
+                attempts++;
+                attemptMs.Add(clock.CurrentMs());
+                return Task.FromException<BrainDecision>(new InvalidOperationException("boom"));
+            },
+            IntervalSettings,
+            StubDeriv());
+        var scheduler = new AutonomousScheduler(
+            brain,
+            IntervalSettings,
+            () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
+            () => Risk(killSwitch: false),
+            () => Array.Empty<string>(),
+            onCycle: null,
+            timeProvider: clock);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = scheduler.StartAsync(cts.Token);
+
+        // Drive the virtual clock. The loop waits in ≤1s one-shot slice timers
+        // that fire only when the test advances, and the backoff deadlines sit
+        // on the 5s schedule — so steps of 1s can never overshoot a deadline.
+        // Advancing ONLY while a timer is pending (and pumping continuations
+        // between advances) keeps fake time pinned to the loop's real state:
+        // a blind advance loop would run whole batches with nothing due — the
+        // continuation drain is lazy — and smear the timestamps under test.
+        while (!run.IsCompleted)
         {
-            await Task.Delay(25, cts.Token);
+            await WaitUntilAsync(() => clock.PendingTimerCount > 0 || run.IsCompleted);
+            if (run.IsCompleted) break;
+            clock.Advance(1_000);
+            for (var i = 0; i < 10; i++) await Task.Yield();
         }
-        scheduler.Stop();
         await run;
 
         Assert.False(scheduler.IsRunning);
-        Assert.Equal(1, cycles);         // stopped before the next interval
+        Assert.Equal(3, scheduler.ConsecutiveFailures);
+        Assert.Equal(3, attempts);
+        Assert.Equal(new long[] { 0, 5_000, 10_000 }, attemptMs);
     }
 }
