@@ -109,6 +109,8 @@ public sealed class BankrollCsvFile : IDisposable
 
     /// <summary>docs/growth-bankroll.csv inside the repo checkout the app is
     /// running from, or null when there is none (e.g. an installed copy).</summary>
+    public string? DocsPath => _docsPath;
+
     public static string? FindRepoDocsPath(string startDirectory)
     {
         for (var dir = Path.GetFullPath(startDirectory); dir is not null; dir = Path.GetDirectoryName(dir))
