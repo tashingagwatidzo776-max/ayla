@@ -133,10 +133,10 @@ public class BankrollDrillTests : IDisposable
         store.Add(GrowthTrade("Drill Beta", +1.44m, daysAgo: 1));
 
         // Both copies carry the per-account daily closing rows (Alpha compounds
-        // 1.80 → 0.80; Beta 0.90 → 2.34) — the trend page's drill-down inputs.
+        // 6.80 → 5.80; Beta 5.90 → 7.34) — seeded from StartBudget (5.00).
         AssertTrendCsvShape(File.ReadAllText(_docsCsv),
-            ("Drill Alpha", 1.80), ("Drill Alpha", 0.80),
-            ("Drill Beta", 0.90), ("Drill Beta", 2.34));
+            ("Drill Alpha", 6.80), ("Drill Alpha", 5.80),
+            ("Drill Beta", 5.90), ("Drill Beta", 7.34));
         Assert.Equal(File.ReadAllText(_docsCsv), File.ReadAllText(_appDataCsv));
 
         // The pulse rides the same refresh: the store's settled picture,
@@ -162,8 +162,8 @@ public class BankrollDrillTests : IDisposable
 
         var committedCsv = Git($"-C \"{_remote}\" show main:docs/growth-bankroll.csv");
         AssertTrendCsvShape(committedCsv,
-            ("Drill Alpha", 1.80), ("Drill Alpha", 0.80),
-            ("Drill Beta", 0.90), ("Drill Beta", 2.34));
+            ("Drill Alpha", 6.80), ("Drill Alpha", 5.80),
+            ("Drill Beta", 5.90), ("Drill Beta", 7.34));
         Assert.Equal(File.ReadAllText(_docsPulse),
             Git($"-C \"{_remote}\" show main:docs/growth-pulse.json"));
 
@@ -205,9 +205,9 @@ public class BankrollDrillTests : IDisposable
         // exact failure mode the risk rail now latches on.
         store.Add(GrowthTrade("Drill Alpha", +0.90m, daysAgo: 1));
         // Local export advanced past the stale committed copy: Alpha compounds
-        // 0.9 → 1.8 while the remote still holds only the 0.9 day.
+        // 5.9 → 6.8 (seeded from StartBudget 5.00) while the remote holds stale content.
         AssertTrendCsvShape(File.ReadAllText(_docsCsv),
-            ("Drill Alpha", 0.9), ("Drill Alpha", 1.8));
+            ("Drill Alpha", 5.9), ("Drill Alpha", 6.8));
 
         var publisher = new BankrollCsvPublisher(_docsCsv);
         var failures = new List<string>();

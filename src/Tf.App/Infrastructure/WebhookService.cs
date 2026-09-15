@@ -82,48 +82,59 @@ public sealed class WebhookService : IDisposable
 
     private async Task PostAsync(string title, string body, int color)
     {
-        try
+        const int maxRetries = 3;
+        for (var attempt = 1; attempt <= maxRetries; attempt++)
         {
-            if (IsDiscord)
+            try
             {
-                var payload = new
+                if (IsDiscord)
                 {
-                    embeds = new[]
+                    var payload = new
                     {
-                        new
+                        embeds = new[]
                         {
-                            title,
-                            description = body,
-                            color,
-                            timestamp = DateTimeOffset.UtcNow.ToString("o")
+                            new
+                            {
+                                title,
+                                description = body,
+                                color,
+                                timestamp = DateTimeOffset.UtcNow.ToString("o")
+                            }
                         }
-                    }
-                };
-                await _http.PostAsJsonAsync(WebhookUrl, payload);
+                    };
+                    var response = await _http.PostAsJsonAsync(WebhookUrl, payload);
+                    if (response.IsSuccessStatusCode) return;
+                }
+                else
+                {
+                    // Slack format
+                    var payload = new
+                    {
+                        attachments = new[]
+                        {
+                            new
+                            {
+                                fallback = $"{title}: {body}",
+                                color = $"#{color:X6}",
+                                title,
+                                text = body,
+                                ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                            }
+                        }
+                    };
+                    var response = await _http.PostAsJsonAsync(WebhookUrl, payload);
+                    if (response.IsSuccessStatusCode) return;
+                }
             }
-            else
+            catch when (attempt < maxRetries)
             {
-                // Slack format
-                var payload = new
-                {
-                    attachments = new[]
-                    {
-                        new
-                        {
-                            fallback = $"{title}: {body}",
-                            color = $"#{color:X6}",
-                            title,
-                            text = body,
-                            ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-                        }
-                    }
-                };
-                await _http.PostAsJsonAsync(WebhookUrl, payload);
+                // Transient failure: retry with exponential backoff.
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt - 1)));
             }
-        }
-        catch
-        {
-            // Fire-and-forget; webhook failures must not affect trading.
+            catch
+            {
+                // Final attempt failed; webhook failures must not affect trading.
+            }
         }
     }
 

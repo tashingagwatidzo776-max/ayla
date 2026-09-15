@@ -248,7 +248,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     {
         var brainKey = Connection.Config.BrainKey;
         var registry = new BrainRegistry();
-        var brainProvider = registry.CreateBrain(brainKey, () => Connection.Ticks, _engine);
+        var brainProvider = registry.CreateBrain(brainKey);
 
         return async (_, _, _, _) =>
         {

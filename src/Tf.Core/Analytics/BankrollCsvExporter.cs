@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Tf.Core.Brain;
 using Tf.Core.Models;
 
 namespace Tf.Core.Analytics;
@@ -34,7 +35,12 @@ public static class BankrollCsvExporter
     /// settled growth trades). Decimal formatting is float-parse-compatible
     /// with the Python script but may keep trailing zeros ("-0.10" vs
     /// "-0.1") — consumers parse floats, never compare bytes.</summary>
-    public static IReadOnlyList<BankrollPoint> DailyClosingBankroll(IReadOnlyList<Trade> trades)
+    /// <param name="trades">Settled growth trades to reduce.</param>
+    /// <param name="startBudget">Starting bankroll per account. When set,
+    /// the first day's closing bankroll is seeded with this value so the CSV
+    /// starts at the session's opening balance instead of 0.</param>
+    public static IReadOnlyList<BankrollPoint> DailyClosingBankroll(
+        IReadOnlyList<Trade> trades, decimal startBudget = 0m)
     {
         var perDay = new Dictionary<(string Account, DateOnly Day), (decimal Pnl, long LastEpoch)>();
         foreach (var t in trades)
@@ -56,7 +62,7 @@ public static class BankrollCsvExporter
             if (kv.Key.Account != currentAccount)
             {
                 currentAccount = kv.Key.Account;
-                bank = 0;
+                bank = startBudget;
             }
 
             bank = Math.Round(bank + kv.Value.Pnl, 2);
@@ -145,7 +151,7 @@ public sealed class BankrollCsvFile : IDisposable
         lock (_sync)
         {
             var csv = BankrollCsvExporter.Render(
-                BankrollCsvExporter.DailyClosingBankroll(_store.Trades));
+                BankrollCsvExporter.DailyClosingBankroll(_store.Trades, GrowthPlan.Default.StartBudget));
             WriteAtomically(_appDataPath, csv, ensureDirectory: true);
             if (_docsPath is not null)
             {

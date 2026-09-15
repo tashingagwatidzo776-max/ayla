@@ -66,6 +66,12 @@ public class BankrollCsvExporterTests : IDisposable
         };
         Assert.Equal(expected.Select(e => (e.EpochSeconds, e.Account, e.Bankroll)),
             rows.Select(r => (r.EpochSeconds, r.Account, r.Bankroll)));
+
+        // With startBudget, the first row per account is seeded.
+        var seeded = BankrollCsvExporter.DailyClosingBankroll(trades, startBudget: 5.00m);
+        Assert.Equal(5.00m - 0.10m, seeded[0].Bankroll); // Alpha day 1: 5.00 + (-0.10)
+        Assert.Equal(5.00m - 0.35m, seeded[1].Bankroll); // Alpha day 2: 4.90 + (-0.25)
+        Assert.Equal(5.00m + 0.50m, seeded[2].Bankroll); // Beta day 1: 5.00 + 0.50
     }
 
     [Fact]
@@ -104,20 +110,21 @@ public class BankrollCsvExporterTests : IDisposable
         Assert.Equal(headerOnly, await File.ReadAllTextAsync(docsPath));
 
         // First settled trade → recomputed row (not appended).
+        // BankrollCsvFile now seeds from GrowthPlan.Default.StartBudget (5.00).
         store.Add(MakeTrade(0.90m, Day1));
-        Assert.Equal($"{headerOnly}{Day1.ToUnixTimeSeconds()},Alpha,0.90\n",
+        Assert.Equal($"{headerOnly}{Day1.ToUnixTimeSeconds()},Alpha,5.90\n",
             await File.ReadAllTextAsync(appDataPath));
 
         // Second trade, same day → the row is rewritten, not duplicated.
         store.Add(MakeTrade(-1.00m, Day1.AddMinutes(30), outcome: ContractStatus.Lost));
-        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,-0.10\n",
+        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,4.90\n",
             await File.ReadAllTextAsync(appDataPath));
         Assert.Equal(await File.ReadAllTextAsync(appDataPath), await File.ReadAllTextAsync(docsPath));
 
         // After dispose, new settlements no longer touch the files.
         hook.Dispose();
         store.Add(MakeTrade(5m, Day2));
-        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,-0.10\n",
+        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,4.90\n",
             await File.ReadAllTextAsync(appDataPath));
     }
 

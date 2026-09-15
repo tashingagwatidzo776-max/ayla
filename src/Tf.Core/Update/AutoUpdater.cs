@@ -152,15 +152,16 @@ public sealed class AutoUpdater : IDisposable
 
     /// <summary>
     /// Install the staged update by replacing files in the current directory.
-    /// Creates a backup first. Returns true if successful.
+    /// Creates a backup first. On partial failure, restores the backup so the
+    /// app is left in a consistent state. Returns true if successful.
     /// </summary>
     public bool InstallUpdate(string stagedDir)
     {
+        var appDir = AppContext.BaseDirectory;
+        var backupDir = Path.Combine(_updateDir, $"backup-{DateTime.UtcNow:yyyyMMdd-HHmmss}");
+
         try
         {
-            var appDir = AppContext.BaseDirectory;
-            var backupDir = Path.Combine(_updateDir, $"backup-{DateTime.UtcNow:yyyyMMdd-HHmmss}");
-
             Progress?.Invoke("Creating backup...");
 
             // Backup current files
@@ -185,9 +186,39 @@ public sealed class AutoUpdater : IDisposable
         }
         catch (Exception ex)
         {
-            Progress?.Invoke($"Install failed: {ex.Message}");
+            Progress?.Invoke($"Install failed, rolling back: {ex.Message}");
+            RollbackFromBackup(backupDir, appDir);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Restores files from the backup directory so a partial install does not
+    /// leave the app in a broken state. Best-effort: individual file restore
+    /// failures are swallowed so the rollback completes as far as possible.
+    /// </summary>
+    private void RollbackFromBackup(string backupDir, string appDir)
+    {
+        if (!Directory.Exists(backupDir))
+        {
+            Progress?.Invoke("No backup to restore from");
+            return;
+        }
+        var restored = 0;
+        foreach (var file in Directory.GetFiles(backupDir))
+        {
+            try
+            {
+                File.Copy(file, Path.Combine(appDir, Path.GetFileName(file)), true);
+                restored++;
+            }
+            catch
+            {
+                // Best-effort: continue restoring remaining files.
+            }
+        }
+
+        Progress?.Invoke($"Rolled back {restored} file(s) from backup");
     }
 
     /// <summary>Create a batch script to restart the app after update.</summary>

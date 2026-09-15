@@ -43,6 +43,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--store", default=DEFAULT_STORE, help="path to trades.json")
     ap.add_argument("-o", "--out", default=DEFAULT_OUT, help="output CSV path")
+    ap.add_argument("--start-budget", type=float, default=0.0,
+                    help="starting bankroll per account (default: 0)")
     args = ap.parse_args()
 
     try:
@@ -74,12 +76,12 @@ def main() -> int:
     # Daily StartBudget reset: each day opens at the session's opening
     # bankroll, so the daily delta is exactly that day's summed P/L. The
     # export records the closing bankroll per day, compounding across days
-    # from a base of 0 (the store holds deltas, not absolute balances).
+    # from the start budget (the store holds deltas, not absolute balances).
     closing = {}  # account -> (running bankroll, last epoch)
     rows = []
     for (acct, _day), (pnl, epoch) in sorted(
             per_day.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[1][1])):
-        bank, last_epoch = closing.get(acct, (0.0, 0))
+        bank, last_epoch = closing.get(acct, (args.start_budget, 0))
         bank = round(bank + pnl, 2)
         closing[acct] = (bank, max(last_epoch, epoch))
         rows.append((max(last_epoch, epoch), acct, bank))

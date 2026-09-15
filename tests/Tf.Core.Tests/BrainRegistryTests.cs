@@ -64,7 +64,7 @@ public class BrainRegistryTests
     {
         var registry = new BrainRegistry();
 
-        Assert.Null(registry.CreateBrain("NoSuchBrain", () => RisingWindow()));
+        Assert.Null(registry.CreateBrain("NoSuchBrain"));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class BrainRegistryTests
     {
         var registry = new BrainRegistry();
 
-        var brain = registry.CreateBrain("Growth", () => RisingWindow());
+        var brain = registry.CreateBrain("Growth");
 
         Assert.IsType<GrowthBrainWrapper>(brain);
     }

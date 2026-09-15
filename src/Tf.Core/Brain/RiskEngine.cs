@@ -26,10 +26,12 @@ public sealed record RiskVerdict(bool Allowed, string Reason)
 public sealed class RiskEngine
 {
     private readonly AppSettings _settings;
+    private readonly TimeProvider _timeProvider;
 
-    public RiskEngine(AppSettings settings)
+    public RiskEngine(AppSettings settings, TimeProvider? timeProvider = null)
     {
         _settings = settings;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public RiskVerdict Evaluate(LlmDecision decision, RiskContext context)
@@ -74,9 +76,9 @@ public sealed class RiskEngine
         }
 
         if (context.LastTradeOutcome == ContractStatus.Lost && context.LastTradeAt is { } lastTrade &&
-            DateTimeOffset.UtcNow - lastTrade < TimeSpan.FromMinutes(_settings.CooldownMinutesAfterLoss))
+            _timeProvider.GetUtcNow() - lastTrade < TimeSpan.FromMinutes(_settings.CooldownMinutesAfterLoss))
         {
-            var remaining = _settings.CooldownMinutesAfterLoss - (DateTimeOffset.UtcNow - lastTrade).TotalMinutes;
+            var remaining = _settings.CooldownMinutesAfterLoss - (_timeProvider.GetUtcNow() - lastTrade).TotalMinutes;
             return RiskVerdict.Reject(
                 $"cooldown after loss — {remaining:0.0} min remaining");
         }
