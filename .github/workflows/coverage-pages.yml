@@ -106,9 +106,10 @@ jobs:
           [ -n "$pct" ] && printf '%s,%s,%s\n' "$(date +%s)" "${{ steps.ci_run.outputs.run_id || github.event.workflow_run.id }}" "$pct" >> ./site/coverage-trend.csv
         fi
         # Bankroll trajectory (optional): the trade store lives on the machine
-        # where the app runs, so its export is a committed file refreshed by
-        # scripts/export_bankroll.py (see that script's docstring). A missing
-        # file simply means the chart has no money axis yet.
+        # where the app trades, which refreshes docs/growth-bankroll.csv
+        # automatically on every settled trade (BankrollCsvFile;
+        # scripts/export_bankroll.py backfills manually). A missing file
+        # simply means the chart has no money axis yet.
         if [ -f ./docs/growth-bankroll.csv ]; then
           cp ./docs/growth-bankroll.csv ./site/growth-bankroll.csv
         fi
