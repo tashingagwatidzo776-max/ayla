@@ -21,7 +21,9 @@ public sealed record GrowthPlan(
     int MaxAutoRestarts = 3,
     double RestartBaseDelaySeconds = 5.0,
     double RestartBackoffFactor = 3.0,
-    decimal? PortfolioDailyDrawdownCap = null)
+    decimal? PortfolioDailyDrawdownCap = null,
+    double OversoldRsi = 32.0,
+    double OverboughtRsi = 68.0)
 {
     public static GrowthPlan Default { get; } = new();
 
@@ -177,8 +179,9 @@ public sealed class GrowthSessionEngine
 /// </summary>
 public static class GrowthBrain
 {
-    public const double OversoldRsi = 32.0;
-    public const double OverboughtRsi = 68.0;
+    // Default thresholds kept as constants for backward compatibility.
+    public const double DefaultOversoldRsi = 32.0;
+    public const double DefaultOverboughtRsi = 68.0;
 
     public static LlmDecision Decide(IReadOnlyList<Tick> window, GrowthSessionEngine session)
     {
@@ -204,12 +207,16 @@ public static class GrowthBrain
             return LlmDecision.Hold("RSI unavailable — insufficient data");
         }
 
+        // Use the plan's configurable RSI thresholds (defaults: 32/68).
+        var oversold = session.Plan.OversoldRsi;
+        var overbought = session.Plan.OverboughtRsi;
+
         BrainDirection direction;
-        if (rsi <= OversoldRsi)
+        if (rsi <= oversold)
         {
             direction = BrainDirection.Rise;
         }
-        else if (rsi >= OverboughtRsi)
+        else if (rsi >= overbought)
         {
             direction = BrainDirection.Fall;
         }
@@ -225,7 +232,7 @@ public static class GrowthBrain
         }
 
         var extreme = Math.Abs(rsi - 50.0);
-        var confidence = Math.Clamp(0.60 + (extreme - (50.0 - OversoldRsi)) / OverboughtRsi * 0.35, 0.60, 0.95);
+        var confidence = Math.Clamp(0.60 + (extreme - (50.0 - oversold)) / overbought * 0.35, 0.60, 0.95);
 
         var label = direction == BrainDirection.Rise ? "RISE (oversold bounce)" : "FALL (overbought pullback)";
         return new LlmDecision(
