@@ -19,6 +19,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     private readonly Action<BrainCycleResult>? _onCycle;
     private readonly TimeSpan _failureBackoff;
     private readonly int _maxConsecutiveFailures;
+    private readonly TimeProvider _timeProvider;
 
     private CancellationTokenSource? _cts;
     private DateTimeOffset _nextAllowedDecision;
@@ -31,7 +32,8 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         Func<IReadOnlyList<string>> recentLessons,
         Action<BrainCycleResult>? onCycle = null,
         TimeSpan? failureBackoff = null,
-        int maxConsecutiveFailures = 3)
+        int maxConsecutiveFailures = 3,
+        TimeProvider? timeProvider = null)
     {
         _failureBackoff = failureBackoff ?? TimeSpan.FromSeconds(5);
         _maxConsecutiveFailures = Math.Max(1, maxConsecutiveFailures);
@@ -41,6 +43,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         _riskContext = riskContext ?? throw new ArgumentNullException(nameof(riskContext));
         _recentLessons = recentLessons ?? throw new ArgumentNullException(nameof(recentLessons));
         _onCycle = onCycle;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public bool IsRunning { get; private set; }
@@ -71,7 +74,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     /// </summary>
     private async Task DelayRespectingSwitchAsync(TimeSpan total, CancellationToken ct, int generation)
     {
-        var deadline = DateTimeOffset.UtcNow + total;
+        var deadline = _timeProvider.GetUtcNow() + total;
         while (true)
         {
             if (generation != Volatile.Read(ref _generation) ||
@@ -80,7 +83,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                 return;
             }
 
-            var remaining = deadline - DateTimeOffset.UtcNow;
+            var remaining = deadline - _timeProvider.GetUtcNow();
             if (remaining <= TimeSpan.Zero)
             {
                 return;
@@ -89,13 +92,33 @@ public sealed class AutonomousScheduler : IAsyncDisposable
             var slice = remaining > SwitchCheckSlice ? SwitchCheckSlice : remaining;
             try
             {
-                await Task.Delay(slice, ct);
+                await DelayAsync(slice, ct);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Waits for <paramref name="delay"/> via the injected provider's timer
+    /// facility (<c>TimeProvider.Delay</c> is not available on net8.0). The
+    /// one-shot timer resolves the wait; cancellation throws
+    /// <see cref="OperationCanceledException"/> as callers expect.
+    /// </summary>
+    private async Task DelayAsync(TimeSpan delay, CancellationToken ct)
+    {
+        if (delay <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var resolved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var timer = _timeProvider.CreateTimer(
+            state => ((TaskCompletionSource)state!).TrySetResult(), resolved,
+            delay, Timeout.InfiniteTimeSpan);
+        await resolved.Task.WaitAsync(ct);
     }
 
     /// <summary>
@@ -114,7 +137,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         ConsecutiveFailures = 0;
         var generation = Interlocked.Increment(ref _generation);
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _nextAllowedDecision = DateTimeOffset.UtcNow;
+        _nextAllowedDecision = _timeProvider.GetUtcNow();
 
         try
         {
@@ -150,7 +173,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                 return; // exit immediately when engagement is detected
             }
 
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
             if (now < _nextAllowedDecision)
             {
                 await DelayRespectingSwitchAsync(_nextAllowedDecision - now, ct, generation);
@@ -165,7 +188,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
 
                 _onCycle?.Invoke(result);
                 ConsecutiveFailures = 0;
-                _nextAllowedDecision = DateTimeOffset.UtcNow.Add(interval);
+                _nextAllowedDecision = _timeProvider.GetUtcNow().Add(interval);
             }
             catch (OperationCanceledException)
             {
