@@ -59,6 +59,17 @@ public sealed partial class DashboardViewModel : ObservableObject
     [ObservableProperty]
     private bool isGovernorWarned;
 
+    /// <summary>Detail line of the last reported bankroll auto-publish
+    /// failure (null while the publish path is healthy or not wired up) —
+    /// a broken export must not hide behind silent retries: the trend
+    /// page's money axis would silently freeze.</summary>
+    [ObservableProperty]
+    private string? bankrollPublishFailureText;
+
+    /// <summary>True while the bankroll auto-publish is in a reported-failed
+    /// state (edge-triggered by the publisher, not recomputed per refresh).</summary>
+    public bool IsBankrollPublishFailing => BankrollPublishFailureText is not null;
+
     /// <summary>Combined net P&amp;L across all growth accounts (portfolio row).</summary>
     [ObservableProperty]
     private string combinedGrowthPnlText = "$0.00";
@@ -370,6 +381,25 @@ public sealed partial class DashboardViewModel : ObservableObject
     private void OnRestartStateChanged(Guid _, int __, bool ___) =>
         OnUiThread(RefreshPortfolioSummary);
 
+    /// <summary>Bankroll auto-publish broke: latch the rail alert (the rail
+    /// change machinery fires the toast + webhook so the user is alerted no
+    /// matter which tab they are on). Any-thread safe — the publisher raises
+    /// from its timer thread.</summary>
+    internal void OnBankrollPublishFailed(string detail) => OnUiThread(() =>
+    {
+        BankrollPublishFailureText =
+            $"Bankroll export not publishing — the trend page's money axis is stale ({detail})";
+        RefreshPortfolioSummary();
+    });
+
+    /// <summary>Bankroll auto-publish recovered after a reported failure:
+    /// release the rail alert (the rail machinery posts the all-clear).</summary>
+    internal void OnBankrollPublishRecovered(string detail) => OnUiThread(() =>
+    {
+        BankrollPublishFailureText = null;
+        RefreshPortfolioSummary();
+    });
+
     /// <summary>
     /// Rebuilds the dashboard's portfolio summary: combined growth P&amp;L
     /// plus one alert line per latched risk rail (governor, kill switch,
@@ -427,6 +457,14 @@ public sealed partial class DashboardViewModel : ObservableObject
         if (IsKillSwitchEngaged)
         {
             alerts.Add("Global kill switch engaged");
+        }
+
+        // Bankroll auto-publish failure is edge-triggered (latched on the
+        // publisher's failure event, released on recovery), not recomputed —
+        // a missing git remote is not visible in any state RefreshPortfolioSummary polls.
+        if (BankrollPublishFailureText is { } publishFailure)
+        {
+            alerts.Add(publishFailure);
         }
 
         if (_hub is null)

@@ -153,6 +153,29 @@ public class GovernorViewModelTests : IDisposable
     }
 
     [Fact]
+    public void DashboardViewModel_BankrollPublishFailure_LatchesRail_AndRecoveryReleasesIt()
+    {
+        var vm = CreateDashboardVm();
+        Assert.False(vm.IsBankrollPublishFailing);
+        Assert.Empty(vm.RiskRailAlerts);
+
+        vm.OnBankrollPublishFailed("git push to main failed — the Pages deploy will not see the refreshed export");
+
+        Assert.True(vm.IsBankrollPublishFailing);
+        Assert.Contains(vm.RiskRailAlerts, a => a.Contains("Bankroll export not publishing", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(vm.RiskRailAlerts, a => a.Contains("money axis is stale", StringComparison.OrdinalIgnoreCase));
+
+        // A repeated failure report does not duplicate the alert.
+        vm.OnBankrollPublishFailed("publish cycle failed: whatever");
+        Assert.Single(vm.RiskRailAlerts, a => a.Contains("Bankroll export not publishing", StringComparison.OrdinalIgnoreCase));
+
+        vm.OnBankrollPublishRecovered("pushed refreshed growth-bankroll.csv to main");
+
+        Assert.False(vm.IsBankrollPublishFailing);
+        Assert.DoesNotContain(vm.RiskRailAlerts, a => a.Contains("Bankroll export", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void DashboardViewModel_GovernorWarning_AppearsInRiskRail_AndClearsOnTrip()
     {
         var vm = CreateDashboardVm();

@@ -14,9 +14,13 @@
 #            older than STALE_HOURS — the alert has gone quiet and nobody
 #            has touched it. Comments on the issue and leaves it exactly
 #            as it is. No-op when nothing is open.
+#   frozen-axis (watchdog only) the app's committed pulse file shows settled
+#            growth trades inside FROZEN_DAYS but the committed CSV's newest
+#            row is older — the machine kept trading while the money axis
+#            stopped advancing. Files on the $DRILL_LABEL issue.
 #
 # Inputs via environment:
-#   DRIFT_MODE      'fail' | 'resolve' | 'no-show' | 'stale'
+#   DRIFT_MODE      'fail' | 'resolve' | 'no-show' | 'stale' | 'frozen-axis'
 #   STALE_HOURS     (stale mode) quiet period before an open alert counts as
 #                   stale (default 48)
 #   RUN_URL         URL of the CI run that produced the verdict
@@ -44,8 +48,10 @@
 # same issue; 'resolve' is a no-op when there is nothing open.
 set -euo pipefail
 
-: "${DRIFT_MODE:?DRIFT_MODE must be 'fail', 'resolve', 'no-show', or 'stale'}"
-if [ "$DRIFT_MODE" != "no-show" ] && [ "$DRIFT_MODE" != "stale" ]; then
+: "${DRIFT_MODE:?DRIFT_MODE must be 'fail', 'resolve', 'no-show', 'stale', or 'frozen-axis'}"
+# frozen-axis is a watchdog verdict like stale: it inspects committed
+# artifacts, not a run, so it needs no run context.
+if [ "$DRIFT_MODE" != "no-show" ] && [ "$DRIFT_MODE" != "stale" ] && [ "$DRIFT_MODE" != "frozen-axis" ]; then
   : "${RUN_URL:?}"
   : "${RUN_NUMBER:?}"
   : "${COMMIT_SHA:?}"
@@ -160,6 +166,137 @@ if [ "$DRIFT_MODE" = "resolve" ]; then
     fi
   else
     echo "No open $DRILL_LABEL issue; nothing to do"
+  fi
+  exit 0
+fi
+
+if [ "$DRIFT_MODE" = "frozen-axis" ]; then
+  # Frozen-axis mode (watchdog only): the app's own pulse file
+  # (docs/growth-pulse.json, written beside the CSV by the export refresh and
+  # committed by the same publish cycle) shows settled growth trades inside
+  # the look-back window, but docs/growth-bankroll.csv's newest row is older
+  # than FROZEN_DAYS — the machine kept trading while the money axis stopped
+  # advancing. This is the silent failure mode no push failure can ever
+  # report (a publish that never happens raises no error anywhere; an export
+  # reduction that went wrong can freeze the axis with byte-identical CSVs),
+  # so the watchdog compares two committed artifacts against each other
+  # instead of waiting for an error that cannot exist. Honest no-ops: no
+  # pulse yet (the app has not run from this checkout since the pulse landed,
+  # or the app is simply off), pulse stale (nothing new owed), CSV fresh
+  # enough (axis is advancing).
+  : "${FROZEN_DAYS:=5}"
+  case "$FROZEN_DAYS" in
+    ''|*[!0-9]*)
+      echo "::error::frozen_days must be a non-negative integer (got '$FROZEN_DAYS')"
+      exit 1 ;;
+  esac
+
+  csv="$GITHUB_WORKSPACE/docs/growth-bankroll.csv"
+  pulse="$GITHUB_WORKSPACE/docs/growth-pulse.json"
+
+  verdict=$(python - "$csv" "$pulse" "$FROZEN_DAYS" <<'PY'
+import csv, json, sys
+from datetime import datetime, timezone
+
+csv_path, pulse_path, frozen_days = sys.argv[1], sys.argv[2], int(sys.argv[3])
+now = int(datetime.now(timezone.utc).timestamp())
+
+newest_csv = 0
+accounts = []
+try:
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            try:
+                newest_csv = max(newest_csv, int(r["epoch_seconds"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+            if r.get("account"):
+                accounts.append(r["account"])
+except FileNotFoundError:
+    pass
+
+# The pulse is the machine-side ground truth (written beside the CSV by the
+# app's export refresh; committed by the same publish cycle). No pulse yet —
+# the app has not run from this checkout since the pulse feature landed —
+# means the check cannot distinguish "app off, nothing owed" from "publish
+# path dead", so it skips honestly rather than crying wolf.
+pulse_last = 0
+pulse_count = 0
+pulse_accounts = []
+try:
+    pulse = json.load(open(pulse_path, encoding="utf-8"))
+    pulse_last = int(pulse.get("last_settled_epoch", 0) or 0)
+    pulse_count = int(pulse.get("settled_trades", 0) or 0)
+    pulse_accounts = [a for a in pulse.get("accounts", []) if a]
+except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+    pass
+
+age_days = (now - newest_csv) / 86400 if newest_csv else float("inf")
+pulse_recent = pulse_last > 0 and (now - pulse_last) < frozen_days * 86400
+if age_days < frozen_days:
+    print(f"no-op: axis is advancing (newest row {age_days:.1f}d old, "
+          f"pulse last settled {pulse_last or 'never'})")
+    sys.exit(0)
+if not pulse_recent:
+    print(f"no-op: CSV is frozen ({age_days:.1f}d old) but the pulse shows no settled "
+          f"growth trades inside the window — nothing new owed to the axis")
+    sys.exit(0)
+
+fromiso = lambda e: datetime.fromtimestamp(e, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+# Everything below is eval'd by the calling shell, so every value is
+# shell-quoted: account names, timestamps, and ages routinely contain spaces
+# or commas, and an unquoted value would parse as a second command under
+# `set -e` and kill the alert before the issue is filed.
+from shlex import quote
+if newest_csv:
+    newest_desc = f"{age_days:.1f} days old (epoch {newest_csv})"
+else:
+    newest_desc = "missing from the checkout"
+body = (
+    f"NEWEST_CSV_DESC={quote(newest_desc)}\n"
+    f"PULSE_LAST_SETTLED_EPOCH={quote(str(pulse_last))}\n"
+    f"PULSE_LAST_SETTLED_UTC={quote(fromiso(pulse_last))}\n"
+    f"PULSE_SETTLED_TRADES={quote(str(pulse_count))}\n"
+    f"PULSE_ACCOUNTS={quote(','.join(pulse_accounts) or '(none)')}"
+)
+print(body)
+PY
+) || { echo "::error::frozen-axis probe failed (unreadable snapshot or CSV)"; exit 1; }
+
+  case "$verdict" in
+    no-op:*)
+      echo "$verdict"
+      exit 0 ;;
+  esac
+
+  # Frozen: file on the ci-bankroll-drift issue (create if none is open).
+  eval "$verdict"
+  ensure_label "$DRILL_LABEL"
+  existing=$(open_issue_for_label "$DRILL_LABEL")
+  note=$(mktemp)
+  {
+    echo "<!-- ${DRILL_LABEL}-frozen -->"
+    echo "🥶 **The money axis is frozen while the app keeps trading.** "
+    echo "The committed pulse file (docs/growth-pulse.json) shows ${PULSE_SETTLED_TRADES} settled growth trade(s) with the newest at ${PULSE_LAST_SETTLED_UTC} UTC "
+    echo "(account(s): ${PULSE_ACCOUNTS}), but docs/growth-bankroll.csv's newest row is "
+    echo "${NEWEST_CSV_DESC}."
+    echo ""
+    echo "The bankroll auto-publish path stopped advancing without any publish failure to report — the usual suspects: the app's export refresh or publish timer stopped (app closed?), the committed CSV stopped being committed, or the export reduction itself drifted (the pulse advances while the CSV does not). The trend page's money axis is silently stale until this is fixed."
+    echo ""
+    echo "This check compares two committed artifacts against each other (pulse vs CSV) precisely because a publish that never happens raises no error anywhere."
+  } > "$note"
+  if [ -n "$existing" ]; then
+    gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$note"
+    rm -f "$note"
+    echo "Posted frozen-axis note on issue #$existing"
+  else
+    gh issue create --repo "$GITHUB_REPOSITORY" \
+      --title "$ISSUE_TITLE" \
+      --body-file "$note" --label "$DRILL_LABEL" \
+      --assignee "${GITHUB_REPOSITORY_OWNER:-}"
+    rm -f "$note"
+    echo "Opened frozen-axis drift issue"
   fi
   exit 0
 fi

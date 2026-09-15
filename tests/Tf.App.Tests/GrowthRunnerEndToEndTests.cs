@@ -39,8 +39,9 @@ namespace Tf.App.Tests;
 ///     MultiAccountHub — bankrolls, loss streaks, trades and session engines
 ///     stay strictly isolated per account.
 ///  7. Broker proposal error: an error response makes the scheduler back off
-///     (≥5s between attempts), the runner survives and the trade log stays
-///     clean until a later attempt succeeds.
+///     on the plan's FailureBackoffSeconds schedule (driven on a virtual
+///     clock, so the backoffs cost no wall time), the runner survives and
+///     the trade log stays clean until a later attempt succeeds.
 ///  8. Floor hit: repeated losses drive the bankroll below the session
 ///     floor — the engine self-stops (CanTrade=false, stake 0) and no
 ///     further proposals are ever sent.
@@ -822,20 +823,30 @@ public class GrowthRunnerEndToEndTests
 
     /// <summary>
     /// Broker failure: the fake Deriv server answers the first two proposal
-    /// requests with API errors. The scheduler must back off (≥5s between
-    /// attempts), keep running, and leave the trade log untouched; when the
-    /// broker recovers, the next cycle trades and settles cleanly, and a
-    /// restart replays the persisted state exactly.
+    /// requests with API errors. The scheduler must back off between attempts
+    /// on the plan's FailureBackoffSeconds schedule, keep running, and leave
+    /// the trade log untouched; when the broker recovers, the next cycle
+    /// trades and settles cleanly, and a restart replays the persisted state
+    /// exactly.
+    ///
+    /// The runner gets a <see cref="TestVirtualClock"/>, so the two backoff
+    /// waits (3 s each, per the plan override below) resolve on virtual time
+    /// advanced by a pump task — the E2E analog of the scheduler's virtual
+    /// backoff unit test. The pump advances only while a timer is pending,
+    /// so fake time is frozen during every broker round trip and the proposal
+    /// timestamps can be asserted as exact virtual instants (t=0, 3s, 6s)
+    /// with no wall-clock jitter floor anywhere.
     /// </summary>
     [Fact]
     public async Task GrowthRunner_ProposalError_BacksOff_SurvivesAndKeepsStateClean()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        var clock = new TestVirtualClock();
 
         const int failedProposals = 2;
         var proposalRequests = 0;
         var buyRequests = 0;
-        var proposalTimes = new ConcurrentQueue<long>();
+        var proposalRequestsSeen = new ConcurrentQueue<long>(); // virtual clock ms at each proposal
         var proposalStakeById = new Dictionary<string, decimal>();
         var contractStakeById = new Dictionary<string, decimal>();
         var openContracts = new HashSet<string>();
@@ -861,7 +872,7 @@ public class GrowthRunnerEndToEndTests
             if (req.TryGetProperty("proposal", out _))
             {
                 proposalRequests++;
-                proposalTimes.Enqueue(Environment.TickCount64);
+                proposalRequestsSeen.Enqueue(clock.CurrentMs());
                 if (proposalRequests <= failedProposals)
                     return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"synthetic proposal failure\"}}}}";
 
@@ -924,7 +935,8 @@ public class GrowthRunnerEndToEndTests
                 connection, store,
                 () => new AppSettings { AutonomyEnabled = true },
                 () => false,
-                journal);
+                journal,
+                timeProvider: clock);
             await using var runnerDisposal = runner;
 
             // FailureBackoffSeconds = 3 overrides the scheduler's 5s default —
@@ -932,6 +944,37 @@ public class GrowthRunnerEndToEndTests
             // backoff after failed cycles.
             var plan = GrowthPlan.Default with { CooldownMinutesAfterLoss = 0, FailureBackoffSeconds = 3.0 };
             await runner.StartAsync(plan);
+
+            // Drive the runner's two 3s backoffs on the virtual clock: each
+            // failed cycle re-arms a one-shot timer that fires only when this
+            // pump advances fake time. Advancing ONLY while a timer is pending
+            // keeps virtual time frozen during every broker round trip (real
+            // network I/O between timer registrations), so the timestamps
+            // asserted below are exact virtual instants, never smeared — and
+            // the whole scenario costs milliseconds of wall time instead of
+            // the two real 3s backoffs a wall-clock runner would sleep.
+            using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            var pump = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!pumpCts.IsCancellationRequested)
+                    {
+                        if (clock.PendingTimerCount > 0)
+                        {
+                            clock.Advance(100);
+                        }
+                        else
+                        {
+                            await Task.Delay(10, pumpCts.Token);
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // shutdown — expected
+                }
+            });
 
             // Two failures, each followed by the configured 3s backoff, then
             // the third attempt succeeds and the trade goes through.
@@ -941,15 +984,25 @@ public class GrowthRunnerEndToEndTests
             await WaitForAsync(() => buyRequests >= 1,
                 TimeSpan.FromSeconds(45), "broker recovery after two failures");
 
-            var times = proposalTimes.ToArray();
-            Assert.True(times.Length >= failedProposals + 1);
-            var backoffMs = (int)(plan.FailureBackoffSeconds * 1000) - 500; // 500ms clock jitter
-            for (var i = 1; i < times.Length; i++)
+            // Stop the clock before the post-recovery asserts: the next cycle
+            // sits 60s (virtual) out, and an advancing pump would let it run
+            // a second trade while the assertions below read the store.
+            pumpCts.Cancel();
+            await pump;
+
+            // The three proposals sit exactly on the virtual backoff schedule:
+            // the first fires immediately when the runner starts, the retry
+            // after one full FailureBackoffSeconds, the recovered attempt
+            // after a second one. Exact equality replaces the old wall-clock
+            // gap floor (with its 500ms jitter allowance) — same contract the
+            // scheduler unit test asserts with virtual timestamps.
+            var times = proposalRequestsSeen.ToArray();
+            Assert.True(times.Length >= failedProposals + 1,
+                $"expected at least {failedProposals + 1} proposal attempts, got {times.Length}");
+            var expectedSchedule = new long[] { 0, 3_000, 6_000 };
+            for (var i = 0; i <= failedProposals; i++)
             {
-                var gap = times[i] - times[i - 1];
-                Assert.True(gap >= backoffMs,
-                    $"expected the ≥{plan.FailureBackoffSeconds:0.#}s configured backoff between proposal " +
-                    $"attempts {i} and {i + 1}, got {gap}ms (floor {backoffMs}ms)");
+                Assert.Equal(expectedSchedule[i], times[i]);
             }
 
             // The recovered cycle trades and settles cleanly.

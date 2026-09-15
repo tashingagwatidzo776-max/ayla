@@ -21,6 +21,20 @@ name: Schedule watchdog
 # dropped CI slot must not be able to silence the thing that reports it.
 # Dispatch with window_hours=0 to rehearse the no-show leg, or a huge
 # window to rehearse the resolve leg.
+#
+# A second, independent job answers a question no push failure can ever
+# report: is the app's committed money axis still advancing? The bankroll
+# auto-publish path's worst failure mode is silence — a publish that never
+# happens raises no error anywhere, the money axis just stops. The app's
+# export refresh keeps docs/growth-pulse.json (settled picture of the trade
+# store) beside the committed CSV; when the pulse shows settled growth
+# trades inside the frozen_days window but docs/growth-bankroll.csv's
+# newest row is older than that, the axis is frozen while the machine keeps
+# trading — filed on the ci-bankroll-drift issue. No pulse, a stale pulse,
+# or a fresh-enough CSV are all honest no-ops. Dispatching rehearses the
+# no-op legs deterministically (a huge frozen_days always reads "advancing",
+# a tiny one defers to the pulse-recent gate); the alert leg itself fires
+# when reality matches — pulse fresher than the CSV by more than frozen_days.
 
 on:
   schedule:
@@ -31,6 +45,10 @@ on:
         description: 'Look-back window in hours for the arrival check (0 rehearses no-show)'
         type: string
         default: '26'
+      frozen_days:
+        description: 'Look-back days for the frozen-axis check (a huge value rehearses the advancing no-op; the alert fires when the pulse is fresher than the CSV by more than this)'
+        type: string
+        default: '5'
 
 permissions:
   actions: read # read CI run history for the arrival check
@@ -111,4 +129,25 @@ jobs:
         DRIFT_MODE: stale
         DRILL_LABEL: ci-drift
         STALE_HOURS: '48'
+      run: bash scripts/drift-alert.sh
+
+  # The silent failure the publisher's own alerts structurally cannot see:
+  # the app fails loudly on push failures now, but a publish that never
+  # happens (stalled timer, dead export refresh, dead app) raises nothing —
+  # the money axis just stops advancing while trades keep settling. The
+  # pulse file (kept beside the CSV by the app's export refresh) is the
+  # machine-side ground truth the CSV is compared against.
+  frozen-axis-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Alert when the committed money axis is frozen
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: frozen-axis
+        DRILL_LABEL: ci-bankroll-drift
+        ISSUE_TITLE: 'Bankroll axis frozen: growth trades settled but growth-bankroll.csv did not advance'
+        FROZEN_DAYS: ${{ inputs.frozen_days || '5' }}
       run: bash scripts/drift-alert.sh

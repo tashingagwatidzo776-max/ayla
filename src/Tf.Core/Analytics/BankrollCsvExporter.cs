@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Tf.Core.Models;
 
 namespace Tf.Core.Analytics;
@@ -90,6 +91,16 @@ public static class BankrollCsvExporter
 /// Two copies are maintained: the canonical export under the app data
 /// directory, and (best-effort, only when the app runs from a repo checkout)
 /// the committed <c>docs/growth-bankroll.csv</c> the Pages deploy publishes.
+///
+/// A third, tiny artifact — <c>docs/growth-pulse.json</c> beside the committed
+/// CSV — records the trade store's settled picture (last settled epoch,
+/// settled count, account names). Its content changes only when a NEW settled
+/// growth trade lands, so committing it costs no extra commits; what it buys
+/// is machine-side ground truth in the repo: the schedule watchdog compares
+/// the pulse against the CSV's newest row and can alert "trades settled
+/// recently but the money axis did not advance" — a freeze no push failure
+/// can ever report (e.g. a deterministically wrong export reduction writes
+/// byte-identical CSVs while trades keep landing).
 /// </summary>
 public sealed class BankrollCsvFile : IDisposable
 {
@@ -125,8 +136,10 @@ public sealed class BankrollCsvFile : IDisposable
         return null;
     }
 
-    /// <summary>Rewrites both copies from the store's current trades. Safe to
-    /// call concurrently — settled trades can arrive from several runners.</summary>
+    /// <summary>Rewrites both copies from the store's current trades, plus the
+    /// docs-side pulse file (machine ground truth for the watchdog's
+    /// frozen-axis check). Safe to call concurrently — settled trades can
+    /// arrive from several runners.</summary>
     public void Refresh()
     {
         lock (_sync)
@@ -137,8 +150,46 @@ public sealed class BankrollCsvFile : IDisposable
             if (_docsPath is not null)
             {
                 WriteAtomically(_docsPath, csv, ensureDirectory: false);
+                WriteAtomically(PulsePathFor(_docsPath), RenderPulse(_store.Trades),
+                    ensureDirectory: false);
             }
         }
+    }
+
+    /// <summary>The pulse file lives beside the committed CSV it vouches for.</summary>
+    public static string PulsePathFor(string docsCsvPath)
+    {
+        var dir = Path.GetDirectoryName(docsCsvPath) ?? ".";
+        return Path.Combine(dir, "growth-pulse.json");
+    }
+
+    /// <summary>Renders the pulse JSON: the store's settled picture. Deliberately
+    /// derived ONLY from settled trades (no timestamps of the export itself) so
+    /// the content is stable between settlements — rewriting it on every refresh
+    /// must not churn commits. Stable content ⇒ the bankroll publisher commits
+    /// it exactly when a new settled growth trade lands, which is precisely the
+    /// recency signal the watchdog's frozen-axis check needs.</summary>
+    public static string RenderPulse(IReadOnlyList<Trade> trades)
+    {
+        long lastSettled = 0;
+        var settledCount = 0;
+        var accounts = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var t in trades)
+        {
+            if (t.Source != TradeSource.Growth || t.AccountName is null) continue;
+            if (t.Outcome is not (ContractStatus.Won or ContractStatus.Lost
+                or ContractStatus.Sold or ContractStatus.Cancelled)) continue;
+
+            settledCount++;
+            if (t.SettledAt.ToUnixTimeSeconds() > lastSettled)
+            {
+                lastSettled = t.SettledAt.ToUnixTimeSeconds();
+            }
+            accounts.Add(t.AccountName);
+        }
+
+        return string.Create(CultureInfo.InvariantCulture,
+            $$"""{"last_settled_epoch":{{lastSettled}},"settled_trades":{{settledCount}},"accounts":[{{string.Join(",", accounts.Select(a => JsonSerializer.Serialize(a)))}}]}""") + "\n";
     }
 
     private void OnTradeAdded(Trade trade) => Refresh();

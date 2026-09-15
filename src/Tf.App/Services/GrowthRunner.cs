@@ -48,6 +48,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     private readonly PerformanceTracker? _tracker;
     private readonly NotificationService? _notifications;
     private readonly WebhookService? _webhook;
+    private readonly TimeProvider _timeProvider;
 
     private AutonomousScheduler? _scheduler;
     private TradingBrain? _brain;
@@ -108,7 +109,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     public GrowthRunner(AccountConnection connection, TradeStore store,
         Func<AppSettings> settings, Func<bool> killSwitch, TradeJournal journal,
         PerformanceTracker? tracker = null, NotificationService? notifications = null,
-        WebhookService? webhook = null)
+        WebhookService? webhook = null, TimeProvider? timeProvider = null)
     {
         Connection = connection;
         _store = store;
@@ -118,6 +119,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         _tracker = tracker;
         _notifications = notifications;
         _webhook = webhook;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public AccountConnection Connection { get; }
@@ -163,7 +165,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
         _scheduler = new AutonomousScheduler(_brain, settings,
             () => Connection.Ticks, risk, lessons, OnCycle,
-            TimeSpan.FromSeconds(plan.FailureBackoffSeconds));
+            TimeSpan.FromSeconds(plan.FailureBackoffSeconds), timeProvider: _timeProvider);
 
         IsRunning = true;
         RaiseState();
