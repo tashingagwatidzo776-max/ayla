@@ -30,6 +30,11 @@ EXEMPT = {"coverage-pages.yml"}
 
 # Fields accepted by `gh run list --json` (superset is safe: we only flag
 # names gh rejects, e.g. the historical `runNumber` typo).
+#
+# Loaded from gh-fields.txt beside this script when present (one field per
+# line, '#' comments allowed) so a gh CLI update that adds fields is a data
+# edit rather than a code edit; the built-in set is the fallback and is
+# always unioned in, so a stale file can only loosen, never break the lint.
 GH_RUN_LIST_FIELDS = {
     "attempt", "conclusion", "createdAt", "completedAt", "databaseId",
     "displayTitle", "event", "headBranch", "headSha", "headCommit",
@@ -37,6 +42,16 @@ GH_RUN_LIST_FIELDS = {
     "startedAt", "status", "updatedAt", "url", "workflowDatabaseId",
     "workflowName",
 }
+
+
+def _load_gh_fields() -> None:
+    extra = Path(__file__).resolve().parent / "gh-fields.txt"
+    if not extra.exists():
+        return
+    for line in extra.read_text(encoding="utf-8").splitlines():
+        field = line.split("#", 1)[0].strip()
+        if field:
+            GH_RUN_LIST_FIELDS.add(field)
 
 findings: list[str] = []
 
@@ -163,6 +178,7 @@ def check_caller_env(fname: str, jobs: dict) -> None:
 
 
 def main() -> int:
+    _load_gh_fields()
     for wf in sorted(WF_DIR.glob("*.yml")) + sorted(WF_DIR.glob("*.yaml")):
         fname = wf.name
         if fname in EXEMPT:

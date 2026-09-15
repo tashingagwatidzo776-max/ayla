@@ -42,11 +42,11 @@ The bankroll path earns the tightest scrutiny because its worst failure is silen
 
 ### Trading Engines
 - **LLM Brain** — AI-powered decisions using OpenAI, DeepSeek, or local Ollama
-- **Growth Brain** — Deterministic $5 challenge engine with bankroll management
+- **Growth Brain** — Deterministic $5 challenge engine with bankroll management (RSI thresholds configurable via the growth plan)
 - **Trend Following** — EMA crossover + ADX trend strength
 - **Breakout** — Bollinger Bands + ATR breakouts
 - **Mean Reversion** — RSI + Z-score configurable mean reversion
-- **Ensemble** — Combines multiple brains with weighted voting
+- **Ensemble** — Combines multiple brains with weighted voting (add sub-brains and weights programmatically via `EnsembleBrainWrapper.AddBrain`)
 
 ### Risk Management
 - Master kill switch (halts all trading immediately)
@@ -164,6 +164,8 @@ All settings are stored under `%APPDATA%\tf\data\`:
 | `RestartBaseDelaySeconds` | 5 | Base delay for restart backoff |
 | `RestartBackoffFactor` | 3.0 | Multiplier per restart attempt |
 | `PortfolioDailyDrawdownCap` | *(unset)* | Combined daily drawdown cap that trips the governor (blank disables) |
+| `OversoldRsi` | 32.0 | RSI below which the Growth Brain treats the market as oversold |
+| `OverboughtRsi` | 68.0 | RSI above which the Growth Brain treats the market as overbought |
 
 ## Project Structure
 

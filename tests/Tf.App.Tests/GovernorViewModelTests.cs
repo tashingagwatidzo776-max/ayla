@@ -125,6 +125,24 @@ public class GovernorViewModelTests : IDisposable
         Assert.DoesNotContain(vm.RiskRailAlerts, a => a.Contains("governor latched", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void DashboardViewModel_GovernorLatchRestoredFromJournal_ShowsInRiskRailAtLaunch()
+    {
+        // A governor latch journaled in a previous session is restored by the
+        // hub before this VM exists — the VM seeds IsGovernorLatched from
+        // _hub.IsGovernorTripped in its constructor and must surface the
+        // alert immediately (the launch-time "toast" path), not wait for a
+        // state change that will never come while the latch just sits there.
+        _hub.TestRaiseGovernorTripped(-2.00m); // stands in for the journal-restore event
+
+        var vm = CreateDashboardVm(); // VM constructed AFTER the latch exists
+
+        Assert.True(vm.IsGovernorLatched,
+            "a latch restored before VM construction must be seeded at launch");
+        Assert.Contains(vm.RiskRailAlerts,
+            a => a.Contains("governor latched", StringComparison.OrdinalIgnoreCase));
+    }
+
     // ─── Pre-trip warning (80% of the portfolio cap) ───────
 
     [Fact]
