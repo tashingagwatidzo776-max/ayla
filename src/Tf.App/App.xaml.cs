@@ -77,6 +77,11 @@ public partial class App : System.Windows.Application
             sp.GetRequiredService<TradeStore>(),
             BankrollCsvFile.FindRepoDocsPath(AppContext.BaseDirectory),
             Path.Combine(SettingsService.DataDir, "growth-bankroll.csv")));
+        // Auto-publishes the committed export to main (single-file, main-only,
+        // best-effort) so the Pages deploy picks it up without a manual commit.
+        services.AddSingleton(sp => new BankrollCsvPublisher(
+            sp.GetRequiredService<BankrollCsvFile>().DocsPath,
+            msg => System.Diagnostics.Debug.WriteLine(msg)));
         services.AddSingleton(sp =>
             new MultiAccountHub(
                 sp.GetRequiredService<AccountVault>(),
@@ -139,8 +144,10 @@ public partial class App : System.Windows.Application
         Ioc.Default.ConfigureServices(provider);
 
         // Eagerly start the growth-bankroll CSV auto-refresh (nothing else
-        // depends on it): writes the initial export and hooks settled trades.
+        // depends on it): writes the initial export and hooks settled trades,
+        // and starts the periodic publish of the committed export.
         _ = provider.GetRequiredService<BankrollCsvFile>();
+        provider.GetRequiredService<BankrollCsvPublisher>().Start();
 
         var window = new MainWindow
         {
@@ -180,7 +187,8 @@ public partial class App : System.Windows.Application
             Ioc.Default.GetService<NotificationService>(),
             Ioc.Default.GetService<WebhookService>(),
             Ioc.Default.GetService<AutoUpdater>(),
-            Ioc.Default.GetService<BankrollCsvFile>()
+            Ioc.Default.GetService<BankrollCsvFile>(),
+            Ioc.Default.GetService<BankrollCsvPublisher>()
         ];
 
         foreach (var d in disposables)
