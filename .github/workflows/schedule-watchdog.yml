@@ -150,4 +150,10 @@ jobs:
         DRILL_LABEL: ci-bankroll-drift
         ISSUE_TITLE: 'Bankroll axis frozen: growth trades settled but growth-bankroll.csv did not advance'
         FROZEN_DAYS: ${{ inputs.frozen_days || '5' }}
+        # frozen-axis never prints these (it inspects committed artifacts, not
+        # a run), but the script requires run context from non-exempt callers
+        # and this run IS the context if the mode ever files a run link.
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
       run: bash scripts/drift-alert.sh
