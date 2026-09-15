@@ -213,6 +213,9 @@ public sealed class EnsembleBrainWrapper : IBrainDecisionProvider
 {
     private readonly List<(IBrainDecisionProvider Brain, double Weight)> _brains = new();
 
+    /// <summary>How many voter brains are currently registered (test seam).</summary>
+    public int TestVoterCount => _brains.Count;
+
     public void AddBrain(IBrainDecisionProvider brain, double weight = 1.0)
     {
         _brains.Add((brain, weight));

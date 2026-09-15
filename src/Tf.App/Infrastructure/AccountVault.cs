@@ -18,8 +18,16 @@ public sealed class AccountConfig
     public int DurationMinutes { get; set; } = 5;
     public decimal StartBudget { get; set; } = 5.00m;
 
-    /// <summary>Which brain type to use for this account (Growth, TrendFollowing, etc.).</summary>
+    /// <summary>Which brain type to use for this account (Growth, TrendFollowing, etc.).
+    /// When this is "Ensemble", <see cref="EnsembleConfig"/> decides the voters.</summary>
     public string BrainKey { get; set; } = "Growth";
+
+    /// <summary>Ensemble configuration: brain keys with optional weights
+    /// ("Growth:1.5 TrendFollowing Breakout:0.5"), parsed by
+    /// <see cref="Tf.Core.Brain.EnsemblePlanParser"/>. Only read when
+    /// <see cref="BrainKey"/> is "Ensemble"; empty means all known brains
+    /// vote with weight 1.</summary>
+    public string EnsembleConfig { get; set; } = "";
 }
 
 /// <summary>

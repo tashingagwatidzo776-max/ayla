@@ -243,12 +243,15 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         return engine;
     }
 
-    /// <summary>Build decision function based on selected brain type.</summary>
+    /// <summary>Build decision function based on selected brain type. The
+    /// Ensemble key builds a weighted-voting ensemble from the account's
+    /// EnsembleConfig text; empty config means every known rules brain votes
+    /// with equal weight. Other keys map straight through the registry.</summary>
     private TradingBrain.Decide BuildDecision()
     {
         var brainKey = Connection.Config.BrainKey;
         var registry = new BrainRegistry();
-        var brainProvider = registry.CreateBrain(brainKey);
+        var brainProvider = BuildProvider(registry, brainKey);
 
         return async (_, _, _, _) =>
         {
@@ -268,6 +271,36 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             var decision = GrowthBrain.Decide(Connection.Ticks, _engine!);
             return new BrainDecision(decision, $"growth-rules: {decision.Reasoning}");
         };
+    }
+
+    /// <summary>Resolves a brain key to a provider, expanding Ensemble into a
+    /// weighted ensemble of rules brains from the account's config text.
+    /// Internal static for tests. Returns null when the key is unknown (the
+    /// caller falls back to the Growth rules brain).</summary>
+    internal static IBrainDecisionProvider? BuildProvider(BrainRegistry registry, string brainKey, string? ensembleConfig = null)
+    {
+        if (!string.Equals(brainKey, "Ensemble", StringComparison.OrdinalIgnoreCase))
+        {
+            return registry.CreateBrain(brainKey);
+        }
+
+        var entries = EnsemblePlanParser.Parse(ensembleConfig);
+        if (entries.Count == 0)
+        {
+            // Unconfigured ensemble: every known rules brain votes equally.
+            entries = EnsemblePlanParser.KnownBrainKeys.Select(k => (k, 1.0)).ToArray();
+        }
+
+        var ensemble = new EnsembleBrainWrapper();
+        foreach (var (key, weight) in entries)
+        {
+            if (registry.CreateBrain(key) is { } voter)
+            {
+                ensemble.AddBrain(voter, weight);
+            }
+        }
+
+        return ensemble;
     }
 
     private Func<AppSettings> BuildSettingsFunc(GrowthPlan plan) => () =>

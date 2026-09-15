@@ -174,4 +174,41 @@ public class MarketHoursSessionsTests
         // Monday 00:00 — still open (Tokyo). Zero wait either way.
         Assert.Equal(TimeSpan.Zero, _hours.TimeUntilNextOpen(Sunday(23)));
     }
+
+    // ─── Growth-path holiday integration ─────────────────
+
+    [Fact]
+    public void TimeUntilNextOpen_HolidayWeekday_SkipsToNextOpenDay()
+    {
+        // The growth runner's market-hours gate calls IsOpen then
+        // TimeUntilNextOpen to schedule the resume. On a holiday (Friday
+        // 2026-12-25) the gate must report closed AND the wait must skip the
+        // whole holiday, not just roll an hour forward into it.
+        var christmas = new DateTimeOffset(2026, 12, 25, 10, 0, 0, TimeSpan.Zero);
+        Assert.False(_hours.IsOpen(christmas));
+
+        var wait = _hours.TimeUntilNextOpen(christmas);
+        var nextOpen = christmas.Add(wait);
+
+        Assert.False(MarketHours.IsHoliday(nextOpen.Date),
+            $"next open {nextOpen} must not land on a holiday");
+        Assert.True(_hours.IsOpen(nextOpen), $"next open {nextOpen} must actually be open");
+    }
+
+    [Fact]
+    public void HolidayGate_ComposesIsOpenAndNextHolidayExactlyAsTheRunnerDoes()
+    {
+        // Locks the exact composition GrowthRunner.OnCycle uses for its
+        // activity line: IsHoliday(now) gates the parenthetical, and
+        // GetNextHoliday(tomorrow) supplies the pointer — never today's
+        // holiday name again.
+        var christmas = new DateTime(2026, 12, 25);
+        var line = MarketHours.IsHoliday(christmas)
+            ? $" (holiday — next: {MarketHours.GetNextHoliday(christmas.AddDays(1)) ?? "none"})"
+            : "";
+
+        Assert.Contains("holiday", line);
+        Assert.DoesNotContain("December 25", line); // today's holiday is not 'next'
+        Assert.NotEqual(" (holiday — next: none)", line); // a pointer exists (Boxing Day)
+    }
 }
