@@ -194,6 +194,7 @@ public partial class App : System.Windows.Application
         // settings toggle so it can be silenced without rebuilding.
         var digest = provider.GetRequiredService<MetricsDigestService>();
         digest.Disabled = !settings.MetricsDigestEnabled;
+        digest.Interval = TimeSpan.FromHours(Math.Max(1, settings.MetricsDigestIntervalHours));
         digest.Start();
 
         // Live telemetry panel on the Performance tab (cycles/latency/errors

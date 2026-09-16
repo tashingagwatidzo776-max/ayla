@@ -77,6 +77,10 @@ public sealed class AppSettings
     /// entirely (trade settlements are unaffected).</summary>
     public bool MetricsDigestEnabled { get; set; } = true;
 
+    /// <summary>Hours between cycle-telemetry digest posts (clamped 1–168
+    /// by the settings editor; default 6).</summary>
+    public int MetricsDigestIntervalHours { get; set; } = 6;
+
     // ── Logging ─────────────────────────────────────────────────
     /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>
     public int LogLevel { get; set; } = 1;

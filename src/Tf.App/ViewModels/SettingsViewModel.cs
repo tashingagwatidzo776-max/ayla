@@ -73,6 +73,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool metricsDigestEnabled = true;
 
     [ObservableProperty]
+    private int metricsDigestIntervalHours = 6;
+
+    [ObservableProperty]
     private int logLevel = 1;
 
     public IReadOnlyList<string> LogLevels { get; } = new[] { "Debug", "Info", "Warn", "Error" };
@@ -117,6 +120,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnMilestone = settings.WebhookOnMilestone;
         WebhookOnCircuitBreaker = settings.WebhookOnCircuitBreaker;
         MetricsDigestEnabled = settings.MetricsDigestEnabled;
+        MetricsDigestIntervalHours = settings.MetricsDigestIntervalHours;
         LogLevel = settings.LogLevel;
         StatusMessage = "Settings loaded.";
     }
@@ -149,6 +153,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnMilestone = WebhookOnMilestone,
         WebhookOnCircuitBreaker = WebhookOnCircuitBreaker,
         MetricsDigestEnabled = MetricsDigestEnabled,
+        MetricsDigestIntervalHours = Math.Clamp(MetricsDigestIntervalHours, 1, 168),
         LogLevel = LogLevel
     };
 
@@ -190,6 +195,34 @@ public sealed partial class SettingsViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>Posts a test message to the webhook URL currently typed in
+    /// the editor (not the last-saved settings) so a misconfigured URL is
+    /// caught here instead of silently failing on a real trade event.</summary>
+    [RelayCommand]
+    private async Task TestWebhookAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            using var webhook = new WebhookService
+            {
+                WebhookUrl = WebhookUrl?.Trim(),
+                IsDiscord = IsDiscordWebhook
+            };
+            var (ok, message) = await webhook.TestConnectionAsync();
+            StatusMessage = ok ? $"✅ {message}" : $"❌ {message}";
         }
         finally
         {

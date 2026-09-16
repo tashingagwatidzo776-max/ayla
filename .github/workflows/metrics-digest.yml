@@ -26,6 +26,10 @@ permissions:
 jobs:
   digest:
     runs-on: ubuntu-latest
+    # Job-level mapping so the post step's `if` can read it: step-level
+    # env is not visible to that step's own condition.
+    env:
+      METRICS_WEBHOOK_URL: ${{ secrets.METRICS_WEBHOOK_URL }}
     steps:
     - uses: actions/checkout@v7
 
@@ -76,8 +80,6 @@ jobs:
 
     - name: Post artifact digest to webhook
       if: env.METRICS_WEBHOOK_URL != ''
-      env:
-        METRICS_WEBHOOK_URL: ${{ secrets.METRICS_WEBHOOK_URL }}
       run: |
         set -euo pipefail
         payload=$(python3 - "$METRICS_WEBHOOK_URL" <<'PY'

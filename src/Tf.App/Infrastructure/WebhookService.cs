@@ -80,6 +80,47 @@ public sealed class WebhookService : IDisposable
         _ = PostAsync(title, message, 0x9AA3B2);
     }
 
+    /// <summary>Synchronous connectivity probe for the settings UI: posts a
+    /// small test payload and reports whether the webhook accepted it.
+    /// Unlike the fire-and-forget senders this surfaces failure instead of
+    /// swallowing it, and bypasses MinInterval — a bad URL is caught now,
+    /// before a real trade event silently fails.</summary>
+    public async Task<(bool Ok, string Message)> TestConnectionAsync()
+    {
+        if (string.IsNullOrEmpty(WebhookUrl))
+        {
+            return (false, "No webhook URL configured");
+        }
+
+        var format = IsDiscord ? "discord" : "slack";
+        try
+        {
+            object payload;
+            if (IsDiscord)
+            {
+                payload = new { embeds = new[] { new { title = "🔔 tf webhook test",
+                    description = "Connection test from the tf settings tab — if you can read this, the webhook works.",
+                    color = 0x00D4AA } } };
+            }
+            else
+            {
+                payload = new { attachments = new[] { new { fallback = "tf webhook test",
+                    color = "#00D4AA", title = "🔔 tf webhook test",
+                    text = "Connection test from the tf settings tab — if you can read this, the webhook works.",
+                    ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds() } } };
+            }
+
+            using var response = await _http.PostAsJsonAsync(WebhookUrl, payload);
+            return response.IsSuccessStatusCode
+                ? (true, $"Test message sent ({format})")
+                : (false, $"Webhook returned HTTP {(int)response.StatusCode} {response.StatusCode}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return (false, $"Connection failed: {ex.Message}");
+        }
+    }
+
     private async Task PostAsync(string title, string body, int color)
     {
         const int maxRetries = 3;

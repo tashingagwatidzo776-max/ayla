@@ -20,6 +20,7 @@ public class WebhookServiceTests : IDisposable
     private readonly List<string> _bodies = new();
     private readonly object _sync = new();
     private readonly CancellationTokenSource _cts = new();
+    private int _statusCode = 200;
 
     public WebhookServiceTests()
     {
@@ -52,7 +53,7 @@ public class WebhookServiceTests : IDisposable
             using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
             var body = await reader.ReadToEndAsync(ct);
 
-            context.Response.StatusCode = 200;
+            context.Response.StatusCode = _statusCode;
             context.Response.Close();
 
             lock (_sync) { _bodies.Add(body); }
@@ -168,5 +169,66 @@ public class WebhookServiceTests : IDisposable
         Assert.Equal(2, bodies.Count);
         Assert.Contains("Risk rail engaged", bodies[0]);
         Assert.Contains("Restarting", bodies[1]);
+    }
+
+    [Fact]
+    public async Task TestConnection_Accepted_ReturnsOkWithFormatName()
+    {
+        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = true };
+
+        var (ok, message) = await webhook.TestConnectionAsync();
+
+        Assert.True(ok, message);
+        Assert.Contains("discord", message);
+        await WaitForAsync(() => Count >= 1);
+        Assert.Contains("webhook test", Assert.Single(Bodies));
+    }
+
+    [Fact]
+    public async Task TestConnection_SlackFormat_SendsSlackPayload()
+    {
+        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = false };
+
+        var (ok, _) = await webhook.TestConnectionAsync();
+
+        Assert.True(ok);
+        await WaitForAsync(() => Count >= 1);
+        using var doc = JsonDocument.Parse(Assert.Single(Bodies));
+        Assert.Contains("tf webhook test", doc.RootElement.GetProperty("attachments")[0].GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task TestConnection_ServerError_SurfacesStatusCode()
+    {
+        _statusCode = 500;
+        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = true };
+
+        var (ok, message) = await webhook.TestConnectionAsync();
+
+        Assert.False(ok);
+        Assert.Contains("500", message);
+    }
+
+    [Fact]
+    public async Task TestConnection_NoUrl_ReportsMissingConfiguration()
+    {
+        using var webhook = new WebhookService { WebhookUrl = null };
+
+        var (ok, message) = await webhook.TestConnectionAsync();
+
+        Assert.False(ok);
+        Assert.Contains("No webhook URL", message);
+    }
+
+    [Fact]
+    public async Task TestConnection_UnreachableHost_ReportsConnectionFailure()
+    {
+        // Port 1 on loopback is never listening — connection refused, no retry hang.
+        using var webhook = new WebhookService { WebhookUrl = "http://127.0.0.1:1/hook" };
+
+        var (ok, message) = await webhook.TestConnectionAsync();
+
+        Assert.False(ok);
+        Assert.Contains("Connection failed", message);
     }
 }
