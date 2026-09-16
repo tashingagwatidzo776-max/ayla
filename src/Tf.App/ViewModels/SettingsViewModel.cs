@@ -70,6 +70,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool webhookOnCircuitBreaker = true;
 
     [ObservableProperty]
+    private bool metricsDigestEnabled = true;
+
+    [ObservableProperty]
     private int logLevel = 1;
 
     public IReadOnlyList<string> LogLevels { get; } = new[] { "Debug", "Info", "Warn", "Error" };
@@ -113,6 +116,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnTrade = settings.WebhookOnTrade;
         WebhookOnMilestone = settings.WebhookOnMilestone;
         WebhookOnCircuitBreaker = settings.WebhookOnCircuitBreaker;
+        MetricsDigestEnabled = settings.MetricsDigestEnabled;
         LogLevel = settings.LogLevel;
         StatusMessage = "Settings loaded.";
     }
@@ -144,6 +148,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnTrade = WebhookOnTrade,
         WebhookOnMilestone = WebhookOnMilestone,
         WebhookOnCircuitBreaker = WebhookOnCircuitBreaker,
+        MetricsDigestEnabled = MetricsDigestEnabled,
         LogLevel = LogLevel
     };
 

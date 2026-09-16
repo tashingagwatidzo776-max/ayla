@@ -207,8 +207,10 @@
                             <RowDefinition Height="Auto" />  <!-- 22 Events -->
                             <RowDefinition Height="Auto" />  <!-- 23 LOGGING -->
                             <RowDefinition Height="Auto" />  <!-- 24 Log level -->
-                            <RowDefinition Height="Auto" />  <!-- 25 Actions -->
-                            <RowDefinition Height="Auto" />  <!-- 26 Status -->
+                            <RowDefinition Height="Auto" />  <!-- 25 Digest toggle -->
+                            <RowDefinition Height="Auto" />  <!-- 26 spare -->
+                            <RowDefinition Height="Auto" />  <!-- 27 Actions -->
+                            <RowDefinition Height="Auto" />  <!-- 28 Status -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -288,11 +290,17 @@
                         <ComboBox Grid.Row="24" Grid.Column="1" Margin="0,0,0,10" Width="120" HorizontalAlignment="Left"
                                   ItemsSource="{Binding SettingsVm.LogLevels}" SelectedIndex="{Binding SettingsVm.LogLevel}" />
 
-                        <StackPanel Grid.Row="25" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
+                        <TextBlock Grid.Row="25" Grid.ColumnSpan="2" Text="MONITORING" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <CheckBox Grid.Row="25" Grid.Column="1" Margin="0,0,0,10"
+                                  Content="Post cycle-telemetry digest to webhook (every 6h; latency/errors)"
+                                  IsChecked="{Binding SettingsVm.MetricsDigestEnabled}"
+                                  ToolTip="Off silences the periodic metrics digest only — trade settlement notifications are unaffected" />
+
+                        <StackPanel Grid.Row="27" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
                             <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
                         </StackPanel>
-                        <TextBlock Grid.Row="26" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                        <TextBlock Grid.Row="28" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
                                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                     </Grid>
@@ -887,6 +895,9 @@
                         <StackPanel>
                             <TextBlock Text="PERFORMANCE DASHBOARD" Style="{StaticResource SectionTitle}" />
                             <TextBlock Text="{Binding PerformanceVm.SummaryText}" FontSize="16" FontWeight="Bold" />
+                            <TextBlock Text="{Binding PerformanceVm.TelemetrySummaryText}" Margin="0,4,0,0"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       ToolTip="Live cycle telemetry (latency/errors) collected by the growth runners and the Brain tab loop; refreshes every 3 seconds" />
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <Button Content="Refresh" Command="{Binding PerformanceVm.RefreshCommand}" />
                                 <Button Content="Export CSV" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
