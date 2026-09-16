@@ -110,6 +110,45 @@ public class BankrollCsvPublisherTests : IDisposable
     }
 
     [Fact]
+    public void PushOnce_BrokenPush_RaisesPublishFailedOnce_ThenRecovery()
+    {
+        var remote = Path.Combine(_dir, "remote.git");
+        Git($"init --bare \"{remote}\"");
+        Git($"-C \"{_repo}\" remote add origin \"{remote}\"");
+        Git($"-C \"{_repo}\" push -u origin main");
+
+        var failures = new List<string>();
+        var recoveries = new List<string>();
+        var publisher = new BankrollCsvPublisher(_docsCsv);
+        publisher.PublishFailed += f => failures.Add(f);
+        publisher.PublishRecovered += r => recoveries.Add(r);
+
+        // Break the remote (origin points at a missing path): the push fails
+        // and the broken stretch is reported exactly once — the next failing
+        // tick stays silent (edge-triggered, not per-tick spam).
+        Git($"-C \"{_repo}\" remote set-url origin \"{Path.Combine(_dir, "missing.git")}\"");
+        File.WriteAllText(_docsCsv, "epoch_seconds,account,bankroll\n3,G,2.0\n");
+        publisher.PushOnce();
+        publisher.PushOnce();
+
+        var failure = Assert.Single(failures);
+        Assert.Contains("push", failure, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(recoveries);
+        Assert.Equal("", Git($"-C \"{_repo}\" status --porcelain").Trim()); // committed locally, retry pending
+
+        // Heal the remote: the retry pushes, recovery is raised exactly once,
+        // and the now-clean checkout keeps quiet on further ticks.
+        Git($"-C \"{_repo}\" remote set-url origin \"{remote}\"");
+        publisher.PushOnce();
+        publisher.PushOnce();
+
+        Assert.Single(recoveries);
+        Assert.Single(failures); // still exactly one failure event
+        var remoteCsv = Git($"-C \"{remote}\" show main:docs/growth-bankroll.csv");
+        Assert.Contains("3,G,2.0", remoteCsv);
+    }
+
+    [Fact]
     public void PushOnce_NeverThrows_OnBrokenRemote()
     {
         // origin points at a dead path: push fails, cycle must not throw and

@@ -4,11 +4,18 @@
 Written by the Coverage Pages deploy from the run being published, so the
 status page always describes exactly what the site shows. The README
 "Pipeline health" section links to it: one glance answers "is CI healthy
-right now?" — gate passing, no open drift issues.
+right now?" — gate passing, no open drift issues, and the app's committed
+money axis still advancing.
 
-Healthy means BOTH:
+Healthy means ALL of:
   - the published run's combined line coverage is at or above the gate
   - there are no open ci-drift issues (failure alerts, no-shows)
+  - the money axis is not stale: docs/growth-bankroll.csv has data and its
+    newest row is younger than the threshold (a frozen axis is the app-side
+    silent failure — the trade store lives on the trading machine, so CI
+    can only see whether the committed CSV is still advancing; the pulse
+    file next to it records the machine-side settled picture the watchdog
+    compares against)
 
 Read-only GitHub API call for the issue list; any failure there is fatal
 (a status page that silently lies is worse than no status page).
@@ -23,6 +30,11 @@ from pathlib import Path
 
 GATE = 60
 SITE = Path("./site")
+DOCS = Path("./docs")
+# The badge goes red when the committed money axis is older than this. Same
+# default as the watchdog's frozen-axis check, for the same reason: five days
+# of silence means the trading app stopped advancing the CSV.
+AXIS_STALE_DAYS = 5
 
 
 def main() -> None:
@@ -73,7 +85,48 @@ def main() -> None:
     ]
 
     gate_passing = line_pct >= GATE
-    healthy = bool(gate_passing and not open_drift)
+
+    # --- money-axis staleness (the app's committed CSV must keep advancing)
+    # The repo's committed CSV + pulse pair is the CI-visible slice of the
+    # trading machine: pulse content changes only when a settled growth trade
+    # lands (BankrollCsvFile), and the CSV's newest row is the axis tip.
+    axis = {
+        "stale_threshold_days": AXIS_STALE_DAYS,
+        "has_data": False,
+        "newest_row_epoch": None,
+        "newest_row_age_days": None,
+        "stale": None,  # None = no data yet: not evaluable, not unhealthy
+        "pulse_last_settled_epoch": None,
+    }
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    committed_csv = DOCS / "growth-bankroll.csv"
+    if committed_csv.exists():
+        newest = 0
+        with committed_csv.open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                try:
+                    newest = max(newest, int(row["epoch_seconds"]))
+                except (KeyError, TypeError, ValueError):
+                    pass  # a malformed row is the trend page's problem, not the badge's
+        if newest:
+            age_days = (now_epoch - newest) / 86400
+            axis.update(
+                has_data=True,
+                newest_row_epoch=newest,
+                newest_row_age_days=round(age_days, 2),
+                stale=age_days >= AXIS_STALE_DAYS,
+            )
+    pulse_path = DOCS / "growth-pulse.json"
+    if pulse_path.exists():
+        try:
+            axis["pulse_last_settled_epoch"] = int(
+                json.loads(pulse_path.read_text(encoding="utf-8")).get("last_settled_epoch") or 0
+            ) or None
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            pass  # unreadable pulse: the watchdog owns that verdict, not the badge
+
+    axis_ok = axis["stale"] is not True  # no data yet ⇒ badge stays on CI health
+    healthy = bool(gate_passing and not open_drift and axis_ok)
     health = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "healthy": healthy,
@@ -92,6 +145,9 @@ def main() -> None:
             "open_issues": open_drift,
             "healthy": not open_drift,
         },
+        # The app's money axis: present, advancing, and how stale the tip is.
+        # stale=null means no data yet (the axis simply has not started).
+        "money_axis": axis,
         # shields.io endpoint-badge fields, so the README can render a
         # dynamic healthy/unhealthy badge straight from health.json.
         "schemaVersion": 1,
@@ -108,6 +164,13 @@ def main() -> None:
     emoji = "\u2705" if healthy else "\u26a0\ufe0f"
     cov_cls = "ok" if gate_passing else "bad"
     drift_cls = "ok" if not open_drift else "bad"
+    if axis["stale"] is True:
+        axis_emoji, axis_text, axis_cls = "\U0001f6c4", "stale", "bad"  # \U0001f6c4 = stopwatch
+    elif axis["has_data"]:
+        axis_emoji, axis_text, axis_cls = "\u2705", f"{axis['newest_row_age_days']:g}d old", "ok"
+    else:
+        axis_emoji, axis_text, axis_cls = "", "no data yet", ""
+    axis_chip = f" {axis_emoji}" if axis_emoji else ""
     rows = "".join(
         f'<li><a href="{d["url"]}">#{d["number"]}</a> {esc(d["title"])}</li>'
         for d in open_drift
@@ -134,6 +197,7 @@ def main() -> None:
 <div class="cards">
   <div class="card">Coverage gate<b class="{cov_cls}">{line_pct:g}% / {GATE}%</b></div>
   <div class="card">Open drift issues<b class="{drift_cls}">{len(open_drift)}</b></div>
+  <div class="card">Money axis{axis_chip}<b class="{axis_cls}">{axis_text}</b></div>
   <div class="card">Trend points<b>{trend_points}</b></div>
 </div>
 {'<h2>Open drift issues</h2><ul>' + rows + '</ul>' if open_drift else ''}

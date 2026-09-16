@@ -36,6 +36,12 @@ public sealed partial class AccountsViewModel : ObservableObject
     [ObservableProperty]
     private string newBrainKey = "Growth";
 
+    /// <summary>Ensemble sub-brains with optional weights, e.g.
+    /// "Growth:1.5 TrendFollowing Breakout:0.5". Only read when the brain
+    /// combo selects Ensemble; blank means all known rules brains vote equally.</summary>
+    [ObservableProperty]
+    private string newEnsembleConfig = "";
+
     [ObservableProperty]
     private bool isBusy;
 
@@ -75,7 +81,8 @@ public sealed partial class AccountsViewModel : ObservableObject
             Currency = baseSettings.Currency,
             DurationMinutes = Math.Max(1, NewDurationMinutes),
             StartBudget = Math.Max(0.50m, NewBudget),
-            BrainKey = string.IsNullOrWhiteSpace(NewBrainKey) ? "Growth" : NewBrainKey.Trim()
+            BrainKey = string.IsNullOrWhiteSpace(NewBrainKey) ? "Growth" : NewBrainKey.Trim(),
+            EnsembleConfig = NewEnsembleConfig.Trim()
         };
 
         try

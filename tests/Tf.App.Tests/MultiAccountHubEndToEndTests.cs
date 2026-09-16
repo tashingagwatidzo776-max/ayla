@@ -1307,4 +1307,246 @@ public class MultiAccountHubEndToEndTests
             try { Directory.Delete(dataDir, recursive: true); } catch { /* best effort */ }
         }
     }
+
+    /// <summary>
+    /// The restart ladder's mid-restart failure: the restart timer fires while
+    /// the account is offline, so <c>StartGrowthCore</c> no-ops (no runner to
+    /// stop, no broker to fail against). Before the hub handled this, the
+    /// attempt was consumed silently — no runner, no retry, nothing announced,
+    /// the engine dead until a human noticed. Now the attempt defers through
+    /// the same bounded ladder: the deferral is journaled and announced
+    /// (attempt 2/3), and the next delayed start succeeds once the account is
+    /// back, proving a mid-restart failure still retries.
+    ///
+    /// The hub and its runner get a <see cref="TestVirtualClock"/>, so the
+    /// restart delays resolve on virtual time. The pump is stopped around the
+    /// offline window (instead of free-running): the restart timer is armed
+    /// before the disconnect and cannot fire until the test advances the
+    /// clock, so the connection is deterministically down at restart time —
+    /// no wall-clock race between the disconnect and the delayed start.
+    /// </summary>
+    [Fact]
+    public async Task MultiAccountHub_MidRestartConnectionDown_DefersAndRetries()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        var clock = new TestVirtualClock();
+        CancellationTokenSource? pumpCts2 = null;
+        Task? pump2 = null;
+
+        var proposalRequests = 0;
+        var buyRequests = 0;
+        var proposalStakeById = new Dictionary<string, decimal>();
+        var contractStakeById = new Dictionary<string, decimal>();
+        var openContracts = new HashSet<string>();
+        var historyPrices = string.Join(",", Enumerable.Range(0, HistoryTickCount)
+            .Select(i => (1.2000 - 0.001 * i).ToString("F5", CultureInfo.InvariantCulture)));
+        var historyTimes = string.Join(",", Enumerable.Range(0, HistoryTickCount)
+            .Select(i => (1700000000L + i).ToString(CultureInfo.InvariantCulture)));
+        var liveTickIndex = 0;
+
+        var server = new FakeDerivServer(req =>
+        {
+            var reqId = req.GetProperty("req_id").GetInt32();
+
+            if (req.TryGetProperty("authorize", out _))
+                return $"{{\"msg_type\":\"authorize\",\"req_id\":{reqId},\"authorize\":{{\"balance\":100.00,\"currency\":\"USD\",\"loginid\":\"VRTCDEF1\"}}}}";
+
+            if (req.TryGetProperty("ticks_history", out _))
+                return $"{{\"msg_type\":\"history\",\"req_id\":{reqId},\"history\":{{\"prices\":[{historyPrices}],\"times\":[{historyTimes}]}},\"pip_size\":5}}";
+
+            if (req.TryGetProperty("ticks", out _))
+                return $"{{\"msg_type\":\"ticks\",\"req_id\":{reqId},\"subscription\":{{\"id\":\"sub-defer\"}}}}";
+
+            if (req.TryGetProperty("proposal", out _))
+            {
+                proposalRequests++;
+                if (proposalRequests <= 3)
+                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"synthetic proposal failure\"}}}}";
+
+                var id = $"PROP-DEF-{proposalRequests}";
+                proposalStakeById[id] = req.GetProperty("amount").GetDecimal();
+                return $"{{\"msg_type\":\"proposal\",\"req_id\":{reqId},\"proposal\":{{\"id\":\"{id}\",\"spot\":1.17000,\"longcode\":\"Rise contract\",\"payout\":1.90}}}}";
+            }
+
+            if (req.TryGetProperty("buy", out _))
+            {
+                buyRequests++;
+                var stake = proposalStakeById[req.GetProperty("buy").GetString() ?? ""];
+                var cid = $"GROWTH-DEF-{buyRequests}";
+                contractStakeById[cid] = stake;
+                return $"{{\"msg_type\":\"buy\",\"req_id\":{reqId},\"buy\":{{\"contract_id\":\"{cid}\",\"buy_price\":{stake.ToString(CultureInfo.InvariantCulture)},\"balance_after\":99.00,\"longcode\":\"Rise contract\"}}}}";
+            }
+
+            if (req.TryGetProperty("proposal_open_contract", out _))
+            {
+                var cid = req.GetProperty("contract_id").GetString() ?? "";
+                var stake = contractStakeById[cid];
+                if (openContracts.Add(cid))
+                    return $"{{\"msg_type\":\"proposal_open_contract\",\"req_id\":{reqId},\"proposal_open_contract\":{{\"contract_id\":\"{cid}\",\"status\":\"open\",\"is_sold\":false,\"entry_spot\":1.17000,\"exit_spot\":0,\"entry_tick_time\":1700000300,\"exit_tick_time\":0,\"buy_price\":{stake.ToString(CultureInfo.InvariantCulture)},\"profit\":0,\"currency\":\"USD\"}}}}";
+                return $"{{\"msg_type\":\"proposal_open_contract\",\"req_id\":{reqId},\"proposal_open_contract\":{{\"contract_id\":\"{cid}\",\"status\":\"won\",\"is_sold\":true,\"entry_spot\":1.17000,\"exit_spot\":1.17800,\"entry_tick_time\":1700000300,\"exit_tick_time\":1700000600,\"buy_price\":{stake.ToString(CultureInfo.InvariantCulture)},\"profit\":{(stake * 0.90m).ToString(CultureInfo.InvariantCulture)},\"currency\":\"USD\"}}}}";
+            }
+
+            return "";
+        }, cts.Token, _ =>
+        {
+            liveTickIndex++;
+            var quote = (1.2000 - 0.001 * (HistoryTickCount + liveTickIndex))
+                .ToString("F5", CultureInfo.InvariantCulture);
+            var epoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            return $"{{\"msg_type\":\"tick\",\"tick\":{{\"symbol\":\"frxEURUSD\",\"quote\":{quote},\"ask\":{quote},\"bid\":{quote},\"epoch\":{epoch},\"pip_size\":5}}}}";
+        });
+        _ = server.RunAsync(cts.Token);
+        await using var serverDisposal = server;
+
+        var dataDir = Path.Combine(Path.GetTempPath(), $"tf_growth_defer_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dataDir);
+        try
+        {
+            var store = new TradeStore(dataDir);
+            using var journal = new TradeJournal(Path.Combine(dataDir, "journal"));
+            var hub = new MultiAccountHub(new MemoryVault(), store, journal,
+                timeProvider: clock);
+
+            var lastHubActivity = "";
+            var restartEvents = new ConcurrentQueue<(int Attempt, bool GaveUp)>();
+            var restart1Announced = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            hub.GrowthActivity += (_, line) =>
+            {
+                lastHubActivity = line;
+                if (line.Contains("attempt 1/3"))
+                {
+                    restart1Announced.TrySetResult();
+                }
+            };
+            hub.RestartStateChanged += (_, attempt, gaveUp) => restartEvents.Enqueue((attempt, gaveUp));
+
+            var config = new AccountConfig { Label = "Defer Demo", ApiToken = "token-defer", IsDemo = true, BrainKey = "Growth" };
+            var connection = hub.AddAccount(config);
+            connection.Client.Endpoint = server.WsUrl;
+            connection.Client.SettlementPollInterval = FastPollInterval;
+            await hub.ConnectAllAsync();
+            Assert.True(connection.IsConnected);
+
+            // 0.4 s restart base → the ladder 0.4 / 0.8 / 1.6 s.
+            var plan = GrowthPlan.Default with
+            {
+                CooldownMinutesAfterLoss = 0,
+                FailureBackoffSeconds = 0.2,
+                MaxAutoRestarts = 3,
+                RestartBaseDelaySeconds = 0.4,
+                RestartBackoffFactor = 3.0,
+                IntervalMinutes = 60
+            };
+            var settings = () => new AppSettings { AutonomyEnabled = true };
+
+            var runner = hub.StartGrowth(connection, plan, settings, () => false);
+            Assert.NotNull(runner);
+
+            // Drive the session's three failed cycles (0.2 s virtual backoffs)
+            // and the scheduler exit on the virtual clock, until the hub
+            // announces restart 1/3 and arms its 0.4 s restart timer.
+            using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            var pump = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!pumpCts.IsCancellationRequested)
+                    {
+                        // Freeze as soon as restart 1/3 is announced: the
+                        // restart timer arms only AFTER that activity line
+                        // (same thread), so the pump can never advance it —
+                        // the disconnect below is deterministically in force
+                        // when the restart timer eventually fires.
+                        if (!restart1Announced.Task.IsCompleted && clock.PendingTimerCount > 0)
+                        {
+                            clock.Advance(50);
+                        }
+                        else
+                        {
+                            await Task.Delay(10, pumpCts.Token);
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // shutdown — expected
+                }
+            });
+            await restart1Announced.Task.WaitAsync(TimeSpan.FromSeconds(30), cts.Token);
+            pumpCts.Cancel();
+            await pump;
+
+            // A deliberate disconnect (not an aborted socket): the client
+            // stops reconnecting, so the outage lasts exactly as long as the
+            // test wants. No runner exists anymore (it self-exited), so the
+            // hub's disconnect bookkeeping cannot cancel the pending restart.
+            await connection.DisconnectAsync();
+            Assert.False(connection.IsConnected);
+            Assert.Equal(1, clock.PendingTimerCount); // the armed restart timer
+
+            // Fire the restart into the outage: StartGrowthCore no-ops, the
+            // attempt defers through the bounded ladder — announced as
+            // attempt 2/3 with the next exponential delay armed.
+            clock.Advance(500);
+            await WaitForAsync(() => lastHubActivity.Contains("attempt 2/3") && clock.PendingTimerCount > 0,
+                TimeSpan.FromSeconds(15), "the deferred restart (attempt 2/3 armed)");
+
+            // Back online mid-ladder: the next delayed start must succeed.
+            await connection.ConnectAsync();
+            Assert.True(connection.IsConnected);
+
+            pumpCts2 = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            pump2 = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!pumpCts2.IsCancellationRequested)
+                    {
+                        if (clock.PendingTimerCount > 0)
+                        {
+                            clock.Advance(50);
+                        }
+                        else
+                        {
+                            await Task.Delay(10, pumpCts2.Token);
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // shutdown — expected
+                }
+            });
+
+            // The deferred attempt (1.2 s virtual) fires, the session starts
+            // for real, and its first cycle trades and settles cleanly.
+            await WaitForAsync(() => store.ForAccount(config.Id, TradeSource.Growth).Count == 1,
+                TimeSpan.FromSeconds(30), "the post-deferral win");
+            pumpCts2!.Cancel();
+            await pump2!;
+
+            var trade = store.ForAccount(config.Id, TradeSource.Growth).Single();
+            Assert.True(trade.IsWin);
+            await WaitForAsync(() => hub.Runners[config.Id].Engine!.Bankroll == 5.90m,
+                TimeSpan.FromSeconds(5), "bankroll on the restarted runner");
+
+            // The ladder consumed exactly two attempts and did not give up.
+            Assert.Equal(2, hub.RestartAttempts[config.Id]);
+            Assert.False(hub.IsGivenUp(config.Id));
+            Assert.Contains(restartEvents, e => e == (2, false));
+
+            // Both legs are journaled: the original restart and the deferral.
+            journal.Dispose();
+            var entries = journal.GetRecent(config.Id, 200);
+            Assert.Contains(entries, e => e.Category == "GROWTH_STATE" && e.Details.Contains("restart 1/3") && e.Details.Contains("(delay 0.4 s)"));
+            Assert.Contains(entries, e => e.Category == "GROWTH_STATE" && e.Details.Contains("restart 2/3") && e.Details.Contains("deferred") && e.Details.Contains("(delay 1.2 s)"));
+
+            await hub.StopGrowthAllAsync();
+            await hub.RemoveAccountAsync(connection);
+        }
+        finally
+        {
+            try { Directory.Delete(dataDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
 }

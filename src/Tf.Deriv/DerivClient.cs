@@ -32,6 +32,12 @@ public sealed class DerivClient : IAsyncDisposable
     private int _reconnectAttempt;
     private string? _authorizedToken;
 
+    // Set by an explicit DisconnectAsync: the caller asked the session to end,
+    // so the receive loop's exit must not schedule a reconnect (the client's
+    // contract is "closes the socket and stops reconnecting"). Cleared by the
+    // next explicit ConnectAsync so a later genuine outage reconnects again.
+    private bool _reconnectSuppressed;
+
     /// <summary>Raised whenever <see cref="Status"/> changes.</summary>
     public event Action<ConnectionStatus>? StatusChanged;
 
@@ -93,6 +99,10 @@ public sealed class DerivClient : IAsyncDisposable
             }
         }
 
+        // An explicit connect re-arms auto-reconnect, even after a previous
+        // explicit disconnect asked for it to stop.
+        _reconnectSuppressed = false;
+
         SetStatus(ConnectionStatus.Connecting);
         _connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _cts = new CancellationTokenSource();
@@ -134,6 +144,10 @@ public sealed class DerivClient : IAsyncDisposable
     /// <summary>Closes the socket and stops reconnecting.</summary>
     public async Task DisconnectAsync()
     {
+        // Before anything cancels: the receive loop is still running and its
+        // exit path decides whether to reconnect — it must see the intent.
+        _reconnectSuppressed = true;
+
         _connectCts?.Cancel();
         _connectCts?.Dispose();
         _connectCts = null;
@@ -464,7 +478,7 @@ public sealed class DerivClient : IAsyncDisposable
         }
         finally
         {
-            if (!_disposed)
+            if (!_disposed && !_reconnectSuppressed)
             {
                 ScheduleReconnect();
             }
@@ -579,7 +593,7 @@ public sealed class DerivClient : IAsyncDisposable
 
     private void ScheduleReconnect()
     {
-        if (_disposed)
+        if (_disposed || _reconnectSuppressed)
         {
             return;
         }
@@ -595,7 +609,7 @@ public sealed class DerivClient : IAsyncDisposable
             try
             {
                 await Task.Delay(delay, ct).ConfigureAwait(false);
-                if (_disposed || ct.IsCancellationRequested)
+                if (_disposed || _reconnectSuppressed || ct.IsCancellationRequested)
                 {
                     return;
                 }

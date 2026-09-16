@@ -10,6 +10,7 @@ setup; run it once after the first successful CI run on the repo.
 | `unit` | Release build + `Category=Unit` tests with coverage |
 | `integration` | Fake-server E2E tests (`Category=Integration`) with coverage |
 | `coverage-report` | Merged coverage report + **60% combined line-coverage gate** |
+| `bankroll-drill` | Weekly bankroll auto-publish path end-to-end drill (Saturdays 05:23 UTC) |
 
 Plus `strict: true` — a PR's branch must be up to date with `main` before the
 merge button unlocks.
@@ -35,7 +36,7 @@ merge button unlocks.
 3. ☑ **Require a pull request before merging** (recommended; skip this if you
    want direct pushes to stay allowed but checks still enforced).
 4. ☑ **Require status checks to pass before merging** → search and select
-   `unit`, `integration`, `coverage-report`.
+   `unit`, `integration`, `coverage-report`, `bankroll-drill`.
 5. ☑ **Require branches to be up to date before merging**.
 6. ☑ **Do not allow bypassing the above settings** / *Include administrators*
    so the rules bind admins too.
@@ -59,7 +60,8 @@ curl -sS -X PUT \
     "checks": [
       { "context": "unit" },
       { "context": "integration" },
-      { "context": "coverage-report" }
+      { "context": "coverage-report" },
+      { "context": "bankroll-drill" }
     ]
   },
   "enforce_admins": true,
@@ -90,15 +92,16 @@ curl -sS -H "Authorization: Bearer $GH_TOKEN" \
   | jq '.required_status_checks'
 ```
 
-Expected: `"strict": true` and the three contexts listed. Common errors:
+Expected: `"strict": true` and the four contexts listed. Common errors:
 `404` with a fine-grained token means the **Administration** permission wasn't
 granted to the repo; `403` means the token lacks admin rights.
 
 ## Maintenance notes
 
-- The three contexts mirror the job names in `.github/workflows/ci.yml`.
-  If a job is ever renamed, update the protection rule **in the same change**
-  or merges hang waiting for a check that no longer exists.
+- The four contexts mirror the job names in `.github/workflows/ci.yml` and
+  `weekly-bankroll-drill.yml`. If a job is ever renamed, update the protection
+  rule **in the same change** or merges hang waiting for a check that no longer
+  exists.
 - The 60% gate lives inside the `coverage-report` job; see the step
   *Enforce minimum line coverage* in `ci.yml`. Raise the gate there (and in
   the matching `::error` message) when the measured coverage improves.

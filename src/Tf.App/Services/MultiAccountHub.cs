@@ -28,6 +28,7 @@ public sealed class MultiAccountHub
     private readonly HeartbeatLog? _heartbeat;
     private readonly NotificationService? _notifications;
     private readonly WebhookService? _webhook;
+    private readonly TimeProvider _timeProvider;
     private readonly GrowthPlan _hubPlan;
     private readonly Dictionary<Guid, GrowthRunner> _runners = new();
     private readonly Dictionary<Guid, GrowthRunner> _observedRunners = new();
@@ -43,7 +44,8 @@ public sealed class MultiAccountHub
     public MultiAccountHub(IAccountVault vault, TradeStore store, TradeJournal journal,
         PerformanceTracker? tracker = null, TickHistoryCache? tickCache = null,
         HeartbeatLog? heartbeat = null, NotificationService? notifications = null,
-        WebhookService? webhook = null, GrowthPlan? hubPlan = null)
+        WebhookService? webhook = null, GrowthPlan? hubPlan = null,
+        TimeProvider? timeProvider = null)
     {
         _vault = vault;
         _store = store;
@@ -54,6 +56,7 @@ public sealed class MultiAccountHub
         _notifications = notifications;
         _webhook = webhook;
         _hubPlan = hubPlan ?? GrowthPlan.Default;
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         foreach (var config in vault.Load())
         {
@@ -545,7 +548,8 @@ public sealed class MultiAccountHub
                 return running;
             }
 
-            var runner = new GrowthRunner(connection, _store, settings, killSwitch, _journal, _tracker, _notifications, _webhook);
+            var runner = new GrowthRunner(connection, _store, settings, killSwitch, _journal,
+                _tracker, _notifications, _webhook, _timeProvider);
             runner.Activity += line => GrowthActivity?.Invoke(runner, line);
             runner.Connection.StateChanged += OnConnectionStateChanged;
             runner.Exited += OnRunnerExited;
@@ -795,35 +799,9 @@ public sealed class MultiAccountHub
         runner.Exited -= OnRunnerExited;
         runner.Connection.StateChanged -= OnConnectionStateChanged;
 
-        var name = runner.Connection.DisplayName;
-        var budget = plan.MaxAutoRestarts;
-
-        if (governorTripped || restarts >= budget)
+        if (governorTripped || restarts >= plan.MaxAutoRestarts)
         {
-            lock (_runnerLock)
-            {
-                var used = _usedRestarts.TryGetValue(id, out var set) ? set : new HashSet<int>();
-                for (var i = 1; i <= budget; i++)
-                {
-                    used.Add(i);
-                }
-                _usedRestarts[id] = used;
-            }
-
-            if (!governorTripped)
-            {
-                _journal.LogGrowthState(id, "autorestart", runner.Engine?.Bankroll ?? 0,
-                    runner.Engine?.LossStreak ?? 0, $"gave up after {budget} restarts");
-                runner.LastActivity =
-                    $"{DateTime.Now:HH:mm:ss} Stopped after repeated broker failures — " +
-                    $"{budget} automatic restarts used. Start the engine manually to try again.";
-                GrowthActivity?.Invoke(runner, runner.LastActivity);
-
-                _notifications?.NotifyCircuitBreakerTripped(name, budget);
-                _webhook?.PostCircuitBreaker(name, budget);
-            }
-
-            RestartStateChanged?.Invoke(id, restarts, true);
+            GiveUpRestart(runner, id, plan, restarts, governorTripped);
             return;
         }
 
@@ -833,37 +811,145 @@ public sealed class MultiAccountHub
             _autoRestartCounts[id] = restarts;
         }
 
-        var delay = TimeSpan.FromSeconds(
-            plan.RestartBaseDelaySeconds * Math.Pow(plan.RestartBackoffFactor, restarts - 1));
-        _journal.LogGrowthState(id, "autorestart", runner.Engine?.Bankroll ?? 0,
-            runner.Engine?.LossStreak ?? 0,
-            $"restart {restarts}/{budget} after repeated failures (delay {delay.TotalSeconds:0.#} s)");
-        runner.LastActivity =
-            $"{DateTime.Now:HH:mm:ss} Restarting after repeated broker failures " +
-            $"(attempt {restarts}/{budget}) in {delay.TotalSeconds:0.#} s…";
-        GrowthActivity?.Invoke(runner, runner.LastActivity);
-        RestartStateChanged?.Invoke(id, restarts, false);
+        ScheduleNextRestart(runner, id, plan, settings, killSwitch, restarts,
+            journalReason: "after repeated failures",
+            activityReason: "after repeated broker failures",
+            webhookReason: "after repeated failures");
+    }
 
-        _notifications?.NotifyCircuitBreakerTripped(name, restarts);
+    /// <summary>
+    /// Marks the bounded restart budget exhausted: fills the used set so
+    /// <see cref="IsGivenUp"/> reports true, journals the give-up, announces
+    /// it (toast + webhook), and raises <see cref="RestartStateChanged"/> with
+    /// gaveUp set. A tripped portfolio governor suppresses the journal and
+    /// notification noise — the trip already announced the stop — but still
+    /// marks the budget used. Shared by the runner-exit path and the deferred
+    /// (could-not-start) restart path so both give up identically.
+    /// </summary>
+    private void GiveUpRestart(GrowthRunner runner, Guid id, GrowthPlan plan,
+        int restarts, bool governorTripped)
+    {
+        var budget = plan.MaxAutoRestarts;
+        lock (_runnerLock)
+        {
+            var used = _usedRestarts.TryGetValue(id, out var set) ? set : new HashSet<int>();
+            for (var i = 1; i <= budget; i++)
+            {
+                used.Add(i);
+            }
+            _usedRestarts[id] = used;
+        }
+
+        if (!governorTripped)
+        {
+            _journal.LogGrowthState(id, "autorestart", runner.Engine?.Bankroll ?? 0,
+                runner.Engine?.LossStreak ?? 0, $"gave up after {budget} restarts");
+            runner.LastActivity =
+                $"{DateTime.Now:HH:mm:ss} Stopped after repeated broker failures — " +
+                $"{budget} automatic restarts used. Start the engine manually to try again.";
+            GrowthActivity?.Invoke(runner, runner.LastActivity);
+
+            _notifications?.NotifyCircuitBreakerTripped(runner.Connection.DisplayName, budget);
+            _webhook?.PostCircuitBreaker(runner.Connection.DisplayName, budget);
+        }
+
+        RestartStateChanged?.Invoke(id, restarts, true);
+    }
+
+    /// <summary>
+    /// Announces and schedules restart <paramref name="attempt"/> on the
+    /// exponential ladder: journal line, activity line,
+    /// <see cref="RestartStateChanged"/>, toast + webhook, then arms the
+    /// cancellation source and fires the delayed restart. The exit path passes
+    /// the original wording byte-for-byte; the deferred path (see
+    /// <see cref="HandleDeferredRestart"/>) passes its own reason phrases so
+    /// the audit trail says why an attempt fired early or late.
+    /// </summary>
+    private void ScheduleNextRestart(GrowthRunner oldRunner, Guid id, GrowthPlan plan,
+        Func<AppSettings> settings, Func<bool> killSwitch, int attempt,
+        string journalReason, string activityReason, string webhookReason)
+    {
+        var budget = plan.MaxAutoRestarts;
+        var delay = TimeSpan.FromSeconds(
+            plan.RestartBaseDelaySeconds * Math.Pow(plan.RestartBackoffFactor, attempt - 1));
+        _journal.LogGrowthState(id, "autorestart", oldRunner.Engine?.Bankroll ?? 0,
+            oldRunner.Engine?.LossStreak ?? 0,
+            $"restart {attempt}/{budget} {journalReason} (delay {delay.TotalSeconds:0.#} s)");
+        oldRunner.LastActivity =
+            $"{DateTime.Now:HH:mm:ss} Restarting {activityReason} " +
+            $"(attempt {attempt}/{budget}) in {delay.TotalSeconds:0.#} s…";
+        GrowthActivity?.Invoke(oldRunner, oldRunner.LastActivity);
+        RestartStateChanged?.Invoke(id, attempt, false);
+
+        _notifications?.NotifyCircuitBreakerTripped(oldRunner.Connection.DisplayName, attempt);
         _webhook?.PostStatus("🔁 Growth engine restarting",
-            $"{name}: restart {restarts}/{budget} in {delay.TotalSeconds:0.#} s after repeated failures");
+            $"{oldRunner.Connection.DisplayName}: restart {attempt}/{budget} in {delay.TotalSeconds:0.#} s {webhookReason}");
 
         CancellationToken ct;
         lock (_runnerLock)
         {
             var cts = new CancellationTokenSource();
             _autoRestartCts[id] = cts;
-            _pendingRestarts[id] = restarts;
+            _pendingRestarts[id] = attempt;
             ct = cts.Token;
         }
 
-        _ = RestartAfterDelayAsync(runner, id, plan, settings, killSwitch, restarts, delay, ct);
+        _ = RestartAfterDelayAsync(oldRunner, id, plan, settings, killSwitch, attempt, delay, ct);
+    }
+
+    /// <summary>
+    /// A scheduled restart fired but the session could not start — the
+    /// connection being down at restart time is the common case: the runner
+    /// already exited, so the hub's disconnect bookkeeping no longer cancels
+    /// pending restarts and the timer fires into the outage. Consuming the
+    /// attempt silently there was the restart ladder's own
+    /// never-retried-after-a-clean-tree gap: no runner, no retry, nothing
+    /// announced — the engine sat dead until a human noticed. The attempt
+    /// instead runs through the same bounded ladder as a failed runner:
+    /// within the budget it is re-announced and retried after the next
+    /// exponential delay; past the budget the hub gives up exactly as
+    /// <see cref="OnRunnerExited"/> does.
+    /// </summary>
+    private void HandleDeferredRestart(GrowthRunner oldRunner, Guid id,
+        GrowthPlan plan, Func<AppSettings> settings, Func<bool> killSwitch, int attempt)
+    {
+        int restarts;
+        bool governorTripped;
+        lock (_runnerLock)
+        {
+            restarts = _autoRestartCounts.TryGetValue(id, out var count) ? count : 0;
+            governorTripped = _governorTripped;
+        }
+
+        if (governorTripped || restarts >= plan.MaxAutoRestarts)
+        {
+            GiveUpRestart(oldRunner, id, plan, restarts, governorTripped);
+            return;
+        }
+
+        restarts++;
+        lock (_runnerLock)
+        {
+            _autoRestartCounts[id] = restarts;
+        }
+
+        ScheduleNextRestart(oldRunner, id, plan, settings, killSwitch, restarts,
+            journalReason: "deferred — the connection was down at restart time",
+            activityReason: "after a deferred restart (the connection was down)",
+            webhookReason: "after a deferred restart (connection was down)");
     }
 
     /// <summary>
     /// Waits out one restart delay and starts the session again — unless the
     /// restart was superseded by a manual start/stop or a disconnect, which
-    /// cancel the token. Fire-and-forget: failures are journaled, never thrown.
+    /// cancel the token. The wait runs on the hub's injected
+    /// <see cref="TimeProvider"/> (virtual in tests, wall clock in the app),
+    /// so the exponential restart ladder is testable without real sleeps.
+    /// When the delayed start cannot run (the connection being down at
+    /// restart time is the common case), the attempt is deferred through the
+    /// same bounded ladder instead of being consumed silently — see
+    /// <see cref="HandleDeferredRestart"/>. Fire-and-forget: failures are
+    /// journaled, never thrown.
     /// </summary>
     private async Task RestartAfterDelayAsync(GrowthRunner oldRunner, Guid id,
         GrowthPlan plan, Func<AppSettings> settings, Func<bool> killSwitch,
@@ -871,7 +957,11 @@ public sealed class MultiAccountHub
     {
         try
         {
-            await Task.Delay(delay, ct).ConfigureAwait(false);
+            var resolved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var timer = _timeProvider.CreateTimer(
+                state => ((TaskCompletionSource)state!).TrySetResult(), resolved,
+                delay, Timeout.InfiniteTimeSpan);
+            await resolved.Task.WaitAsync(ct).ConfigureAwait(false);
 
             bool stillPending;
             lock (_runnerLock)
@@ -889,12 +979,26 @@ public sealed class MultiAccountHub
 
             if (stillPending)
             {
-                StartGrowthCore(oldRunner.Connection, plan, settings, killSwitch);
+                // The start can silently no-op — the connection was down at
+                // restart time, the governor latched mid-wait, or the account
+                // can no longer run. Consuming the attempt then (no runner, no
+                // retry, nothing announced) was the ladder's own
+                // never-retried-after-a-clean-tree gap; defer it through the
+                // same bounded ladder instead.
+                if (StartGrowthCore(oldRunner.Connection, plan, settings, killSwitch) is null)
+                {
+                    HandleDeferredRestart(oldRunner, id, plan, settings, killSwitch, attempt);
+                }
             }
         }
         catch (OperationCanceledException)
         {
-            // Superseded by a manual start/stop or a disconnect — expected.
+            // Superseded by a manual start/stop or a disconnect — expected, but
+            // it still belongs in the audit trail: a restart that quietly
+            // vanishes is indistinguishable from one that was never scheduled.
+            _journal.LogGrowthState(id, "autorestart", oldRunner.Engine?.Bankroll ?? 0,
+                oldRunner.Engine?.LossStreak ?? 0,
+                $"restart {attempt}/{plan.MaxAutoRestarts} superseded (cancelled while waiting)");
         }
         catch (Exception ex)
         {

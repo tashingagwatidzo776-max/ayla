@@ -125,6 +125,24 @@ public class GovernorViewModelTests : IDisposable
         Assert.DoesNotContain(vm.RiskRailAlerts, a => a.Contains("governor latched", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void DashboardViewModel_GovernorLatchRestoredFromJournal_ShowsInRiskRailAtLaunch()
+    {
+        // A governor latch journaled in a previous session is restored by the
+        // hub before this VM exists — the VM seeds IsGovernorLatched from
+        // _hub.IsGovernorTripped in its constructor and must surface the
+        // alert immediately (the launch-time "toast" path), not wait for a
+        // state change that will never come while the latch just sits there.
+        _hub.TestRaiseGovernorTripped(-2.00m); // stands in for the journal-restore event
+
+        var vm = CreateDashboardVm(); // VM constructed AFTER the latch exists
+
+        Assert.True(vm.IsGovernorLatched,
+            "a latch restored before VM construction must be seeded at launch");
+        Assert.Contains(vm.RiskRailAlerts,
+            a => a.Contains("governor latched", StringComparison.OrdinalIgnoreCase));
+    }
+
     // ─── Pre-trip warning (80% of the portfolio cap) ───────
 
     [Fact]
@@ -150,6 +168,29 @@ public class GovernorViewModelTests : IDisposable
         _hub.TestRaiseGovernorRearmed();
         Assert.False(vm.IsGovernorTripped);
         Assert.False(vm.IsGovernorWarned);
+    }
+
+    [Fact]
+    public void DashboardViewModel_BankrollPublishFailure_LatchesRail_AndRecoveryReleasesIt()
+    {
+        var vm = CreateDashboardVm();
+        Assert.False(vm.IsBankrollPublishFailing);
+        Assert.Empty(vm.RiskRailAlerts);
+
+        vm.OnBankrollPublishFailed("git push to main failed — the Pages deploy will not see the refreshed export");
+
+        Assert.True(vm.IsBankrollPublishFailing);
+        Assert.Contains(vm.RiskRailAlerts, a => a.Contains("Bankroll export not publishing", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(vm.RiskRailAlerts, a => a.Contains("money axis is stale", StringComparison.OrdinalIgnoreCase));
+
+        // A repeated failure report does not duplicate the alert.
+        vm.OnBankrollPublishFailed("publish cycle failed: whatever");
+        Assert.Single(vm.RiskRailAlerts, a => a.Contains("Bankroll export not publishing", StringComparison.OrdinalIgnoreCase));
+
+        vm.OnBankrollPublishRecovered("pushed refreshed growth-bankroll.csv to main");
+
+        Assert.False(vm.IsBankrollPublishFailing);
+        Assert.DoesNotContain(vm.RiskRailAlerts, a => a.Contains("Bankroll export", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

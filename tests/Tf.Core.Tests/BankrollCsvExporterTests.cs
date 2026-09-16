@@ -66,6 +66,12 @@ public class BankrollCsvExporterTests : IDisposable
         };
         Assert.Equal(expected.Select(e => (e.EpochSeconds, e.Account, e.Bankroll)),
             rows.Select(r => (r.EpochSeconds, r.Account, r.Bankroll)));
+
+        // With startBudget, the first row per account is seeded.
+        var seeded = BankrollCsvExporter.DailyClosingBankroll(trades, startBudget: 5.00m);
+        Assert.Equal(5.00m - 0.10m, seeded[0].Bankroll); // Alpha day 1: 5.00 + (-0.10)
+        Assert.Equal(5.00m - 0.35m, seeded[1].Bankroll); // Alpha day 2: 4.90 + (-0.25)
+        Assert.Equal(5.00m + 0.50m, seeded[2].Bankroll); // Beta day 1: 5.00 + 0.50
     }
 
     [Fact]
@@ -104,20 +110,21 @@ public class BankrollCsvExporterTests : IDisposable
         Assert.Equal(headerOnly, await File.ReadAllTextAsync(docsPath));
 
         // First settled trade → recomputed row (not appended).
+        // BankrollCsvFile now seeds from GrowthPlan.Default.StartBudget (5.00).
         store.Add(MakeTrade(0.90m, Day1));
-        Assert.Equal($"{headerOnly}{Day1.ToUnixTimeSeconds()},Alpha,0.90\n",
+        Assert.Equal($"{headerOnly}{Day1.ToUnixTimeSeconds()},Alpha,5.90\n",
             await File.ReadAllTextAsync(appDataPath));
 
         // Second trade, same day → the row is rewritten, not duplicated.
         store.Add(MakeTrade(-1.00m, Day1.AddMinutes(30), outcome: ContractStatus.Lost));
-        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,-0.10\n",
+        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,4.90\n",
             await File.ReadAllTextAsync(appDataPath));
         Assert.Equal(await File.ReadAllTextAsync(appDataPath), await File.ReadAllTextAsync(docsPath));
 
         // After dispose, new settlements no longer touch the files.
         hook.Dispose();
         store.Add(MakeTrade(5m, Day2));
-        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,-0.10\n",
+        Assert.Equal($"{headerOnly}{Day1.AddMinutes(30).ToUnixTimeSeconds()},Alpha,4.90\n",
             await File.ReadAllTextAsync(appDataPath));
     }
 
@@ -131,6 +138,60 @@ public class BankrollCsvExporterTests : IDisposable
         store.Add(MakeTrade(0.90m, Day1));
 
         Assert.Contains("Alpha", await File.ReadAllTextAsync(appDataPath));
+    }
+
+    [Fact]
+    public async Task FileHook_WritesPulseBesideTheDocsCsv_AndOnlyWhenSettledPictureChanges()
+    {
+        var store = new TradeStore(Path.Combine(_dir, "store"));
+        var docsDir = Path.Combine(_dir, "repo", "docs");
+        Directory.CreateDirectory(docsDir);
+        var docsPath = Path.Combine(docsDir, "growth-bankroll.csv");
+        var pulsePath = BankrollCsvFile.PulsePathFor(docsPath);
+
+        using var hook = new BankrollCsvFile(store, docsPath, Path.Combine(_dir, "appdata", "growth-bankroll.csv"));
+
+        // Empty store → zeroed pulse.
+        Assert.Equal("{\"last_settled_epoch\":0,\"settled_trades\":0,\"accounts\":[]}\n",
+            await File.ReadAllTextAsync(pulsePath));
+
+        // A settled growth trade advances the pulse: last epoch, count, accounts.
+        store.Add(MakeTrade(0.90m, Day1));
+        store.Add(MakeTrade(0.50m, Day1, accountName: "Beta"));
+        Assert.Equal(
+            $"{{\"last_settled_epoch\":{Day1.ToUnixTimeSeconds()},\"settled_trades\":2,\"accounts\":[\"Alpha\",\"Beta\"]}}\n",
+            await File.ReadAllTextAsync(pulsePath));
+
+        // An UNSETTLED trade (open) must NOT advance the pulse: the pulse
+        // means "a settlement landed", and it is the frozen-axis watchdog's
+        // recency signal.
+        store.Add(MakeTrade(0.10m, Day2, outcome: ContractStatus.Open));
+        Assert.Equal(
+            $"{{\"last_settled_epoch\":{Day1.ToUnixTimeSeconds()},\"settled_trades\":2,\"accounts\":[\"Alpha\",\"Beta\"]}}\n",
+            await File.ReadAllTextAsync(pulsePath));
+
+        // A day-2 settlement advances it again (the watchdog's freshness leg).
+        store.Add(MakeTrade(-0.25m, Day2, outcome: ContractStatus.Sold));
+        Assert.Equal(
+            $"{{\"last_settled_epoch\":{Day2.ToUnixTimeSeconds()},\"settled_trades\":3,\"accounts\":[\"Alpha\",\"Beta\"]}}\n",
+            await File.ReadAllTextAsync(pulsePath));
+    }
+
+    [Fact]
+    public void RenderPulse_IsInvariantCulture_AndStableAcrossRecounts()
+    {
+        var trades = new List<Trade>
+        {
+            MakeTrade(0.90m, Day1),
+            MakeTrade(5.00m, Day1, source: TradeSource.Manual), // excluded
+            MakeTrade(0.70m, Day1, accountName: null),           // excluded
+        };
+
+        // Same settled picture → byte-identical pulse regardless of how many
+        // times it is re-rendered (commit-stability guarantee).
+        Assert.Equal(BankrollCsvFile.RenderPulse(trades), BankrollCsvFile.RenderPulse(trades));
+        Assert.Equal($"{{\"last_settled_epoch\":{Day1.ToUnixTimeSeconds()},\"settled_trades\":1,\"accounts\":[\"Alpha\"]}}\n",
+            BankrollCsvFile.RenderPulse(trades));
     }
 
     [Fact]

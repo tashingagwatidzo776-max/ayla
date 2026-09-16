@@ -108,8 +108,11 @@ public sealed class MarketHours
     {
         if (IsOpen(utcTime)) return TimeSpan.Zero;
 
-        // Walk forward hour by hour until we find an open session (max 48 hours).
-        for (var h = 1; h <= 48; h++)
+        // Walk forward hour by hour until we find an open session. The window
+        // must span a holiday adjoining a weekend (e.g. Christmas Friday →
+        // Sunday 22:00 is 60h away) — 48h silently landed the caller on a
+        // closed hour, so the growth gate would resume into a closed market.
+        for (var h = 1; h <= 24 * 14; h++)
         {
             var candidate = utcTime.AddHours(h);
             if (IsOpen(candidate))

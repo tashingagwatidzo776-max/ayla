@@ -1,5 +1,6 @@
 using System.IO;
 using Tf.App.ViewModels;
+using Tf.Core;
 using Tf.Core.Analytics;
 using Tf.Core.Models;
 
@@ -34,6 +35,47 @@ public class PerformanceViewModelTests : IDisposable
         profit >= 0 ? ContractStatus.Won : ContractStatus.Lost,
         profit, 1.165, 1700000600, settledAt,
         Guid.NewGuid(), accountName, source);
+
+    [Fact]
+    public void ExportMetrics_WritesCsvAndJsonFromStore()
+    {
+        var store = new TradeStore(_dir);
+        store.Add(Trade(0.90m, "Growth", "Alpha", DateTimeOffset.Now));
+        store.Add(Trade(-1.00m, "Growth", "Alpha", DateTimeOffset.Now));
+        var exportDir = Path.Combine(_dir, "export");
+
+        var vm = new PerformanceViewModel(_tracker, store, exportDir);
+        vm.ExportMetricsCommand.Execute(null);
+
+        var stamp = DateTime.UtcNow.ToString("yyyyMMdd");
+        var csvPath = Path.Combine(exportDir, $"tf_metrics_{stamp}.csv");
+        var jsonPath = Path.Combine(exportDir, $"tf_metrics_{stamp}.json");
+
+        Assert.True(File.Exists(csvPath), $"expected metrics CSV at {csvPath}");
+        Assert.True(File.Exists(jsonPath), $"expected metrics JSON at {jsonPath}");
+
+        var csv = File.ReadAllText(csvPath);
+        Assert.StartsWith("account,trades,wins,losses,win_rate,total_pnl,mean_pnl,max_stake", csv);
+        Assert.Contains("Alpha,2,1,1,", csv); // 2 trades, 1 win, 1 loss
+
+        var json = File.ReadAllText(jsonPath);
+        Assert.Contains("\"total_trades\": 2", json);
+        Assert.Contains("\"account\": \"Alpha\"", json);
+        Assert.DoesNotContain("latency_ms", json); // no latency samples supplied
+
+        Assert.Contains(exportDir, vm.StatusMessage); // user sees where the files went
+    }
+
+    [Fact]
+    public void ExportMetrics_WithoutStore_ShowsUnavailableStatus()
+    {
+        var vm = new PerformanceViewModel(_tracker, metricsExportDirectory: _dir);
+
+        vm.ExportMetricsCommand.Execute(null);
+
+        Assert.Contains("unavailable", vm.StatusMessage);
+        Assert.Empty(Directory.GetFiles(_dir, "tf_metrics_*"));
+    }
 
     [Fact]
     public void Refresh_EmptyTracker_ShowsZeroedSummary()
@@ -108,5 +150,103 @@ public class PerformanceViewModelTests : IDisposable
 
         Assert.Single(vm.EquityCurve);
         Assert.Equal("", vm.EquityCurvePoints); // needs > 1 point
+    }
+
+    // ─── Edge cases: negative P&L, single account, export ────────
+
+    [Fact]
+    public void Refresh_AllLosingTrades_NegativeCurveAndRanking()
+    {
+        var today = DateTimeOffset.Now;
+        _tracker.RecordTrade(Trade(-1.00m, "Growth", "Alpha", today));
+        _tracker.RecordTrade(Trade(-0.50m, "Manual", "Alpha", today));
+
+        var vm = new PerformanceViewModel(_tracker);
+        vm.RefreshCommand.Execute(null);
+
+        // Summary reports the loss.
+        Assert.Contains("Trades: 2", vm.SummaryText);
+        Assert.Contains("-1.5", vm.SummaryText);
+
+        // Both strategies lost; "least losing" ranks first (Manual −0.50 > Growth −1.00).
+        Assert.Equal("Manual", vm.StrategyComparison[0].Strategy);
+
+        // Equity curve walks downward monotonically.
+        Assert.Equal(-1.00m, vm.EquityCurve[0].Value);
+        Assert.Equal(-1.50m, vm.EquityCurve[^1].Value);
+    }
+
+    [Fact]
+    public void Refresh_FlatEquityCurve_NoDivideByZero()
+    {
+        // Two points with identical value → range 0 → the polyline builder
+        // must not divide by zero.
+        var today = DateTimeOffset.Now;
+        _tracker.RecordTrade(Trade(0.00m, "Growth", "Alpha", today));
+        _tracker.RecordTrade(Trade(0.00m, "Growth", "Alpha", today));
+
+        var vm = new PerformanceViewModel(_tracker);
+        vm.RefreshCommand.Execute(null);
+
+        Assert.Equal(2, vm.EquityCurve.Count);
+        Assert.False(string.IsNullOrWhiteSpace(vm.EquityCurvePoints));
+    }    [Fact]
+    public void Refresh_SingleAccount_AllRowsCarryItsName()
+    {
+        // One account id for all trades — the tracker keys stats by AccountId.
+        var today = DateTimeOffset.Now;
+        var soloId = Guid.NewGuid();
+        for (var i = 0; i < 3; i++)
+        {
+            _tracker.RecordTrade(new Trade(
+                Guid.NewGuid(), "frxEURUSD", Direction.Rise, 1m, "USD", 1.17, 1, "C-1",
+                ContractStatus.Won, 0.25m, 1.165, 2, today, soloId, "Solo", "Growth"));
+        }
+
+        var vm = new PerformanceViewModel(_tracker);
+        vm.RefreshCommand.Execute(null);
+
+        var stat = Assert.Single(vm.AccountStats);
+        Assert.Equal("Solo", stat.AccountName);
+        Assert.Equal(3, stat.TotalTrades);
+        Assert.Equal(0.75m, stat.TotalProfit);
+    }
+
+    [Fact]
+    public void ExportToCsv_WritesDailyHistoryToDisk()
+    {
+        var today = DateTimeOffset.Now;
+        _tracker.RecordTrade(Trade(0.90m, "Growth", "Alpha", today));
+        _tracker.RecordTrade(Trade(-0.20m, "Growth", "Alpha", today));
+
+        var vm = new PerformanceViewModel(_tracker);
+        vm.RefreshCommand.Execute(null);
+        vm.ExportToCsvCommand.Execute(null);
+
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            $"tf_performance_{DateTime.UtcNow:yyyyMMdd}.csv");
+        Assert.True(File.Exists(expected), $"expected export at {expected}");
+        var content = File.ReadAllText(expected);
+        Assert.StartsWith("Date,Trades,Profit,WinRate,RunningPnl", content);
+        // Daily history is per account-day: two rows (0.90, −0.20), not summed.
+        Assert.Contains("0.9", content);
+        Assert.Contains("-0.2", content);
+        File.Delete(expected); // keep MyDocuments clean after asserting
+    }
+
+    [Fact]
+    public void Refresh_Twice_IdempotentCollections()
+    {
+        var today = DateTimeOffset.Now;
+        _tracker.RecordTrade(Trade(0.90m, "Growth", "Alpha", today));
+
+        var vm = new PerformanceViewModel(_tracker);
+        vm.RefreshCommand.Execute(null);
+        vm.RefreshCommand.Execute(null); // second refresh must not duplicate rows
+
+        Assert.Single(vm.AccountStats);
+        Assert.Single(vm.StrategyStats);
+        Assert.Single(vm.EquityCurve);
     }
 }

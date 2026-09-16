@@ -79,6 +79,9 @@ public partial class App : System.Windows.Application
             Path.Combine(SettingsService.DataDir, "growth-bankroll.csv")));
         // Auto-publishes the committed export to main (single-file, main-only,
         // best-effort) so the Pages deploy picks it up without a manual commit.
+        // Failures retry on later ticks but are also raised as events — the
+        // dashboard risk rail latches on them so a broken publish (and the
+        // frozen money axis it causes) cannot hide behind silent retries.
         services.AddSingleton(sp => new BankrollCsvPublisher(
             sp.GetRequiredService<BankrollCsvFile>().DocsPath,
             msg => System.Diagnostics.Debug.WriteLine(msg)));
@@ -145,9 +148,15 @@ public partial class App : System.Windows.Application
 
         // Eagerly start the growth-bankroll CSV auto-refresh (nothing else
         // depends on it): writes the initial export and hooks settled trades,
-        // and starts the periodic publish of the committed export.
+        // and starts the periodic publish of the committed export. Publish
+        // failures/recoveries surface on the dashboard risk rail (toast +
+        // webhook fire from the rail's change machinery).
         _ = provider.GetRequiredService<BankrollCsvFile>();
-        provider.GetRequiredService<BankrollCsvPublisher>().Start();
+        var publisher = provider.GetRequiredService<BankrollCsvPublisher>();
+        var dashboardVm = provider.GetRequiredService<DashboardViewModel>();
+        publisher.PublishFailed += dashboardVm.OnBankrollPublishFailed;
+        publisher.PublishRecovered += dashboardVm.OnBankrollPublishRecovered;
+        publisher.Start();
 
         var window = new MainWindow
         {

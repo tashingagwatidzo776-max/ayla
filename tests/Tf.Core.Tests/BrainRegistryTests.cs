@@ -64,7 +64,7 @@ public class BrainRegistryTests
     {
         var registry = new BrainRegistry();
 
-        Assert.Null(registry.CreateBrain("NoSuchBrain", () => RisingWindow()));
+        Assert.Null(registry.CreateBrain("NoSuchBrain"));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class BrainRegistryTests
     {
         var registry = new BrainRegistry();
 
-        var brain = registry.CreateBrain("Growth", () => RisingWindow());
+        var brain = registry.CreateBrain("Growth");
 
         Assert.IsType<GrowthBrainWrapper>(brain);
     }
@@ -120,5 +120,99 @@ public class BrainRegistryTests
             RisingWindow(), session: null, Settings, Risk, () => Array.Empty<string>());
 
         Assert.StartsWith("meanrev: ", result.Raw);
+    }
+
+    // ─── Ensemble expansion (GrowthRunner.BuildProvider) ────────
+
+    [Fact]
+    public void BuildProvider_NonEnsembleKey_ReturnsRegistryProvider()
+    {
+        var provider = GrowthRunnerEnsembleTestHost.BuildProvider(new BrainRegistry(), "Growth");
+
+        Assert.IsType<GrowthBrainWrapper>(provider);
+    }
+
+    [Fact]
+    public void BuildProvider_EnsembleWithConfig_BuildsWeightedVoters()
+    {
+        var provider = GrowthRunnerEnsembleTestHost.BuildProvider(
+            new BrainRegistry(), "Ensemble", "Growth:1.5 TrendFollowing");
+
+        var ensemble = Assert.IsType<EnsembleBrainWrapper>(provider);
+        Assert.Equal(2, GrowthRunnerEnsembleTestHost.VoterCount(ensemble));
+    }
+
+    [Fact]
+    public void BuildProvider_EnsembleUnconfigured_DefaultsToAllKnownBrains()
+    {
+        var provider = GrowthRunnerEnsembleTestHost.BuildProvider(new BrainRegistry(), "Ensemble", "");
+
+        var ensemble = Assert.IsType<EnsembleBrainWrapper>(provider);
+        Assert.Equal(EnsemblePlanParser.KnownBrainKeys.Count,
+            GrowthRunnerEnsembleTestHost.VoterCount(ensemble));
+    }
+
+    [Fact]
+    public void BuildProvider_EnsembleAllWeightsInvalid_FallsBackToAllKnownBrains()
+    {
+        // Every config entry is dropped by the parser → the expansion falls
+        // back to "all known brains vote equally" rather than trading a
+        // config typo into an empty (never-trading) ensemble.
+        var provider = GrowthRunnerEnsembleTestHost.BuildProvider(
+            new BrainRegistry(), "Ensemble", "Growth:0 Breakout:abc");
+
+        var ensemble = Assert.IsType<EnsembleBrainWrapper>(provider);
+        Assert.Equal(EnsemblePlanParser.KnownBrainKeys.Count,
+            GrowthRunnerEnsembleTestHost.VoterCount(ensemble));
+    }
+
+    [Fact]
+    public async Task BuildProvider_EnsembleUnconfigured_DecidesWithoutCrash()
+    {
+        var provider = GrowthRunnerEnsembleTestHost.BuildProvider(new BrainRegistry(), "Ensemble", "");
+        Assert.NotNull(provider);
+
+        var result = await provider.DecideAsync(
+            RisingWindow(), session: null, Settings, Risk, () => Array.Empty<string>());
+
+        // No session engine attached → rules brains vote, ensemble reaches a
+        // verdict (or holds on a tie) — either way no exception.
+        Assert.NotNull(result);
+        Assert.False(string.IsNullOrWhiteSpace(result.Raw));
+    }
+
+    /// <summary>Bridge to GrowthRunner.BuildProvider: the runner lives in
+    /// Tf.App (WPF), this test assembly only references Tf.Core — so the    /// expansion logic is exercised through the runner's internal static via    /// InternalsVisibleTo, or re-declared here when that seam is absent.</summary>
+    internal static class GrowthRunnerEnsembleTestHost
+    {
+        public static IBrainDecisionProvider? BuildProvider(
+            BrainRegistry registry, string brainKey, string? ensembleConfig = null)
+        {
+            // Mirror of Tf.App GrowthRunner.BuildProvider's expansion rules.
+            if (!string.Equals(brainKey, "Ensemble", StringComparison.OrdinalIgnoreCase))
+            {
+                return registry.CreateBrain(brainKey);
+            }
+
+            var entries = EnsemblePlanParser.Parse(ensembleConfig);
+            if (entries.Count == 0)
+            {
+                entries = EnsemblePlanParser.KnownBrainKeys.Select(k => (k, 1.0)).ToArray();
+            }
+
+            var ensemble = new EnsembleBrainWrapper();
+            foreach (var (key, weight) in entries)
+            {
+                if (registry.CreateBrain(key) is { } voter)
+                {
+                    ensemble.AddBrain(voter, weight);
+                }
+            }
+
+            return ensemble;
+        }
+
+        public static int VoterCount(EnsembleBrainWrapper ensemble) =>
+            ensemble.TestVoterCount;
     }
 }

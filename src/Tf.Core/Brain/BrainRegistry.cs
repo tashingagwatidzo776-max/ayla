@@ -88,7 +88,7 @@ public sealed class BrainRegistry
         return _brains.Keys.ToArray();
     }
 
-    public IBrainDecisionProvider? CreateBrain(string key, Func<IReadOnlyList<Tick>> getTicks, GrowthSessionEngine? session = null)
+    public IBrainDecisionProvider? CreateBrain(string key)
     {
         var info = GetBrain(key);
         return info?.Factory();
@@ -213,12 +213,15 @@ public sealed class EnsembleBrainWrapper : IBrainDecisionProvider
 {
     private readonly List<(IBrainDecisionProvider Brain, double Weight)> _brains = new();
 
+    /// <summary>How many voter brains are currently registered (test seam).</summary>
+    public int TestVoterCount => _brains.Count;
+
     public void AddBrain(IBrainDecisionProvider brain, double weight = 1.0)
     {
         _brains.Add((brain, weight));
     }
 
-    public Task<BrainDecision> DecideAsync(
+    public async Task<BrainDecision> DecideAsync(
         IReadOnlyList<Tick> window,
         GrowthSessionEngine? session,
         Func<AppSettings> settings,
@@ -228,16 +231,16 @@ public sealed class EnsembleBrainWrapper : IBrainDecisionProvider
     {
         if (_brains.Count == 0)
         {
-            return Task.FromResult(new BrainDecision(
+            return new BrainDecision(
                 LlmDecision.Hold("Ensemble has no brains configured"),
-                "ensemble: no brains"));
+                "ensemble: no brains");
         }
 
         var votes = new List<(BrainDirection Direction, double Confidence, double Weight, string Reasoning)>();
 
         foreach (var (brain, weight) in _brains)
         {
-            var brainResult = brain.DecideAsync(window, session, settings, risk, lessons, ct).GetAwaiter().GetResult();
+            var brainResult = await brain.DecideAsync(window, session, settings, risk, lessons, ct).ConfigureAwait(false);
             if (brainResult.Decision.Direction != BrainDirection.Hold)
             {
                 votes.Add((brainResult.Decision.Direction, brainResult.Decision.Confidence, weight, brainResult.Raw));
@@ -246,9 +249,9 @@ public sealed class EnsembleBrainWrapper : IBrainDecisionProvider
 
         if (votes.Count == 0)
         {
-            return Task.FromResult(new BrainDecision(
+            return new BrainDecision(
                 LlmDecision.Hold("No brain voted for a trade"),
-                "ensemble: no consensus"));
+                "ensemble: no consensus");
         }
 
         // Weighted vote
@@ -273,9 +276,9 @@ public sealed class EnsembleBrainWrapper : IBrainDecisionProvider
         }
         else
         {
-            return Task.FromResult(new BrainDecision(
+            return new BrainDecision(
                 LlmDecision.Hold("Ensemble split - no clear majority"),
-                $"ensemble: tied (rise {riseWeight:0.2} vs fall {fallWeight:0.2})"));
+                $"ensemble: tied (rise {riseWeight:0.2} vs fall {fallWeight:0.2})");
         }
 
         // Use session for stake if available
@@ -286,6 +289,6 @@ public sealed class EnsembleBrainWrapper : IBrainDecisionProvider
         }
 
         var finalDecision = new LlmDecision(finalDirection, Math.Clamp(finalConfidence, 0.6, 0.95), stake, reasoning);
-        return Task.FromResult(new BrainDecision(finalDecision, reasoning));
+        return new BrainDecision(finalDecision, reasoning);
     }
 }

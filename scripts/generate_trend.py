@@ -79,21 +79,44 @@ for acct, pts_a in bank_by_acct.items():
         bank_total_pts[ts] = round(bank_total_pts.get(ts, 0.0) + val, 2)
 bank_total = sorted(bank_total_pts.items())[-MAX_POINTS:]
 
+# Per-account drill-down: one dashed line per account on the money axis
+# (reusing the CSV's per-account rows) plus a legend table beneath the chart
+# so each line is attributable — name, latest bankroll, and how the account
+# got there from its first exported day. Colors pair with the chart via a
+# shared palette map emitted below.
 BANK_COLORS = ["#1a7f37", "#8250df", # green, purple — gray family is CI coverage
                "#bf3989", "#d4a72c", "#0550ae", "#e16f24"]
+bank_acct_color = {acct: BANK_COLORS[i % len(BANK_COLORS)]
+                   for i, acct in enumerate(sorted(bank_by_acct))}
+bank_rows = []
+for acct in sorted(bank_by_acct):
+    pts_a = bank_by_acct[acct]
+    if not pts_a:
+        continue
+    latest_bankroll = pts_a[-1][1]
+    opening_bankroll = pts_a[0][1]
+    delta = latest_bankroll - opening_bankroll
+    bank_rows.append({
+        "account": acct,
+        "color": bank_acct_color[acct],
+        "latest": latest_bankroll,
+        "delta": delta,
+        "days": len(pts_a),
+    })
+
 bank_datasets_js = json.dumps([
     {
         "label": acct,
         "data": [{"x": ts * 1000, "y": val} for ts, val in pts_a],
-        "borderColor": BANK_COLORS[i % len(BANK_COLORS)],
-        "backgroundColor": BANK_COLORS[i % len(BANK_COLORS)] + "22",
+        "borderColor": bank_acct_color[acct],
+        "backgroundColor": bank_acct_color[acct] + "22",
         "borderDash": [6, 4],
         "borderWidth": 1.5,
         "pointRadius": 2,
         "tension": 0.25,
         "yAxisID": "y1",
     }
-    for i, (acct, pts_a) in enumerate(sorted(bank_by_acct.items()))
+    for acct, pts_a in sorted(bank_by_acct.items())
 ])
 
 # The money axis only exists when there is bankroll data — the page shape
@@ -118,6 +141,22 @@ bank_note = "" if not bank_by_acct else (
     + ". Exported by the Pages deploy.</p>"
 )
 
+# Per-account drill-down legend: one chip per bankroll line, color-matched to
+# the chart, naming the account, its latest bankroll, and the change across
+# the exported window.
+bank_legend = "" if not bank_rows else (
+    "<div class=\"bank-legend\">"
+    + "".join(
+        f"<span class=\"bank-chip\" style=\"border-color:{r['color']}\">"
+        f"<span class=\"swatch\" style=\"background:{r['color']}\"></span>{r['account']}: "
+        f"<b>${r['latest']:.2f}</b> "
+        f"<span class=\"{'ok' if r['delta'] >= 0 else 'bad'}\">"
+        f"{'+' if r['delta'] >= 0 else ''}{r['delta']:.2f} over {r['days']}d</span></span>"
+        for r in bank_rows
+    )
+    + "</div>"
+)
+
 # Chart.js pinned to an exact version from the jsDelivr CDN — no build step.
 js_url = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 
@@ -135,6 +174,11 @@ body = f"""<!DOCTYPE html>
   .card b {{ font-size: 1.5rem; display: block; }}
   .ok {{ color: #1a7f37; }} .bad {{ color: #cf222e; }}
   a {{ color: #0969da; }}
+  .bank-legend {{ display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; }}
+  .bank-chip {{ display: inline-flex; align-items: center; gap: .35rem; border: 1px solid #d0d7de;
+    border-left-width: 4px; border-radius: 6px; padding: .15rem .6rem; font-size: .85rem; }}
+  .bank-chip .swatch {{ display: inline-block; width: .7rem; height: .7rem; border-radius: 2px;
+    opacity: .8; }}
 </style>
 </head>
 <body>
@@ -145,6 +189,7 @@ body = f"""<!DOCTYPE html>
   <div class="card">Gate<b>{GATE:.0f}%</b></div>
 </div>
 <canvas id="trend" height="110"></canvas>
+{bank_legend}
 {bank_note}
 {'' if not events else '<h2>Timeline</h2><ul>' + ''.join(f'<li><b>{lbl}</b> &mdash; {det}</li>' for _, lbl, det in events) + '</ul>'}
 <p>Each point is one successful CI run on <code>main</code> (newest {len(pts)}).

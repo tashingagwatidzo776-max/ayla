@@ -1,0 +1,247 @@
+name: Weekly bankroll drill
+
+# The app's bankroll auto-publish path is the only automated channel from the
+# machine where the app trades to the trend page's money axis: every settled
+# trade refreshes the export (Tf.Core BankrollCsvFile), a periodic publisher
+# commits and pushes docs/growth-bankroll.csv to main (Tf.App
+# BankrollCsvPublisher), and the Pages deploy copies the committed CSV into
+# the site. Silent decay anywhere on that path freezes the money curve without
+# any other workflow noticing — the app now fails loudly on push failures, but
+# the plumbing around it (exporter reductions, git pinning, path handling, the
+# Pages-copy step, committed-file presence) can still rot quietly. This drill
+# rehearses the whole path weekly so it stays live-proven:
+#
+#   1. C# drill tests: a synthetic trade store feeds the real exporter, whose
+#      docs copy is committed and pushed to a bare remote by the real
+#      publisher cycle (nothing touches the live store or checkout).
+#   2. Python backfill leg: scripts/export_bankroll.py reduces a synthetic
+#      store to the same CSV shape (the manual backfill path must keep
+#      agreeing with the app's export).
+#   3. Pages CSV presence: the committed docs/growth-bankroll.csv must exist
+#      and parse under generate_trend.py's reader semantics — a missing or
+#      malformed file means the deploy runs without a money axis.
+#   4. Live smoke check (workflow_dispatch only): fetch the deployed
+#      trend.html and verify it actually renders the per-account bankroll
+#      drill-down from the committed CSV — money axis, dashed per-account
+#      datasets, and legend chips matching the CSV's accounts and latest
+#      amounts. The deploy-copy and page-generation legs sit downstream of
+#      everything the C#/python legs rehearse, so they can rot while every
+#      upstream check stays green; this leg catches that on the real site.
+#
+# Failures file through the same drift-alert machinery the nightly uses
+# (label `ci-bankroll-drill`) so a broken rehearsal is triaged like any other
+# drift. Also runs on workflow_dispatch (verification on demand).
+
+on:
+  schedule:
+    - cron: '23 5 * * 6' # Saturdays 05:23 UTC — clear of the health check (Mon 06:23), weekly drills (Wed 05:41), nightly (03:17), watchdog (06:00)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write # drift-alert opens/updates the drill issue on failure
+
+jobs:
+  bankroll-drill:
+    # windows-latest, not ubuntu: the publisher under test lives in Tf.App
+    # (a WPF project — Linux cannot build it), matching CI's unit job.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Setup Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.x'
+
+    - name: Build the app test stack (Tf.Core → Tf.Deriv → Tf.App)
+      run: dotnet build tests/Tf.App.Tests/Tf.App.Tests.csproj --configuration Release
+
+    - name: Run the bankroll drill tests (synthetic store → exporter → publisher cycle)
+      shell: bash
+      run: |
+        set -euo pipefail
+        dotnet test tests/Tf.App.Tests/Tf.App.Tests.csproj --no-build --configuration Release \
+          --filter "FullyQualifiedName~BankrollDrill" \
+          --logger "console;verbosity=normal"
+
+    - name: Rehearse the python backfill leg on a synthetic store
+      shell: bash
+      run: |
+        set -euo pipefail
+        store="$RUNNER_TEMP/bankroll-drill/trades.json"
+        out="$RUNNER_TEMP/bankroll-drill/growth-bankroll.csv"
+        mkdir -p "$(dirname "$store")"
+        python - "$store" <<'PY'
+        import json
+        import sys
+        import time
+        from datetime import datetime, timezone
+
+        # Two accounts x two days of settled growth trades — the same shape the
+        # C# drill seeds into TradeStore. Noon-UTC stamps keep the day grouping
+        # midnight-safe wherever in the day the drill runs.
+        now = int(time.time())
+        def noon(days_ago):
+            return datetime.fromtimestamp(
+                (now // 86400 - days_ago) * 86400 + 12 * 3600, tz=timezone.utc
+            ).isoformat()
+
+        trades = [
+            {"SettledAt": noon(2), "Source": "Growth", "Outcome": "Won",  "AccountName": "Drill Alpha", "Profit": 0.90},
+            {"SettledAt": noon(2), "Source": "Growth", "Outcome": "Won",  "AccountName": "Drill Alpha", "Profit": 0.90},
+            {"SettledAt": noon(1), "Source": "Growth", "Outcome": "Lost", "AccountName": "Drill Alpha", "Profit": -1.00},
+            {"SettledAt": noon(2), "Source": "Growth", "Outcome": "Won",  "AccountName": "Drill Beta",  "Profit": 0.90},
+            {"SettledAt": noon(1), "Source": "Growth", "Outcome": "Won",  "AccountName": "Drill Beta",  "Profit": 1.44},
+        ]
+        with open(sys.argv[1], "w", encoding="utf-8") as f:
+            json.dump(trades, f)
+        PY
+        python scripts/export_bankroll.py --store "$store" -o "$out"
+        echo "-- backfilled CSV --"
+        cat "$out"
+
+        # The reduction must agree with the app's exporter semantics: daily
+        # deltas compound per account (Alpha 1.80 then 0.80, Beta 0.90 then
+        # 2.34), one row per account per day.
+        python - "$out" <<'PY'
+        import csv
+        import sys
+
+        rows = list(csv.DictReader(open(sys.argv[1], newline="")))
+        bank = {(r["account"], r["bankroll"]) for r in rows}
+        expected = {("Drill Alpha", "1.8"), ("Drill Alpha", "0.8"),
+                    ("Drill Beta", "0.9"), ("Drill Beta", "2.34")}
+        parsed = {(a, f"{float(v):g}") for a, v in bank}
+        if parsed != expected:
+            print(f"::error::backfill reduction drifted from the exporter semantics: {sorted(parsed)}")
+            sys.exit(1)
+        print("backfill leg agrees with the exporter reduction")
+        PY
+
+    - name: Verify the committed Pages CSV carries the trend page's schema
+      shell: bash
+      run: |
+        set -euo pipefail
+        csv="docs/growth-bankroll.csv"
+        if [ ! -f "$csv" ]; then
+          echo "::error::$csv is missing from the checkout — the Pages deploy will run without a money axis (the trend page silently loses its bankroll layer)"
+          exit 1
+        fi
+        # The trend reader parses floats, so the header columns must parse as
+        # floats or the schema has drifted. A malformed row fails the drill.
+        python - "$csv" <<'PY'
+        import csv
+        import sys
+
+        path = sys.argv[1]
+        with open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames != ["epoch_seconds", "account", "bankroll"]:
+                print(f"::error::{path} header {reader.fieldnames} is not the trend CSV schema (epoch_seconds,account,bankroll)")
+                sys.exit(1)
+            rows = list(reader)
+        for i, row in enumerate(rows):
+            try:
+                int(row["epoch_seconds"])
+                float(row["bankroll"])
+                if not row["account"]:
+                    raise ValueError("empty account")
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"::error::{path} row {i + 2} does not parse under the trend reader's semantics: {e}")
+                sys.exit(1)
+        accounts = sorted({r["account"] for r in rows})
+        print(f"{path}: {len(rows)} rows across {len(accounts)} account(s) parse cleanly: {accounts}")
+        PY
+
+    - name: Smoke-check the live trend page renders the per-account drill-down
+      if: github.event_name == 'workflow_dispatch'
+      shell: bash
+      env:
+        PAGES_TREND_URL: 'https://tashingagwatidzo776-max.github.io/ayla/trend.html'
+      run: |
+        set -euo pipefail
+        # Pages deploys can lag a fresh push by a few minutes (and the CDN
+        # caches briefly); a failure here right after a deploy is worth a
+        # re-run before blaming the path.
+        curl -fsSL --max-time 30 --retry 2 -o "$RUNNER_TEMP/trend.html" "$PAGES_TREND_URL" \
+          || { echo "::error::could not fetch $PAGES_TREND_URL — the Pages site is down or the URL moved"; exit 1; }
+        python - "$RUNNER_TEMP/trend.html" docs/growth-bankroll.csv <<'PY'
+        import csv, sys
+
+        html = open(sys.argv[1], encoding="utf-8").read()
+        csv_path = sys.argv[2]
+
+        def fail(what):
+            print(f"::error::live trend page smoke check failed — {what}")
+            sys.exit(1)
+
+        # The committed CSV decides what the page CAN show: with no
+        # per-account rows the trend page renders no money axis at all
+        # (generate_trend.py emits the y1 scale, dashed datasets and chips
+        # only when the CSV has rows), so the whole smoke check skips itself
+        # with an annotation and goes live with the first settled trade.
+        try:
+            with open(csv_path, newline="") as f:
+                rows = [r for r in csv.DictReader(f) if r.get("account")]
+        except OSError as e:
+            fail(f"cannot read {csv_path} in the checkout: {e}")
+        if not rows:
+            print("::warning::no per-account rows in " + csv_path +
+                  " yet — the app has not settled any growth trade, so the "
+                  "live-page smoke check is skipped (it goes live with the "
+                  "first settled trade)")
+            sys.exit(0)
+
+        # 1. The money axis exists at all (right-hand y1 scale).
+        if "position: 'right'" not in html or "Bankroll" not in html:
+            fail("no money axis (right-hand Bankroll scale) on the live page")
+
+        # 2. At least one dashed per-account bankroll dataset is plotted.
+        if html.count("borderDash") < 1:
+            fail("no dashed per-account bankroll dataset on the live page")
+
+        # 3. Legend chips render.
+        if 'class="bank-chip"' not in html:
+            fail("no per-account legend chips on the live page")
+
+        # 4. The chips must match the committed CSV: same accounts, and each
+        #    chip's latest amount equals the CSV's closing bankroll per
+        #    account (rows are account-major, so the last row per account is
+        #    the latest day).
+        latest = {}
+        for r in rows:
+            latest[r["account"]] = float(r["bankroll"])
+
+        for acct, amount in sorted(latest.items()):
+            if acct not in html:
+                fail(f"account '{acct}' from {csv_path} is missing from the live page chips")
+            chip_amount = f"${amount:.2f}"
+            if chip_amount not in html:
+                fail(f"latest bankroll '{chip_amount}' for '{acct}' not rendered on the live page "
+                     f"(deploy older than the committed CSV?)")
+
+        print(f"live trend page renders the money axis with {len(latest)} per-account "
+              f"chip(s) matching {csv_path}: "
+              + ", ".join(f"{a}=${v:.2f}" for a, v in sorted(latest.items())))
+        PY
+
+    - name: File the drill failure as a triage issue
+      if: failure()
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: fail
+        DRILL_LABEL: ci-bankroll-drill
+        ISSUE_TITLE: 'Weekly bankroll drill failed'
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+        FAILING_JOBS: 'weekly bankroll drill (bankroll auto-publish path rehearsal)'
+      run: bash scripts/drift-alert.sh
