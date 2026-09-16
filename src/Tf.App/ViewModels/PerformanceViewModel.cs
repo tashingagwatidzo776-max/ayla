@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Tf.Core;
 using Tf.Core.Analytics;
 
 namespace Tf.App.ViewModels;
@@ -13,6 +14,8 @@ namespace Tf.App.ViewModels;
 public partial class PerformanceViewModel : ObservableObject
 {
     private readonly PerformanceTracker _tracker;
+    private readonly TradeStore? _tradeStore;
+    private readonly string? _metricsExportDirectory;
 
     [ObservableProperty]
     private string summaryText = "No trades recorded yet";
@@ -33,9 +36,13 @@ public partial class PerformanceViewModel : ObservableObject
     public ObservableCollection<EquityPoint> EquityCurve { get; } = new();
     public ObservableCollection<StrategyComparisonItem> StrategyComparison { get; } = new();
 
-    public PerformanceViewModel(PerformanceTracker tracker)
+    /// <param name="metricsExportDirectory">Overrides the metrics export
+    /// target directory (defaults to Documents); injectable for tests.</param>
+    public PerformanceViewModel(PerformanceTracker tracker, TradeStore? tradeStore = null, string? metricsExportDirectory = null)
     {
         _tracker = tracker;
+        _tradeStore = tradeStore;
+        _metricsExportDirectory = metricsExportDirectory;
     }
 
     [RelayCommand]
@@ -167,6 +174,42 @@ public partial class PerformanceViewModel : ObservableObject
         }
 
         statusMessage = $"Exported to {path}";
+        OnPropertyChanged(nameof(StatusMessage));
+    }
+
+    /// <summary>Operational metrics export: per-account trades/wins/P&L to
+    /// CSV and JSON straight from the trade store (independent of the
+    /// tracker's daily aggregation), for spreadsheets and monitoring.</summary>
+    [RelayCommand]
+    private void ExportMetrics()
+    {
+        if (_tradeStore is null)
+        {
+            statusMessage = "Metrics export unavailable: no trade store attached";
+            OnPropertyChanged(nameof(StatusMessage));
+            return;
+        }
+
+        try
+        {
+            var trades = _tradeStore.Trades;
+            var stamp = DateTime.UtcNow.ToString("yyyyMMdd");
+            var exportDir = _metricsExportDirectory
+                ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            Directory.CreateDirectory(exportDir);
+            var csvPath = Path.Combine(exportDir, $"tf_metrics_{stamp}.csv");
+            var jsonPath = Path.Combine(exportDir, $"tf_metrics_{stamp}.json");
+
+            File.WriteAllText(csvPath, MetricsExporter.ToCsv(trades));
+            File.WriteAllText(jsonPath, MetricsExporter.ToJson(trades));
+
+            statusMessage = $"Exported {trades.Count} trade(s) to {csvPath} + .json";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Metrics export failed: {ex.Message}";
+        }
+
         OnPropertyChanged(nameof(StatusMessage));
     }
 

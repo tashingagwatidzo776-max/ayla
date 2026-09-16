@@ -1,5 +1,6 @@
 using System.IO;
 using Tf.App.ViewModels;
+using Tf.Core;
 using Tf.Core.Analytics;
 using Tf.Core.Models;
 
@@ -34,6 +35,47 @@ public class PerformanceViewModelTests : IDisposable
         profit >= 0 ? ContractStatus.Won : ContractStatus.Lost,
         profit, 1.165, 1700000600, settledAt,
         Guid.NewGuid(), accountName, source);
+
+    [Fact]
+    public void ExportMetrics_WritesCsvAndJsonFromStore()
+    {
+        var store = new TradeStore(_dir);
+        store.Add(Trade(0.90m, "Growth", "Alpha", DateTimeOffset.Now));
+        store.Add(Trade(-1.00m, "Growth", "Alpha", DateTimeOffset.Now));
+        var exportDir = Path.Combine(_dir, "export");
+
+        var vm = new PerformanceViewModel(_tracker, store, exportDir);
+        vm.ExportMetricsCommand.Execute(null);
+
+        var stamp = DateTime.UtcNow.ToString("yyyyMMdd");
+        var csvPath = Path.Combine(exportDir, $"tf_metrics_{stamp}.csv");
+        var jsonPath = Path.Combine(exportDir, $"tf_metrics_{stamp}.json");
+
+        Assert.True(File.Exists(csvPath), $"expected metrics CSV at {csvPath}");
+        Assert.True(File.Exists(jsonPath), $"expected metrics JSON at {jsonPath}");
+
+        var csv = File.ReadAllText(csvPath);
+        Assert.StartsWith("account,trades,wins,losses,win_rate,total_pnl,mean_pnl,max_stake", csv);
+        Assert.Contains("Alpha,2,1,1,", csv); // 2 trades, 1 win, 1 loss
+
+        var json = File.ReadAllText(jsonPath);
+        Assert.Contains("\"total_trades\": 2", json);
+        Assert.Contains("\"account\": \"Alpha\"", json);
+        Assert.DoesNotContain("latency_ms", json); // no latency samples supplied
+
+        Assert.Contains(exportDir, vm.StatusMessage); // user sees where the files went
+    }
+
+    [Fact]
+    public void ExportMetrics_WithoutStore_ShowsUnavailableStatus()
+    {
+        var vm = new PerformanceViewModel(_tracker, metricsExportDirectory: _dir);
+
+        vm.ExportMetricsCommand.Execute(null);
+
+        Assert.Contains("unavailable", vm.StatusMessage);
+        Assert.Empty(Directory.GetFiles(_dir, "tf_metrics_*"));
+    }
 
     [Fact]
     public void Refresh_EmptyTracker_ShowsZeroedSummary()
@@ -142,7 +184,7 @@ public class PerformanceViewModelTests : IDisposable
         var today = DateTimeOffset.Now;
         _tracker.RecordTrade(Trade(0.00m, "Growth", "Alpha", today));
         _tracker.RecordTrade(Trade(0.00m, "Growth", "Alpha", today));
-
+
         var vm = new PerformanceViewModel(_tracker);
         vm.RefreshCommand.Execute(null);
 
@@ -198,11 +240,11 @@ public class PerformanceViewModelTests : IDisposable
     {
         var today = DateTimeOffset.Now;
         _tracker.RecordTrade(Trade(0.90m, "Growth", "Alpha", today));
-
+
         var vm = new PerformanceViewModel(_tracker);
         vm.RefreshCommand.Execute(null);
         vm.RefreshCommand.Execute(null); // second refresh must not duplicate rows
-
+
         Assert.Single(vm.AccountStats);
         Assert.Single(vm.StrategyStats);
         Assert.Single(vm.EquityCurve);

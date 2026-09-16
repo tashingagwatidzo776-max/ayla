@@ -891,6 +891,9 @@
                                 <Button Content="Refresh" Command="{Binding PerformanceVm.RefreshCommand}" />
                                 <Button Content="Export CSV" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                                         Command="{Binding PerformanceVm.ExportToCsvCommand}" />
+                                <Button Content="Export metrics" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding PerformanceVm.ExportMetricsCommand}"
+                                        ToolTip="Write per-account operational metrics (trades, wins, P&amp;L) to tf_metrics_*.csv and .json in Documents" />
                                 <TextBlock Text="{Binding PerformanceVm.StatusMessage}" Margin="12,0,0,0"
                                            Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
                             </StackPanel>
