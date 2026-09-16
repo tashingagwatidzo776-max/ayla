@@ -95,6 +95,8 @@ When a growth engine exits because its scheduler kept failing (broken broker con
 - Metrics export: per-account trade stats (CSV + JSON) from the Performance tab — the JSON carries live cycle telemetry (latency mean/p95/max and per-account error counts) collected from every growth runner and the LLM-tab autonomy loop
 - Scheduled cycle-telemetry digest: the app posts a latency/error summary to the webhook (default every 6h, configurable in Settings → MONITORING; machine-side, no export needed); a companion GitHub workflow (`metrics-digest.yml`) digests the committed bankroll artifacts on a daily schedule and posts them too when `METRICS_WEBHOOK_URL` is configured as a repository secret. The digest can be toggled off in Settings → MONITORING without affecting trade settlement notifications
 - Live telemetry panel: the Performance dashboard shows cycles, latency (mean/p95/max) and error count from the shared collector, refreshing every 3 seconds between exports
+- Webhook URL live validation in Settings (https enforced, localhost test listeners excepted; host cross-checked against the selected Discord/Slack format) plus a "Send test message" probe button
+- Artifact-pipeline health banner on the trend page: the Pages deploy cross-checks the committed bankroll CSV against the pulse file and flags a frozen publish (trades settled, axis empty) publicly
 
 ### Developer Tools
 - Strategy optimizer with parameter tuning

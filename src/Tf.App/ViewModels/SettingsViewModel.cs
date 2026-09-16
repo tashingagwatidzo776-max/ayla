@@ -86,6 +86,27 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Human-readable trading-mode label.</summary>
     public string ModeLabel => IsDemo ? "Demo" : "Real";
 
+    // Live webhook URL validation: recomputed whenever the URL or the
+    // platform format changes, so a bad URL is flagged as it is typed —
+    // before any save or test post.
+    public WebhookUrlSeverity WebhookUrlSeverity =>
+        WebhookUrlValidator.Validate(WebhookUrl, IsDiscordWebhook).Severity;
+
+    public string WebhookValidationMessage =>
+        WebhookUrlValidator.Validate(WebhookUrl, IsDiscordWebhook).Message;
+
+    partial void OnWebhookUrlChanged(string value)
+    {
+        OnPropertyChanged(nameof(WebhookUrlSeverity));
+        OnPropertyChanged(nameof(WebhookValidationMessage));
+    }
+
+    partial void OnIsDiscordWebhookChanged(bool value)
+    {
+        OnPropertyChanged(nameof(WebhookUrlSeverity));
+        OnPropertyChanged(nameof(WebhookValidationMessage));
+    }
+
     partial void OnIsDemoChanged(bool value) => OnPropertyChanged(nameof(ModeLabel));
 
     [ObservableProperty]
