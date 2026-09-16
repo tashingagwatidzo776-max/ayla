@@ -190,8 +190,16 @@ public partial class App : System.Windows.Application
         // digest to the same webhook trade settlements use, so monitoring
         // sees session health without anyone exporting manually. The
         // optional GitHub dispatch leg (machine token + repo) lets CI add a
-        // scheduled companion run over the committed artifacts.
-        provider.GetRequiredService<MetricsDigestService>().Start();
+        // scheduled companion run over the committed artifacts. Gated by the
+        // settings toggle so it can be silenced without rebuilding.
+        var digest = provider.GetRequiredService<MetricsDigestService>();
+        digest.Disabled = !settings.MetricsDigestEnabled;
+        digest.Start();
+
+        // Live telemetry panel on the Performance tab (cycles/latency/errors
+        // between exports). The timer is created here so it never runs in
+        // unit tests, which construct the view model directly.
+        provider.GetRequiredService<PerformanceViewModel>().StartTelemetryRefresh();
     }
 
     protected override void OnExit(ExitEventArgs e)

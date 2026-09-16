@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Tf.Core;
@@ -17,6 +18,8 @@ public partial class PerformanceViewModel : ObservableObject
     private readonly TradeStore? _tradeStore;
     private readonly string? _metricsExportDirectory;
     private readonly MetricsCollector? _metrics;
+    private readonly Dispatcher _dispatcher;
+    private System.Threading.Timer? _telemetryTimer;
 
     [ObservableProperty]
     private string summaryText = "No trades recorded yet";
@@ -30,6 +33,14 @@ public partial class PerformanceViewModel : ObservableObject
     /// <summary>Points for the equity curve polyline ("x1,y1 x2,y2 ..." format).</summary>
     [ObservableProperty]
     private string equityCurvePoints = "";
+
+    /// <summary>Live cycle-telemetry panel text (count/latency/errors),
+    /// refreshed periodically between manual exports.</summary>
+    [ObservableProperty]
+    private string telemetrySummaryText = "no telemetry yet";
+
+    [ObservableProperty]
+    private int telemetryErrorCount;
 
     public ObservableCollection<AccountStatsViewModel> AccountStats { get; } = new();
     public ObservableCollection<StrategyStatsViewModel> StrategyStats { get; } = new();
@@ -49,6 +60,34 @@ public partial class PerformanceViewModel : ObservableObject
         _tradeStore = tradeStore;
         _metricsExportDirectory = metricsExportDirectory;
         _metrics = metrics;
+        _dispatcher = Dispatcher.CurrentDispatcher;
+    }
+
+    /// <summary>Starts the periodic live-telemetry refresh (3s). Headless in
+    /// tests — no dispatcher pump runs unless a WPF test context created one.</summary>
+    public void StartTelemetryRefresh() =>
+        _telemetryTimer = new System.Threading.Timer(
+            _ => OnUiThread(RefreshTelemetry), null,
+            TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+
+    /// <summary>Recomputes the telemetry panel from the collector snapshot.
+    /// Safe to call directly (tests); the timer path marshals to the UI thread.</summary>
+    public void RefreshTelemetry()
+    {
+        if (_metrics is null)
+        {
+            return;
+        }
+
+        var summary = TelemetrySummaryBuilder.Build(_metrics.Latency, _metrics.Errors);
+        TelemetrySummaryText = TelemetrySummaryBuilder.Format(summary);
+        TelemetryErrorCount = summary?.ErrorCount ?? 0;
+    }
+
+    private void OnUiThread(Action action)
+    {
+        if (_dispatcher.CheckAccess()) action();
+        else _dispatcher.BeginInvoke(action);
     }
 
     [RelayCommand]
@@ -161,6 +200,13 @@ public partial class PerformanceViewModel : ObservableObject
         else
         {
             EquityCurvePoints = "";
+        }
+
+        RefreshTelemetry();
+
+        if (_metrics is not null && _telemetryTimer is null)
+        {
+            StartTelemetryRefresh();
         }
     }
 
