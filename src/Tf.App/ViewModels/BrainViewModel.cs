@@ -4,6 +4,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Tf.Core;
+using Tf.Core.Analytics;
 using Tf.Core.Brain;
 using Tf.Core.Models;
 using Tf.Deriv;
@@ -22,6 +23,7 @@ public sealed partial class BrainViewModel : ObservableObject
     private readonly Func<IReadOnlyList<Tick>> _tickWindow;
     private readonly Func<RiskContext> _riskContext;
     private readonly Func<IReadOnlyList<string>> _recentLessons;
+    private readonly MetricsCollector _metrics;
     private AutonomousScheduler? _scheduler;
 
     [ObservableProperty]
@@ -47,11 +49,17 @@ public sealed partial class BrainViewModel : ObservableObject
 
     public ObservableCollection<string> ConfidenceHistory { get; } = new();
 
+    /// <summary>Live cycle telemetry (latency/errors) for the LLM-tab
+    /// autonomy loop — feeds the shared metrics export alongside the
+    /// growth runners' samples.</summary>
+    public MetricsCollector Metrics => _metrics;
+
     public BrainViewModel(DerivClient client, TradeStore store,
         DashboardViewModel dashboard, Func<AppSettings> settings,
         Func<IReadOnlyList<Tick>> tickWindow, Func<RiskContext> riskContext,
-        Func<IReadOnlyList<string>> recentLessons)
+        Func<IReadOnlyList<string>> recentLessons, MetricsCollector? metrics = null)
     {
+        _metrics = metrics ?? new MetricsCollector();
         _client = client;
         _store = store;
         _dashboard = dashboard;
@@ -186,7 +194,9 @@ public sealed partial class BrainViewModel : ObservableObject
         }
 
         _scheduler = new AutonomousScheduler(
-            _brain, _settings, _tickWindow, _riskContext, _recentLessons, OnScheduledCycle);
+            _brain, _settings, _tickWindow, _riskContext, _recentLessons, OnScheduledCycle,
+            onCycleLatencyMs: ms => _metrics.RecordLatency(ms, "LlmTab", DateTimeOffset.UtcNow),
+            onCycleError: exType => _metrics.RecordError("LlmTab", DateTimeOffset.UtcNow));
         IsAutonomyRunning = true;
         StatusText = "Autonomy running — waiting for the first decision…";
 

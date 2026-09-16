@@ -1,0 +1,105 @@
+name: Metrics digest
+
+# The app's cycle telemetry (latency/errors) lives only where it trades, so
+# the live digest is posted from the machine by MetricsDigestService — the
+# webhook URL never leaves the trading box. As the CI-side complement, this
+# scheduled workflow digests what the machine publishes into the repo (the
+# bankroll CSV + pulse file) into a run summary, and — when the optional
+# METRICS_WEBHOOK_URL secret is configured — posts that artifact digest to
+# the same Discord/Slack webhook the app uses. Without the secret the run
+# still produces its summary; the post step is skipped, not failed.
+#
+# The repository_dispatch (event_type "metrics-digest") leg exists so the
+# app's dispatch (if a token is configured there) lands on this file — the
+# live telemetry itself still flows webhook-direct from the app.
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch: {}
+  repository_dispatch:
+    types: [metrics-digest]
+
+permissions:
+  contents: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Digest committed artifacts
+      id: digest
+      run: |
+        set -euo pipefail
+
+        csv_rows=$(($(wc -l < docs/growth-bankroll.csv) - 1))
+        [ "$csv_rows" -ge 0 ] || csv_rows=0
+
+        pulse_trades=0
+        pulse_last="never"
+        pulse_accounts=0
+        if [ -f docs/growth-pulse.json ]; then
+          pulse_trades=$(python3 -c "import json;print(json.load(open('docs/growth-pulse.json')).get('settled_trades',0))")
+          pulse_epoch=$(python3 -c "import json;print(json.load(open('docs/growth-pulse.json')).get('last_settled_epoch',0))")
+          pulse_accounts=$(python3 -c "import json;print(len(json.load(open('docs/growth-pulse.json')).get('accounts',[])))")
+          if [ "$pulse_epoch" -gt 0 ]; then
+            pulse_last=$(python3 -c "import datetime;print(datetime.datetime.fromtimestamp($pulse_epoch, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC'))")
+          fi
+        fi
+
+        # Newer pulse than CSV rows imply: trades settled but the money axis
+        # did not advance (same freeze the watchdog alerts on).
+        axis_note="axis current"
+        if [ "$pulse_trades" -gt 0 ] && [ "$csv_rows" -eq 0 ]; then
+          axis_note="WARNING: trades settled but the CSV axis is empty"
+        fi
+
+        {
+          echo "### Metrics digest"
+          echo ""
+          echo "| Signal | Value |"
+          echo "|---|---|"
+          echo "| Committed CSV rows | $csv_rows |"
+          echo "| Pulse settled trades | $pulse_trades |"
+          echo "| Pulse accounts | $pulse_accounts |"
+          echo "| Pulse last settled | $pulse_last |"
+          echo "| Axis check | $axis_note |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        {
+          echo "csv_rows=$csv_rows"
+          echo "pulse_trades=$pulse_trades"
+          echo "axis_note=$axis_note"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Post artifact digest to webhook
+      if: env.METRICS_WEBHOOK_URL != ''
+      env:
+        METRICS_WEBHOOK_URL: ${{ secrets.METRICS_WEBHOOK_URL }}
+      run: |
+        set -euo pipefail
+        payload=$(python3 - "$METRICS_WEBHOOK_URL" <<'PY'
+        import json
+        import sys
+
+        url = sys.argv[1]
+        rows = "${{ steps.digest.outputs.csv_rows }}"
+        trades = "${{ steps.digest.outputs.pulse_trades }}"
+        note = "${{ steps.digest.outputs.axis_note }}"
+        is_discord = "discord" in url
+
+        text = f"CSV rows {rows} | pulse trades {trades} | {note}"
+        if is_discord:
+            body = {"embeds": [{"title": "📊 Bankroll artifact digest",
+                                "description": text,
+                                "color": 0x9AA3B2}]}
+        else:
+            body = {"attachments": [{"color": "#9AA3B2",
+                                     "text": f"📊 Bankroll artifact digest — {text}"}]}
+        print(json.dumps(body))
+        PY
+        )
+        curl -sf -X POST -H "Content-Type: application/json" -d "$payload" "$METRICS_WEBHOOK_URL" > /dev/null
+        echo "digest posted to webhook"

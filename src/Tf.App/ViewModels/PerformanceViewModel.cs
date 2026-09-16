@@ -16,6 +16,7 @@ public partial class PerformanceViewModel : ObservableObject
     private readonly PerformanceTracker _tracker;
     private readonly TradeStore? _tradeStore;
     private readonly string? _metricsExportDirectory;
+    private readonly MetricsCollector? _metrics;
 
     [ObservableProperty]
     private string summaryText = "No trades recorded yet";
@@ -38,11 +39,16 @@ public partial class PerformanceViewModel : ObservableObject
 
     /// <param name="metricsExportDirectory">Overrides the metrics export
     /// target directory (defaults to Documents); injectable for tests.</param>
-    public PerformanceViewModel(PerformanceTracker tracker, TradeStore? tradeStore = null, string? metricsExportDirectory = null)
+    /// <param name="metrics">Live cycle telemetry (latency/errors) collected
+    /// by the growth runners; when present, the JSON export carries the
+    /// latency and error sections with real runtime samples.</param>
+    public PerformanceViewModel(PerformanceTracker tracker, TradeStore? tradeStore = null,
+        string? metricsExportDirectory = null, MetricsCollector? metrics = null)
     {
         _tracker = tracker;
         _tradeStore = tradeStore;
         _metricsExportDirectory = metricsExportDirectory;
+        _metrics = metrics;
     }
 
     [RelayCommand]
@@ -201,7 +207,10 @@ public partial class PerformanceViewModel : ObservableObject
             var jsonPath = Path.Combine(exportDir, $"tf_metrics_{stamp}.json");
 
             File.WriteAllText(csvPath, MetricsExporter.ToCsv(trades));
-            File.WriteAllText(jsonPath, MetricsExporter.ToJson(trades));
+            File.WriteAllText(jsonPath, MetricsExporter.ToJson(
+                trades,
+                latency: _metrics?.Latency,
+                errors: _metrics?.Errors));
 
             statusMessage = $"Exported {trades.Count} trade(s) to {csvPath} + .json";
         }

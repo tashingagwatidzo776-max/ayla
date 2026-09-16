@@ -1,0 +1,182 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using Tf.Core.Analytics;
+
+namespace Tf.App.Infrastructure;
+
+/// <summary>
+/// Periodically composes an operational digest from the live cycle telemetry
+/// (latency/error samples collected by the growth runners and the LLM-tab
+/// loop) and posts it to the Discord/Slack webhook — the same channel trade
+/// settlements use — so monitoring sees session health without anyone
+/// exporting manually.
+///
+/// Machine-side by design: the live telemetry and the webhook URL both exist
+/// only where the app runs, so this service owns the posting loop. As a
+/// best-effort complement it also dispatches a GitHub
+/// <c>metrics-digest</c> repository_dispatch when a token is configured
+/// (CI picks it up to digest the machine-published bankroll artifacts);
+/// that leg is silent no-op without a token and never blocks the webhook
+/// post.
+///
+/// Mirrors the bankroll publisher's guardrails: a throwing webhook must
+/// never break the timer, no digest is posted when there is nothing to
+/// report, the first post goes out after the initial delay, and every tick
+/// is fully isolated.
+/// </summary>
+public sealed class MetricsDigestService : IDisposable
+{
+    /// <summary>Time between digest posts. Tests shrink this to poll fast.</summary>
+    public TimeSpan Interval { get; set; } = TimeSpan.FromHours(6);
+
+    /// <summary>Delay before the first digest (lets the session warm up).</summary>
+    public TimeSpan InitialDelay { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>True disables the service entirely (no timer, no posts).</summary>
+    public bool Disabled { get; set; }
+
+    /// <summary>GitHub API token for the optional repository_dispatch leg.
+    /// Null/empty disables that leg (the webhook digest still posts).</summary>
+    public string? GitHubToken { get; set; }
+
+    /// <summary>repository/repo for the dispatch leg, e.g. "owner/ayla".</summary>
+    public string? GitHubRepo { get; set; }
+
+    private readonly MetricsCollector _metrics;
+    private readonly WebhookService _webhook;
+    private readonly HttpClient _http = new();
+    private readonly Action<string>? _log;
+    private System.Threading.Timer? _timer;
+
+    public MetricsDigestService(MetricsCollector metrics, WebhookService webhook, Action<string>? log = null)
+    {
+        _metrics = metrics;
+        _webhook = webhook;
+        _log = log;
+    }
+
+    /// <summary>Starts the periodic digest loop (first post after InitialDelay).</summary>
+    public void Start()
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        _timer = new System.Threading.Timer(
+            _ => TryPostDigest(), null, InitialDelay, Interval);
+    }
+
+    /// <summary>Composes the digest body from the current telemetry snapshot.
+    /// Returns null when there is nothing worth posting — no samples at all,
+    /// or no errors and no latency observations.</summary>
+    public string? ComposeDigest()
+    {
+        var latency = _metrics.Latency;
+        var errors = _metrics.Errors;
+        if (latency.Count == 0 && errors.Count == 0)
+        {
+            return null;
+        }
+
+        var parts = new List<string>();
+
+        if (latency.Count > 0)
+        {
+            var values = latency.Select(s => s.Value).OrderBy(v => v).ToList();
+            var mean = values.Average();
+            var p95 = Percentile(values, 0.95);
+            parts.Add($"cycles {latency.Count} | latency mean {mean:0.#}ms · p95 {p95:0.#}ms · max {values[^1]:0.#}ms");
+        }
+
+        if (errors.Count > 0)
+        {
+            var byAccount = errors
+                .Where(s => !string.IsNullOrEmpty(s.Account))
+                .GroupBy(s => s.Account!)
+                .Select(g => $"{g.Key}: {g.Count()}")
+                .ToList();
+            var suffix = byAccount.Count > 0 ? $" ({string.Join(", ", byAccount)})" : "";
+            parts.Add($"errors {errors.Count}{suffix}");
+        }
+
+        return string.Join(" | ", parts);
+    }
+
+    /// <summary>One posting tick — webhook first, dispatch best-effort.
+    /// Never throws.</summary>
+    public void TryPostDigest()
+    {
+        try
+        {
+            var digest = ComposeDigest();
+            if (digest is null)
+            {
+                return; // nothing to report — silence is the healthy case
+            }
+
+            _webhook.PostStatus("📊 Cycle metrics digest", digest);
+
+            if (!string.IsNullOrEmpty(GitHubToken) && !string.IsNullOrEmpty(GitHubRepo))
+            {
+                TryDispatch(digest);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"metrics digest tick failed: {ex.Message}");
+        }
+    }
+
+    private void TryDispatch(string digest)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post,
+                $"https://api.github.com/repos/{GitHubRepo}/dispatches");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", GitHubToken);
+            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            request.Headers.UserAgent.ParseAdd("tf-metrics-digest");
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    @event_type = "metrics-digest",
+                    client_payload = new { digest }
+                }),
+                Encoding.UTF8,
+                "application/json");
+
+            using var response = _http.Send(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _log?.Invoke($"metrics digest dispatch returned {(int)response.StatusCode}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"metrics digest dispatch failed: {ex.Message}");
+        }
+    }
+
+    private static double Percentile(List<double> sorted, double p)
+    {
+        if (sorted.Count == 0)
+        {
+            return 0;
+        }
+
+        var idx = (int)Math.Ceiling(p * sorted.Count) - 1;
+        return sorted[Math.Clamp(idx, 0, sorted.Count - 1)];
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _http.Dispose();
+    }
+}

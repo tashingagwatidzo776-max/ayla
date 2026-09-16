@@ -1038,6 +1038,119 @@ public class GrowthRunnerEndToEndTests
     }
 
     // ─────────────────────────────────────────────────────────────
+    //  Cycle telemetry
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Cycle telemetry: the scheduler's latency/error callbacks flow into the
+    /// runner's MetricsCollector with the account's display name attached.
+    /// The fake server rejects the first proposal and serves a winning trade
+    /// on the second attempt, so one E2E cycle exercises both the failure
+    /// path (an error sample + attempt latency) and the success path (a
+    /// cycle latency sample) in a few seconds of wall time.
+    /// </summary>
+    [Fact]
+    public async Task GrowthRunner_RecordsCycleTelemetry_LatencyAndErrorsWithAccountAttribution()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var proposalRequests = 0;
+        var historyPrices = string.Join(",", Enumerable.Range(0, HistoryTickCount)
+            .Select(i => (1.2000 - 0.001 * i).ToString("F5", CultureInfo.InvariantCulture)));
+        var historyTimes = string.Join(",", Enumerable.Range(0, HistoryTickCount)
+            .Select(i => (1700000000L + i).ToString(CultureInfo.InvariantCulture)));
+
+        var server = new FakeDerivServer(req =>
+        {
+            var reqId = req.GetProperty("req_id").GetInt32();
+
+            if (req.TryGetProperty("authorize", out _))
+                return $"{{\"msg_type\":\"authorize\",\"req_id\":{reqId},\"authorize\":{{\"balance\":100.00,\"currency\":\"USD\",\"loginid\":\"VRTCDEMO1\"}}}}";
+
+            if (req.TryGetProperty("ticks_history", out _))
+                return $"{{\"msg_type\":\"history\",\"req_id\":{reqId},\"history\":{{\"prices\":[{historyPrices}],\"times\":[{historyTimes}]}},\"pip_size\":5}}";
+
+            if (req.TryGetProperty("ticks", out _))
+                return $"{{\"msg_type\":\"ticks\",\"req_id\":{reqId},\"subscription\":{{\"id\":\"sub-telemetry\"}}}}";
+
+            if (req.TryGetProperty("proposal", out _))
+            {
+                proposalRequests++;
+                if (proposalRequests == 1)
+                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"telemetry drill failure\"}}}}";
+                return $"{{\"msg_type\":\"proposal\",\"req_id\":{reqId},\"proposal\":{{\"id\":\"PROP-TELEMETRY-1\",\"spot\":1.17000,\"longcode\":\"Rise contract\",\"payout\":1.90}}}}";
+            }
+
+            if (req.TryGetProperty("buy", out _))
+                return $"{{\"msg_type\":\"buy\",\"req_id\":{reqId},\"buy\":{{\"contract_id\":\"GROWTH-TEL-1\",\"buy_price\":1.00,\"balance_after\":99.00,\"longcode\":\"Rise contract\"}}}}";
+
+            if (req.TryGetProperty("proposal_open_contract", out _))
+                return $"{{\"msg_type\":\"proposal_open_contract\",\"req_id\":{reqId},\"proposal_open_contract\":{{\"contract_id\":\"GROWTH-TEL-1\",\"status\":\"won\",\"is_sold\":true,\"entry_spot\":1.17000,\"exit_spot\":1.17800,\"entry_tick_time\":1700000300,\"exit_tick_time\":1700000600,\"buy_price\":1.00,\"profit\":0.90,\"currency\":\"USD\"}}}}";
+
+            return "";
+        }, cts.Token);
+        _ = server.RunAsync(cts.Token);
+        await using var serverDisposal = server;
+
+        var dataDir = Path.Combine(Path.GetTempPath(), $"tf_growth_telemetry_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dataDir);
+        try
+        {
+            var store = new TradeStore(dataDir);
+            var journal = new TradeJournal(Path.Combine(dataDir, "journal"));
+            var settled = new TaskCompletionSource<Trade>(TaskCreationOptions.RunContinuationsAsynchronously);
+            store.TradeAdded += t => settled.TrySetResult(t);
+
+            var config = new AccountConfig
+            {
+                Label = "Telemetry Demo",
+                ApiToken = "fake-demo-token",
+                IsDemo = true,
+                BrainKey = "Growth"
+            };
+
+            await using var connection = new AccountConnection(config);
+            connection.Client.Endpoint = server.WsUrl;
+            connection.Client.SettlementPollInterval = FastPollInterval;
+            await connection.ConnectAsync();
+
+            var runner = new GrowthRunner(
+                connection, store,
+                () => new AppSettings { AutonomyEnabled = true },
+                () => false,
+                journal);
+            await using var runnerDisposal = runner;
+
+            await runner.StartAsync(GrowthPlan.Default);
+
+            // Success leg: the second proposal attempt wins and settles.
+            var trade = await settled.Task.WaitAsync(TimeSpan.FromSeconds(30), cts.Token);
+            Assert.True(trade.IsWin);
+
+            // Telemetry: one error (first attempt) + latencies for both
+            // attempts, all attributed to the account's display name.
+            await WaitForAsync(() => runner.Metrics.Errors.Count >= 1,
+                TimeSpan.FromSeconds(10), "error sample recorded");
+            await WaitForAsync(() => runner.Metrics.Latency.Count >= 2,
+                TimeSpan.FromSeconds(10), "latency samples for both attempts");
+
+            Assert.All(runner.Metrics.Errors, s => Assert.Equal("Telemetry Demo", s.Account));
+            Assert.All(runner.Metrics.Latency, s =>
+            {
+                Assert.Equal("Telemetry Demo", s.Account);
+                Assert.True(s.Value >= 0, "latency must be non-negative");
+            });
+            Assert.True(runner.Metrics.HasErrors);
+
+            runner.Stop();
+        }
+        finally
+        {
+            try { Directory.Delete(dataDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     //  Session floor
     // ─────────────────────────────────────────────────────────────
 
