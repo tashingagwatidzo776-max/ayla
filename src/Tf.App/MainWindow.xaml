@@ -207,10 +207,11 @@
                             <RowDefinition Height="Auto" />  <!-- 22 Events -->
                             <RowDefinition Height="Auto" />  <!-- 23 LOGGING -->
                             <RowDefinition Height="Auto" />  <!-- 24 Log level -->
-                            <RowDefinition Height="Auto" />  <!-- 25 Digest toggle -->
-                            <RowDefinition Height="Auto" />  <!-- 26 spare -->
-                            <RowDefinition Height="Auto" />  <!-- 27 Actions -->
-                            <RowDefinition Height="Auto" />  <!-- 28 Status -->
+                            <RowDefinition Height="Auto" />  <!-- 25 Digest toggle title -->
+                            <RowDefinition Height="Auto" />  <!-- 26 Digest toggle -->
+                            <RowDefinition Height="Auto" />  <!-- 27 Digest interval -->
+                            <RowDefinition Height="Auto" />  <!-- 28 Actions -->
+                            <RowDefinition Height="Auto" />  <!-- 29 Status -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -274,9 +275,13 @@
                         <TextBox Grid.Row="20" Grid.Column="1" Margin="0,0,0,10"
                                  Text="{Binding SettingsVm.WebhookUrl, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="21" Grid.Column="0" Text="Platform" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <CheckBox Grid.Row="21" Grid.Column="1" Margin="0,0,0,10"
+                        <CheckBox Grid.Row="21" Grid.Column="1" Margin="0,0,10,10"
                                   Content="Discord (uncheck for Slack)"
                                   IsChecked="{Binding SettingsVm.IsDiscordWebhook}" />
+                        <Button Grid.Row="21" Grid.Column="1" HorizontalAlignment="Right" Margin="0,0,0,10"
+                                Style="{StaticResource GhostButton}"
+                                Content="Send test message" Command="{Binding SettingsVm.TestWebhookCommand}"
+                                ToolTip="Posts a small test message to the URL in the field above so a bad webhook is caught here instead of silently failing on a real trade event (result appears next to Save)" />
 
                         <TextBlock Grid.Row="22" Grid.Column="0" Text="Events" Style="{StaticResource FieldLabel}" VerticalAlignment="Top" />
                         <StackPanel Grid.Row="22" Grid.Column="1" Margin="0,0,0,10">
@@ -291,16 +296,20 @@
                                   ItemsSource="{Binding SettingsVm.LogLevels}" SelectedIndex="{Binding SettingsVm.LogLevel}" />
 
                         <TextBlock Grid.Row="25" Grid.ColumnSpan="2" Text="MONITORING" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
-                        <CheckBox Grid.Row="25" Grid.Column="1" Margin="0,0,0,10"
-                                  Content="Post cycle-telemetry digest to webhook (every 6h; latency/errors)"
+                        <CheckBox Grid.Row="26" Grid.Column="1" Margin="0,0,0,10"
+                                  Content="Post cycle-telemetry digest to webhook (latency/errors)"
                                   IsChecked="{Binding SettingsVm.MetricsDigestEnabled}"
                                   ToolTip="Off silences the periodic metrics digest only — trade settlement notifications are unaffected" />
+                        <TextBlock Grid.Row="27" Grid.Column="0" Text="Digest interval (h)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="27" Grid.Column="1" Margin="0,0,0,10" Width="120" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.MetricsDigestIntervalHours, UpdateSourceTrigger=PropertyChanged, TargetNullValue=6}"
+                                 ToolTip="Hours between cycle-telemetry digest posts (1–168, default 6). Takes effect on the next app start." />
 
-                        <StackPanel Grid.Row="27" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
+                        <StackPanel Grid.Row="28" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
                             <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
                         </StackPanel>
-                        <TextBlock Grid.Row="28" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                        <TextBlock Grid.Row="29" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
                                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                     </Grid>

@@ -67,4 +67,30 @@ public class MonitoringSettingsTests
         Assert.Equal("no telemetry yet", vm.TelemetrySummaryText);
         Assert.Equal(0, vm.TelemetryErrorCount);
     }
+
+    private static SettingsViewModel NewSettingsVm() =>
+        new(new SettingsService(), new DerivClient(), new DashboardViewModel(new DerivClient()));
+
+    [Fact]
+    public void DigestInterval_RoundTripsAndClamps()
+    {
+        var vm = NewSettingsVm();
+
+        vm.Load(new AppSettings { MetricsDigestIntervalHours = 24 });
+        Assert.Equal(24, vm.MetricsDigestIntervalHours);
+        Assert.Equal(24, vm.BuildSettings().MetricsDigestIntervalHours);
+
+        vm.MetricsDigestIntervalHours = 999; // clamped into 1–168 on build
+        Assert.Equal(168, vm.BuildSettings().MetricsDigestIntervalHours);
+    }
+
+    [Fact]
+    public async Task TestWebhookCommand_EmptyUrl_ShowsFailureInStatus()
+    {
+        var vm = NewSettingsVm();
+
+        await vm.TestWebhookCommand.ExecuteAsync(null);
+
+        Assert.Contains("No webhook URL", vm.StatusMessage);
+    }
 }
