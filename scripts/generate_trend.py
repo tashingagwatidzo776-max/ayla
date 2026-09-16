@@ -10,6 +10,7 @@ Used by .github/workflows/coverage-pages.yml; can also be run locally.
 """
 
 import csv
+import datetime
 import json
 import os
 
@@ -141,6 +142,42 @@ bank_note = "" if not bank_by_acct else (
     + ". Exported by the Pages deploy.</p>"
 )
 
+# ── Artifact-pipeline health banner ─────────────────────────────────
+# Same signals the metrics-digest workflow reports to the webhook: rows in
+# the committed bankroll CSV vs settled trades in the committed pulse file.
+# Trades settling without the CSV advancing is the freeze the watchdog
+# alerts on — surfacing it here makes pipeline health publicly visible on
+# every page deploy, not only in Discord.
+csv_rows = len(bank)
+pulse_trades = 0
+pulse_accounts = 0
+pulse_last = "never"
+if os.path.exists("./docs/growth-pulse.json"):
+    try:
+        with open("./docs/growth-pulse.json", encoding="utf-8") as pf:
+            pulse = json.load(pf)
+        pulse_trades = int(pulse.get("settled_trades", 0))
+        pulse_accounts = len(pulse.get("accounts", []))
+        pulse_epoch = int(pulse.get("last_settled_epoch", 0))
+        if pulse_epoch > 0:
+            pulse_last = datetime.datetime.fromtimestamp(
+                pulse_epoch, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except (ValueError, TypeError, OSError):
+        pass
+
+if pulse_trades > 0 and csv_rows == 0:
+    banner_class = "bad"
+    banner = (f"⚠ Artifact pipeline: {pulse_trades} trade(s) settled but the "
+              "bankroll CSV axis is empty — publish may be frozen")
+elif csv_rows > 0:
+    banner_class = "ok"
+    banner = (f"✓ Artifact pipeline current: {csv_rows} bankroll row(s) · "
+              f"{pulse_trades} settled trade(s) · {pulse_accounts} account(s) · "
+              f"last settled {pulse_last}")
+else:
+    banner_class = "ok"
+    banner = "Artifact pipeline: no settled growth trades yet (pre-trade state)"
+
 # Per-account drill-down legend: one chip per bankroll line, color-matched to
 # the chart, naming the account, its latest bankroll, and the change across
 # the exported window.
@@ -179,10 +216,15 @@ body = f"""<!DOCTYPE html>
     border-left-width: 4px; border-radius: 6px; padding: .15rem .6rem; font-size: .85rem; }}
   .bank-chip .swatch {{ display: inline-block; width: .7rem; height: .7rem; border-radius: 2px;
     opacity: .8; }}
+  .banner {{ border: 1px solid #d0d7de; border-left-width: 4px; border-radius: 8px;
+    padding: .5rem .9rem; margin-bottom: 1.25rem; font-size: .9rem; }}
+  .banner.ok {{ border-left-color: #1a7f37; }}
+  .banner.bad {{ border-left-color: #cf222e; }}
 </style>
 </head>
 <body>
 <h1>Coverage trend — combined line coverage on <code>main</code></h1>
+<div class="banner {banner_class}">{banner}</div>
 <div class="cards">
   <div class="card">Latest<b class="{latest_class}">{latest['y'] if latest else '&mdash;'}%</b></div>
   <div class="card">Average (last {len(pts)})<b>{avg}%</b></div>

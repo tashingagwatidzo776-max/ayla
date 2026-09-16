@@ -16,7 +16,13 @@ name: Metrics digest
 on:
   schedule:
     - cron: '30 7 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Log the digest payload instead of posting it to the webhook"
+        required: false
+        type: boolean
+        default: false
   repository_dispatch:
     types: [metrics-digest]
 
@@ -79,7 +85,7 @@ jobs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Post artifact digest to webhook
-      if: env.METRICS_WEBHOOK_URL != ''
+      if: env.METRICS_WEBHOOK_URL != '' && inputs.dry_run != true
       run: |
         set -euo pipefail
         payload=$(python3 - "$METRICS_WEBHOOK_URL" <<'PY'
@@ -105,3 +111,34 @@ jobs:
         )
         curl -sf -X POST -H "Content-Type: application/json" -d "$payload" "$METRICS_WEBHOOK_URL" > /dev/null
         echo "digest posted to webhook"
+
+    # Dry-run rehearsal (manual dispatch only): builds the exact payload the
+    # post step would send and logs it — future digest format changes can be
+    # exercised without touching the real webhook.
+    - name: Dry run — log the digest payload
+      if: inputs.dry_run == true
+      env:
+        METRICS_WEBHOOK_URL: ${{ secrets.METRICS_WEBHOOK_URL }}
+      run: |
+        set -euo pipefail
+        python3 - "${METRICS_WEBHOOK_URL:-<unset>}" <<'PY'
+        import json
+        import sys
+
+        url = sys.argv[1]
+        rows = "${{ steps.digest.outputs.csv_rows }}"
+        trades = "${{ steps.digest.outputs.pulse_trades }}"
+        note = "${{ steps.digest.outputs.axis_note }}"
+        is_discord = "discord" in url
+
+        text = f"CSV rows {rows} | pulse trades {trades} | {note}"
+        if is_discord:
+            body = {"embeds": [{"title": "📊 Bankroll artifact digest",
+                                "description": text,
+                                "color": 0x9AA3B2}]}
+        else:
+            body = {"attachments": [{"color": "#9AA3B2",
+                                     "text": f"📊 Bankroll artifact digest — {text}"}]}
+        print("DRY RUN — no post performed. Payload that would be sent:")
+        print(json.dumps(body, indent=2))
+        PY
