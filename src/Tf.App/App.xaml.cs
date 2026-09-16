@@ -135,7 +135,10 @@ public partial class App : System.Windows.Application
         services.AddSingleton(_ => new AutoUpdater("1.0.0"));
         services.AddSingleton(_ => new StrategyOptimizer(Path.Combine(SettingsService.DataDir, "backtests")));
         services.AddSingleton<UpdateViewModel>();
-        services.AddSingleton<PerformanceViewModel>();
+        services.AddSingleton(sp => new PerformanceViewModel(
+            sp.GetRequiredService<PerformanceTracker>(),
+            sp.GetRequiredService<TradeStore>(),
+            metrics: sp.GetRequiredService<MultiAccountHub>().Metrics));
         services.AddSingleton(sp =>
             new OptimizerViewModel(
                 sp.GetRequiredService<StrategyOptimizer>(),

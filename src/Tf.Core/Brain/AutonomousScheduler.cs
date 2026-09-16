@@ -20,6 +20,8 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     private readonly TimeSpan _failureBackoff;
     private readonly int _maxConsecutiveFailures;
     private readonly TimeProvider _timeProvider;
+    private readonly Action<double>? _onCycleLatencyMs;
+    private readonly Action<string>? _onCycleError;
 
     private CancellationTokenSource? _cts;
     private DateTimeOffset _nextAllowedDecision;
@@ -33,10 +35,14 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         Action<BrainCycleResult>? onCycle = null,
         TimeSpan? failureBackoff = null,
         int maxConsecutiveFailures = 3,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Action<double>? onCycleLatencyMs = null,
+        Action<string>? onCycleError = null)
     {
         _failureBackoff = failureBackoff ?? TimeSpan.FromSeconds(5);
         _maxConsecutiveFailures = Math.Max(1, maxConsecutiveFailures);
+        _onCycleLatencyMs = onCycleLatencyMs;
+        _onCycleError = onCycleError;
         _brain = brain;
         _settings = settings;
         _tickWindow = tickWindow ?? throw new ArgumentNullException(nameof(tickWindow));
@@ -180,12 +186,14 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                 continue;
             }
 
+            var cycleStart = _timeProvider.GetTimestamp();
             try
             {
                 var result = await _brain.RunCycleAsync(
                     _tickWindow() ?? Array.Empty<Tick>(), risk, _recentLessons(),
                     allowTrading: settings.AutonomyEnabled, ct);
 
+                _onCycleLatencyMs?.Invoke(_timeProvider.GetElapsedTime(cycleStart).TotalMilliseconds);
                 _onCycle?.Invoke(result);
                 ConsecutiveFailures = 0;
                 _nextAllowedDecision = _timeProvider.GetUtcNow().Add(interval);
@@ -194,8 +202,13 @@ public sealed class AutonomousScheduler : IAsyncDisposable
             {
                 break;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                // Telemetry first: the failure path also surfaces cycle latency
+                // (attempt → failure) and the exception type for error counts.
+                _onCycleLatencyMs?.Invoke(_timeProvider.GetElapsedTime(cycleStart).TotalMilliseconds);
+                _onCycleError?.Invoke(ex.GetType().Name);
+
                 // Back off after a failed cycle (default 5s, configurable via
                 // the constructor) so a broken LLM or broker connection
                 // doesn't spin the loop hot. After too many consecutive

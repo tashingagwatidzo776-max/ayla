@@ -151,6 +151,81 @@ public class AutonomousSchedulerTests
         Assert.Equal(0, cycleMs[0]);             // first cycle exactly at virtual t=0
     }
 
+    // ─── Cycle telemetry ─────────────────────────────────
+
+    [Fact]
+    public async Task SuccessfulCycle_RecordsLatencySample_NoError()
+    {
+        var cycles = 0;
+        var latencies = new List<double>();
+        var errors = new List<string>();
+        var scheduler = new AutonomousScheduler(
+            BuildBrain("{\"direction\":\"HOLD\",\"confidence\":0.5,\"stake\":0,\"reasoning\":\"flat\"}", StubDeriv()),
+            IntervalSettings,
+            () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
+            () => Risk(killSwitch: false),
+            () => Array.Empty<string>(),
+            _ => cycles++,
+            timeProvider: new TestVirtualClock(),
+            onCycleLatencyMs: latencies.Add,
+            onCycleError: errors.Add);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = scheduler.StartAsync(cts.Token);
+
+        // The latency callback fires before onCycle, so the first cycle's
+        // sample is already recorded when the cycle callback observes it.
+        await WaitUntilAsync(() => cycles == 1);
+        scheduler.Stop();
+        await run;
+
+        Assert.Single(latencies);
+        Assert.True(latencies[0] >= 0 && latencies[0] < 60_000, $"implausible latency {latencies[0]}ms");
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task FailedCycle_RecordsErrorAndLatency_SuccessCallbackNotFired()
+    {
+        var attempts = 0;
+        var successes = 0;
+        var latencies = new List<double>();
+        var errors = new List<string>();
+        var brain = new TradingBrain(
+            (_, _, _, _) =>
+            {
+                attempts++;
+                return Task.FromException<BrainDecision>(new InvalidOperationException("boom"));
+            },
+            IntervalSettings,
+            StubDeriv());
+        var scheduler = new AutonomousScheduler(
+            brain,
+            IntervalSettings,
+            () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
+            () => Risk(killSwitch: false),
+            () => Array.Empty<string>(),
+            _ => successes++,
+            failureBackoff: TimeSpan.Zero,   // no virtual-clock driving needed
+            timeProvider: new TestVirtualClock(),
+            onCycleLatencyMs: latencies.Add,
+            onCycleError: errors.Add);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = scheduler.StartAsync(cts.Token);
+
+        await WaitUntilAsync(() => errors.Count >= 1);
+        scheduler.Stop();
+        await run;
+
+        Assert.True(errors.Count >= 1);
+        Assert.All(errors, e => Assert.Equal("InvalidOperationException", e));
+        Assert.True(latencies.Count >= errors.Count, "the failure path must also surface latency");
+        Assert.Equal(0, successes);
+        Assert.True(scheduler.ConsecutiveFailures >= 1);
+        Assert.True(attempts >= 1);
+    }
+
     [Fact]
     public async Task SecondCycle_WaitsForFullInterval_ThenRunsExactlyAtGate()
     {

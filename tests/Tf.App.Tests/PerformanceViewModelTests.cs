@@ -67,6 +67,30 @@ public class PerformanceViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ExportMetrics_WithCollector_FillsLatencyAndErrorSections()
+    {
+        var store = new TradeStore(_dir);
+        store.Add(Trade(0.90m, "Growth", "Alpha", DateTimeOffset.Now));
+
+        var collector = new MetricsCollector();
+        collector.RecordLatency(120, "Alpha", DateTimeOffset.UtcNow);
+        collector.RecordLatency(280, "Alpha", DateTimeOffset.UtcNow);
+        collector.RecordError("Alpha", DateTimeOffset.UtcNow);
+
+        var exportDir = Path.Combine(_dir, "export");
+        var vm = new PerformanceViewModel(_tracker, store, exportDir, collector);
+        vm.ExportMetricsCommand.Execute(null);
+
+        var json = File.ReadAllText(Path.Combine(exportDir, $"tf_metrics_{DateTime.UtcNow:yyyyMMdd}.json"));
+        Assert.Contains("\"latency_ms\"", json);
+        Assert.Contains("\"mean_ms\": 200", json);   // (120+280)/2
+        Assert.Contains("\"errors\"", json);
+        Assert.Contains("\"total\": 1", json);
+        Assert.Contains("\"account\": \"Alpha\"", json);
+        Assert.Contains("Exported", vm.StatusMessage);
+    }
+
+    [Fact]
     public void ExportMetrics_WithoutStore_ShowsUnavailableStatus()
     {
         var vm = new PerformanceViewModel(_tracker, metricsExportDirectory: _dir);

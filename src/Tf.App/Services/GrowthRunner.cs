@@ -109,7 +109,8 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     public GrowthRunner(AccountConnection connection, TradeStore store,
         Func<AppSettings> settings, Func<bool> killSwitch, TradeJournal journal,
         PerformanceTracker? tracker = null, NotificationService? notifications = null,
-        WebhookService? webhook = null, TimeProvider? timeProvider = null)
+        WebhookService? webhook = null, TimeProvider? timeProvider = null,
+        MetricsCollector? metrics = null)
     {
         Connection = connection;
         _store = store;
@@ -120,10 +121,15 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         _notifications = notifications;
         _webhook = webhook;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        Metrics = metrics ?? new MetricsCollector();
     }
 
     public AccountConnection Connection { get; }
     public GrowthSessionEngine? Engine => _engine;
+
+    /// <summary>Per-runner operational telemetry (cycle latencies, errors).
+    /// Aggregated across runners by the hub for the metrics export.</summary>
+    public MetricsCollector Metrics { get; }
 
     public Task StartAsync(GrowthPlan plan)
     {
@@ -165,7 +171,9 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
         _scheduler = new AutonomousScheduler(_brain, settings,
             () => Connection.Ticks, risk, lessons, OnCycle,
-            TimeSpan.FromSeconds(plan.FailureBackoffSeconds), timeProvider: _timeProvider);
+            TimeSpan.FromSeconds(plan.FailureBackoffSeconds), timeProvider: _timeProvider,
+            onCycleLatencyMs: ms => Metrics.RecordLatency(ms, Connection.DisplayName, _timeProvider.GetUtcNow()),
+            onCycleError: exType => Metrics.RecordError(Connection.DisplayName, _timeProvider.GetUtcNow()));
 
         IsRunning = true;
         RaiseState();

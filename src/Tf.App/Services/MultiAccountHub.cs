@@ -69,6 +69,10 @@ public sealed class MultiAccountHub
     }
 
     /// <summary>All known accounts (bound directly by the UI).</summary>
+    /// <summary>Aggregated operational telemetry (cycle latencies, errors)
+    /// across every runner the hub manages — feeds the metrics export.</summary>
+    public MetricsCollector Metrics { get; } = new();
+
     public ObservableCollection<AccountConnection> Accounts { get; } = new();
 
     /// <summary>Raised on every growth runner activity line (background thread).</summary>
@@ -549,7 +553,7 @@ public sealed class MultiAccountHub
             }
 
             var runner = new GrowthRunner(connection, _store, settings, killSwitch, _journal,
-                _tracker, _notifications, _webhook, _timeProvider);
+                _tracker, _notifications, _webhook, _timeProvider, Metrics);
             runner.Activity += line => GrowthActivity?.Invoke(runner, line);
             runner.Connection.StateChanged += OnConnectionStateChanged;
             runner.Exited += OnRunnerExited;
