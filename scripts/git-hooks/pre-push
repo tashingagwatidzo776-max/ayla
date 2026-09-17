@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# git pre-push hook: run the local CI gate before every push.
+#
+# Enable in a clone with:
+#     git config core.hooksPath scripts/git-hooks
+#
+# What runs, in ci-local.ps1's order (mirrors the required checks on main):
+#     build -> unit -> integration -> workflow-lint -> safety-audit -> merge preview
+#
+# A failing check aborts the push (exit != 0). Bypass one push deliberately:
+#     git push --no-verify
+# Skip just the build step (tests run against the last build):
+#     TF_CI_LOCAL_SKIP_BUILD=1 git push
+#
+# Non-bash environments (bare Git on Windows without a POSIX shell) have no
+# bash; the hook then exits 127 and the push proceeds — local gating is
+# opt-in tooling, never a lock on the repository.
+
+set -u
+
+# Only gate pushes that advance a branch on a remote. Tag pushes re-run the
+# real gate in CI (drill -> release-gate), which no local loop can replicate.
+if [ "$#" -ge 1 ] && [ -f "$1" ]; then
+    if ! grep -Eq '^refs/heads/' "$1"; then
+        exit 0
+    fi
+fi
+
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HOOK_DIR/../.." && pwd)"
+
+# Git runs hooks with its own shims on PATH (merging.exe etc.). Prepend the
+# real Windows paths so powershell and python resolve.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        case "$PATH" in
+            /usr/bin:*) ;;
+            *) export PATH="/usr/bin:$PATH" ;;
+        esac
+        ;;
+esac
+
+# Find PowerShell (pwsh preferred, Windows PowerShell as fallback). Read from
+# the Windows PATH via cmd, not the msys PATH.
+find_powershell() {
+    for cand in pwsh powershell.exe powershell; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    if [ -x "/c/Program Files/PowerShell/7/pwsh.exe" ]; then
+        echo "/c/Program Files/PowerShell/7/pwsh.exe"
+        return 0
+    fi
+    winps="$(cmd //c "where powershell" 2>/dev/null | head -1 | tr -d '\r')"
+    if [ -n "$winps" ]; then
+        echo "$winps"
+        return 0
+    fi
+    return 1
+}
+
+PS="$(find_powershell)" || {
+    echo "pre-push: no PowerShell found; cannot run ci-local (push proceeding)" >&2
+    exit 0
+}
+
+SCRIPT="$ROOT/scripts/ci-local.ps1"
+[ -f "$SCRIPT" ] || {
+    echo "pre-push: $SCRIPT missing; cannot run the local gate (push proceeding)" >&2
+    exit 0
+}
+
+# Skip the build when asked: TF_CI_LOCAL_SKIP_BUILD=1 reuses the last build,
+# or set it persistently with `git config hooks.ciLocalSkipBuild true`.
+skip_build="${TF_CI_LOCAL_SKIP_BUILD:-$(git config hooks.ciLocalSkipBuild || echo 0)}"
+extra=""
+if [ "$skip_build" = "1" ]; then
+    extra="-SkipBuild"
+fi
+
+# The merge-preview leg needs a GitHub token. Derive one from the same
+# credential store git push itself uses (never written to disk); if push
+# works, this almost always does too. Non-interactive: no prompt, no hang —
+# ssh-remote clones without an https credential simply lose that one leg.
+if [ -z "${GH_TOKEN:-}" ]; then
+    GH_TOKEN="$(printf 'protocol=https\nhost=github.com\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | sed -n 's/^password=//p' | head -1 | tr -d '\r')"
+    export GH_TOKEN
+fi
+
+echo "pre-push: running the local CI gate (ci-local.ps1)..."
+"$PS" -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT" $extra
+code=$?
+if [ $code -ne 0 ]; then
+    echo ""
+    echo "pre-push: local gate FAILED (exit $code) — push aborted." >&2
+    echo "  Fix the failures and retry, or bypass this push with:  git push --no-verify" >&2
+    exit 1
+fi
+echo "pre-push: local gate green — pushing."
+exit 0
