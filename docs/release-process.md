@@ -57,14 +57,34 @@ gh run watch $(gh run list --workflow gate-drill.yml --branch vX.Y.Z --limit 1 -
 gh run download <run-id> --name Tf-vX.Y.Z-win-x64 -D dist/vX.Y.Z
 # Sanity: PE32+ console/GUI x86-64, ~70 MB self-contained, launches to the UI.
 
-# 5. Create the release — draft first, verify the page, then publish.
-gh release create vX.Y.Z --draft --title "Tf vX.Y.Z" --notes-file release-notes-vX.Y.Z.md dist/vX.Y.Z/Tf.exe
+# 5. Create the release — draft first (notes only), then attach the asset.
+gh release create vX.Y.Z --draft --title "Tf vX.Y.Z" --notes-file release-notes-vX.Y.Z.md
+gh release upload vX.Y.Z dist/vX.Y.Z/Tf.exe
 # ...verify the draft renders correctly, then:
 gh release edit vX.Y.Z --draft=false
 ```
 
 Draft-first is deliberate: a published release notifies watchers; a draft does
 not. A draft with a broken note or wrong artifact costs nothing to fix.
+
+**When the local link to the blob host is slow or down** (artifact downloads
+and asset uploads both traverse it), attach the asset from GitHub's own
+infrastructure instead — Actions → Actions, no throttled hop:
+
+```bash
+# Create the draft (notes only) locally as above, then dispatch:
+gh workflow run publish-release.yml -f tag=vX.Y.Z   # run id input optional
+gh run watch $(gh run list --workflow publish-release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+# The job downloads the tag's artifact on the runner, verifies the version
+# stamp matches the tag, prints the sha256, and uploads the asset (--clobber,
+# idempotent). Publishing the draft stays a local one-liner (tiny API call):
+gh release edit vX.Y.Z --draft=false
+```
+
+The workflow requires the draft to exist first and refuses to run for a tag
+without a successful gate-drill run — the gate → publish ordering is enforced
+there too. v0.0.2 shipped through this path when a provider-side throttle
+reduced the blob host to ~11 KB/s.
 
 ### Release notes
 
@@ -226,3 +246,4 @@ iteration on non-test changes: `TF_CI_LOCAL_SKIP_BUILD=1` (or
 |---|---|
 | `v0.0.1-rc1` | Dry run: first full walk of drill → release-gate → publish-exe; artifact downloaded and verified; tag deleted afterwards. Its first run exposed a flaky gate test (async race), fixed via PR #53 before the real release. |
 | `v0.0.1` | First real release. Its first tag run failed the drill on a cross-collection race around the static manual-unlock latch (parallel test classes resetting the shared gate mid-assertion) — tag deleted, fix pinned the three gate classes into one xunit collection, re-tagged on the fixed commit. |
+| `v0.0.2` | First fully green first-run chain (drill → gate → publish on `c7df244`, all three jobs). The manual asset attach was blocked by a provider-side blob-host throttle (~11 KB/s single-stream); shipped via the new `publish-release.yml` path (Actions → Actions). The local download still completed by assembling 8 parallel ranged streams — recorded here because the artifact endpoint under-reported its size to the HEAD probe (use the API's `size_in_bytes`). |

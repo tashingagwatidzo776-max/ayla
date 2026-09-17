@@ -1,0 +1,97 @@
+name: Publish release asset
+
+# Closes the last manual gap in the release chain: the tag workflow leaves
+# the built exe as a run artifact, and the release page (draft → verify →
+# publish) was assembled by hand from a local download. This job attaches
+# the tag's artifact to the release from GitHub's own infrastructure —
+# Actions → Actions — so shipping no longer depends on the operator's link
+# to the blob host (a throttled or offline local connection can no longer
+# strand a release).
+#
+# Dispatch: Actions → Publish release asset → Run workflow → tag (and
+# optionally the gate-drill run id; defaults to the latest successful run
+# on that tag). Idempotent: re-runs replace the existing asset (--clobber).
+# The draft→published decision stays with the human, per the runbook.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag whose built exe should be attached (e.g. v0.0.2)'
+        required: true
+        type: string
+      run_id:
+        description: 'Optional gate-drill run id holding the artifact (defaults to the latest successful run on that tag)'
+        required: false
+        type: string
+
+permissions:
+  contents: write # upload the asset to the release
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - name: Resolve the tag's gate-drill run
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ inputs.tag }}
+        RUN_ID: ${{ inputs.run_id }}
+      run: |
+        set -euo pipefail
+        if [ -z "$RUN_ID" ]; then
+          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$TAG&status=success&per_page=20" \
+            --jq '[.workflow_runs[] | select(.name == "Real-money gate drill")][0].id')
+        fi
+        if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+          echo "::error::no successful gate-drill run found for tag $TAG"
+          exit 1
+        fi
+        echo "source run: $RUN_ID"
+        echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+
+    - name: Download the built exe
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        gh run download "$RUN_ID" --name "Tf-$TAG-win-x64" --dir dist
+        test -f dist/Tf.exe || { echo "::error::dist/Tf.exe missing from the artifact"; exit 1; }
+        ls -la dist/
+
+    - name: Verify the binary's version stamp matches the release tag
+      env:
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        # The stamp is UTF-16 in the PE (window title / About identity):
+        if ! strings -e l dist/Tf.exe | grep -qF "$TAG+"; then
+          echo "::error::Tf.exe does not carry the $TAG+ version stamp"
+          exit 1
+        fi
+        echo "stamp verified: $TAG+…"
+        sha256sum dist/Tf.exe | tee sha256.txt
+        echo "### 📦 Release asset for \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        cat sha256.txt >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        echo "source run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Attach to the release (idempotent)
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        if ! gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id' > /dev/null 2>&1; then
+          echo "::error::no release (draft or published) exists for $TAG — create the draft first"
+          exit 1
+        fi
+        gh release upload "$TAG" dist/Tf.exe --clobber
+        echo "### Draft state after attach" >> "$GITHUB_STEP_SUMMARY"
+        echo '```json' >> "$GITHUB_STEP_SUMMARY"
+        gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+          --jq '{draft, assets: [.assets[] | {name, size, state}]}' >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
