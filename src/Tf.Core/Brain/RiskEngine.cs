@@ -2,7 +2,11 @@ using Tf.Core.Models;
 
 namespace Tf.Core.Brain;
 
-/// <summary>Live state the risk engine needs to evaluate a decision.</summary>
+/// <summary>Live state the risk engine needs to evaluate a decision.
+/// <see cref="RealMoney"/> defaults to <see cref="RealMoneyDecision.DemoPassthrough"/>
+/// so existing demo paths are untouched; real-money paths must thread the
+/// gate's verdict in, and anything other than a passthrough blocks the trade
+/// (defence in depth on top of the gate at engine-start time).</summary>
 public sealed record RiskContext(
     bool KillSwitchEngaged,
     int OpenContracts,
@@ -10,7 +14,8 @@ public sealed record RiskContext(
     decimal DailyNetProfit,
     int TradesToday,
     DateTimeOffset? LastTradeAt,
-    ContractStatus? LastTradeOutcome);
+    ContractStatus? LastTradeOutcome,
+    RealMoneyDecision RealMoney = RealMoneyDecision.DemoPassthrough);
 
 public sealed record RiskVerdict(bool Allowed, string Reason)
 {
@@ -39,6 +44,16 @@ public sealed class RiskEngine
         if (context.KillSwitchEngaged)
         {
             return RiskVerdict.Reject("master kill switch is engaged");
+        }
+
+        // The real-money gate is evaluated by the caller (it needs the
+        // API-verified account type and the session unlock); a non-passthrough
+        // verdict here means the caller already refused — belt and braces so a
+        // decision can never trade real funds because the gate was skipped.
+        if (context.RealMoney is not RealMoneyDecision.DemoPassthrough and
+            not RealMoneyDecision.Allowed)
+        {
+            return RiskVerdict.Reject($"real-money gate: {context.RealMoney}");
         }
 
         if (decision.Direction == BrainDirection.Hold)

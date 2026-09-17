@@ -121,6 +121,35 @@ public sealed class TradeJournal : IDisposable
         });
     }
 
+    /// <summary>Log that the real-money session unlock was armed for a set
+    /// of accounts (plus, optionally, the manual trading surfaces). This is
+    /// the moment real trading became possible this session — the audit
+    /// trail must show it as explicitly as it shows refusals.</summary>
+    public void LogRealMoneyUnlockArmed(IReadOnlyList<(Guid AccountId, string AccountName, bool VerifiedReal)> accounts,
+        bool manualSurfaces, string armedBy = "unlock panel")
+    {
+        if (accounts.Count == 0 && !manualSurfaces)
+        {
+            return; // nothing became possible — nothing to record
+        }
+
+        var names = accounts.Select(a => a.AccountName).ToArray();
+        Enqueue(new JournalEntry
+        {
+            Timestamp = DateTimeOffset.UtcNow,
+            AccountId = accounts.Count > 0 ? accounts[0].AccountId : Guid.Empty,
+            Category = "REAL_MONEY_UNLOCK_ARMED",
+            Details = JsonSerializer.Serialize(new
+            {
+                Accounts = names,
+                AccountCount = names.Length,
+                VerifiedReal = accounts.Count(a => a.VerifiedReal),
+                ManualSurfaces = manualSurfaces,
+                ArmedBy = armedBy
+            })
+        });
+    }
+
     /// <summary>Log a general message.</summary>
     public void Log(Guid accountId, string category, string message, string details = "")
     {
