@@ -152,11 +152,14 @@ green or red with the fix:
 Run demo until a full session looks boring (settlements in the Journal, no
 gate refusals, no reconnect storm), then arm the unlock and go.
 `scripts/soak_report.py` turns a demo session's journal + heartbeats into an
-evidence report with pass/fail verdicts:
+evidence report with pass/fail verdicts — and `--record` accumulates the
+evidence in `docs/soak/`, where the weekly drill checks it stays fresh
+(absent is fine, stale fails the drill):
 
 ```bash
-python scripts/soak_report.py --since 2026-09-17 --out soak-report.md
-# exit 0 = clean (gate silent, telemetry intact, connections stable)
+python scripts/soak_report.py --since 2026-09-17 --record docs/soak
+# exit 0 = clean · 1 = findings · 3 = NO DATA (an empty soak is not evidence)
+git add docs/soak && git commit -m "soak evidence"
 ```
 
 ## Configuration

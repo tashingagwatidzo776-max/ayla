@@ -39,10 +39,17 @@ def entry(category, details, ts="2026-09-17T10:00:00+00:00", account="11111111-1
     return {"Timestamp": ts, "AccountId": account, "Category": category, "Details": details}
 
 
-def settlement(profit=1.0, bankroll=6.0, won=True):
+def settlement(profit=1.0, bankroll=6.0, won=True, ts="2026-09-17T10:00:00+00:00"):
     return entry("TRADE_SETTLEMENT", json.dumps({
         "ContractId": "c1", "Won": won, "Payout": 1.9 if won else 0.0,
-        "Profit": profit, "NewBankroll": bankroll}))
+        "Profit": profit, "NewBankroll": bankroll}), ts=ts)
+
+
+def settlements_above_floor(n=12):
+    """Enough settlements to clear the 10-entry NO DATA floor."""
+    return [settlement(profit=1.0 if i % 2 == 0 else -1.0, bankroll=5.0 + i * 0.1,
+                       won=i % 2 == 0, ts=f"2026-09-17T10:{i:02d}:00+00:00")
+            for i in range(n)]
 
 
 def heartbeat(frm, to, name="DemoAcc"):
@@ -56,12 +63,13 @@ GATE_REFUSAL = entry("GROWTH_STATE", json.dumps({
 
 def test_clean_soak_passes():
     out, rc = run_report(
-        [settlement(), settlement(profit=-1.0, bankroll=5.0, won=False)],
+        settlements_above_floor(),
         [heartbeat("Connecting…", "Connected"), heartbeat("Reconnecting…", "Connected")])
     assert rc == 0, out
     assert "SOAK CLEAN" in out
     assert "PASS - gate refusals" in out
-    assert "2 settled trades, 1 won / 1 lost, net +0.00" in out
+    assert "12 settled trades, 6 won / 6 lost" in out
+    assert "12 journal entries" in out
     assert "DemoAcc: 2 reconnect(s)" in out
 
 
@@ -109,19 +117,62 @@ def test_unparseable_journal_line_fails_soak():
 
 
 def test_since_filter_excludes_old_entries():
+    entries = settlements_above_floor() # 10 in-window
     old = settlement()
     old["Timestamp"] = "2026-08-01T10:00:00+00:00"
-    out, rc = run_report([old], [], extra_args=["--since", "2026-09-17"])
-    # the old settlement is filtered out; report is clean with 0 settlements
+    out, rc = run_report(entries + [old], [], extra_args=["--since", "2026-09-17"])
+    # the old settlement is filtered out; the twelve in-window ones remain
     assert rc == 0, out
-    assert "0 settled trades" in out
+    assert "12 settled trades" in out
+
+
+def test_empty_soak_reports_no_data_not_clean():
+    # An empty soak must never read as evidence: below the entry floor a
+    # clean run exits 3 (NO DATA), not 0.
+    out, rc = run_report([], [])
+    assert rc == 3, out
+    assert "NO DATA" in out
+    assert "SOAK CLEAN" not in out
+
+
+def test_thin_but_clean_soak_degrades_to_no_data():
+    out, rc = run_report([settlement() for _ in range(10)], [])
+    assert rc == 0, out  # exactly at the floor of 10
+    out, rc = run_report([settlement() for _ in range(5)], [])
+    assert rc == 3, out
+    assert "NO DATA" in out
+
+
+def test_findings_outrank_no_data():
+    # A gate refusal in a tiny journal is a FINDING (exit 1), not NO DATA —
+    # emptiness must not mask a real problem.
+    out, rc = run_report([GATE_REFUSAL], [])
+    assert rc == 1, out
+    assert "FAIL - gate refusals" in out
+    assert "FINDINGS" in out
+
+
+def test_record_flag_writes_dated_evidence():
+    entries = settlements_above_floor()
+    with tempfile.TemporaryDirectory() as tmp:
+        out, rc = run_report(entries, [], extra_args=["--record", tmp])
+        assert rc == 0, out
+        files = list(Path(tmp).glob("SOAK-*.md"))
+        assert len(files) == 1, files
+        assert files[0].read_text(encoding="utf-8").startswith("# Demo soak report")
+
+
+def test_min_entries_flag_lowers_the_floor():
+    out, rc = run_report([settlement(), settlement()], [], extra_args=["--min-entries", "2"])
+    assert rc == 0, out
+    assert "SOAK CLEAN" in out
 
 
 def test_governor_and_arms_are_informational():
     gov = entry("GROWTH_STATE", json.dumps({
         "State": "portfolio-governor", "Bankroll": -6.0, "LossStreak": 0, "Reason": "cap breached"}))
     arm = entry("REAL_MONEY_UNLOCK_ARMED", "manual surfaces joined")
-    out, rc = run_report([gov, arm], [])
+    out, rc = run_report([gov, arm] + settlements_above_floor(), [])
     assert rc == 0, out
     assert "governor entries: 1" in out
     assert "unlock arms: 1" in out
