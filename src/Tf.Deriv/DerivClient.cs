@@ -582,7 +582,10 @@ public sealed class DerivClient : IAsyncDisposable
         var value = balance.TryGetProperty("balance", out var b) ? b.GetDecimal() : 0m;
         var currency = balance.TryGetProperty("currency", out var c) ? c.GetString() ?? "USD" : "USD";
         var loginId = balance.TryGetProperty("loginid", out var l) ? l.GetString() ?? "" : "";
-        return new AccountBalance(value, currency, loginId);
+        // Deriv's own demo/real flag — missing/malformed parses as virtual
+        // (an unverified account must never be treated as real).
+        var isVirtual = AccountBalance.ParseIsVirtual(balance);
+        return new AccountBalance(value, currency, loginId, isVirtual);
     }
 
     private void SetStatus(ConnectionStatus status)

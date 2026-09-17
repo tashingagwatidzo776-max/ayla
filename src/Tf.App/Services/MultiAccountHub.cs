@@ -39,6 +39,33 @@ public sealed class MultiAccountHub
     private readonly Dictionary<Guid, Func<bool>> _killSwitchFactories = new();
     private readonly Dictionary<Guid, CancellationTokenSource> _autoRestartCts = new();
     private readonly Dictionary<Guid, int> _pendingRestarts = new();
+
+    /// <summary>When each account's session unlock was armed (UTC) — feeds
+    /// the digest's arm-state leg. entries removed with the account.</summary>
+    private readonly Dictionary<Guid, DateTimeOffset> _unlockArmedAtUtc = new();
+
+    /// <summary>One timer per armed account: fires when the arm reaches the
+    /// staleness threshold and flags it. Cancelled on drop/remove.</summary>
+    private readonly Dictionary<Guid, ITimer> _stalenessTimers = new();
+
+    /// <summary>Per-session real-money unlock: accounts whose growth engine
+    /// may run on a real-money (API-verified non-virtual) account. Armed by
+    /// the UI's typed-phrase unlock dialog, never persisted, cleared on
+    /// app exit. Demo accounts never consult this set (passthrough).</summary>
+    private readonly HashSet<Guid> _realMoneyUnlocked = new();
+
+    /// <summary>Growth-trade activity per unlock window: when the window
+    /// opened, how many growth trades settled inside it, and their combined
+    /// net P&L. Cleared when the arm state is; feeds the digest's arm leg
+    /// so monitoring sees not just that real mode was enabled but whether
+    /// it was actually used.</summary>
+    private readonly Dictionary<Guid, (DateTimeOffset ArmedAt, int Trades, decimal Net)> _unlockWindows = new();
+
+    /// <summary>Raised when an account's session unlock is flagged as stale
+    /// — armed longer than <see cref="ArmStalenessThreshold"/> (background
+    /// thread). Payload: account id, display name, arm age, threshold cycles.</summary>
+    public event Action<(Guid AccountId, string Name, TimeSpan Age, int Cycles)>? UnlockStale;
+
     private readonly object _runnerLock = new();
 
     public MultiAccountHub(IAccountVault vault, TradeStore store, TradeJournal journal,
@@ -265,6 +292,12 @@ public sealed class MultiAccountHub
             _plans.Remove(connection.Config.Id);
             _settingsFactories.Remove(connection.Config.Id);
             _killSwitchFactories.Remove(connection.Config.Id);
+
+            // Drop the arm state with the account: the session unlock
+            // itself is revoked, the staleness watch cancelled (no late flag
+            // for a removed account), and the digest window closed with it.
+            CancelUnlockStalenessCheck(connection.Config.Id);
+            _realMoneyUnlocked.Remove(connection.Config.Id);
 
             if (_autoRestartCts.Remove(connection.Config.Id, out var cts))
             {
@@ -494,6 +527,13 @@ public sealed class MultiAccountHub
     internal void TestRaiseGrowthActivity(GrowthRunner runner, string line) =>
         GrowthActivity?.Invoke(runner, line);
 
+    /// <summary>Test seam: replays the settlement hook exactly as a live
+    /// runner would — updates the unlock window counters (item of the
+    /// digest's arm leg) and runs the drawdown governor on the same code
+    /// path. Tests use fake-broker trades; no Deriv network involved.</summary>
+    internal void TestRaiseSettled(GrowthRunner runner, Trade trade) =>
+        OnRunnerSettled(runner, trade);
+
     /// <summary>Cancels a scheduled automatic restart, if one is pending.</summary>
     private void CancelPendingRestart(Guid accountId)
     {
@@ -536,12 +576,321 @@ public sealed class MultiAccountHub
         runner.Settled += OnRunnerSettled;
     }
 
+    /// <summary>Raised when a growth start was refused by the real-money
+    /// gate: the account config claims real, and the API-verified account
+    /// type or the session unlock refused it (background thread).</summary>
+    public event Action<AccountConnection, string>? RealMoneyRefused;
+
+    /// <summary>How long a session unlock may stay armed before the hub
+    /// flags it as stale (toast + webhook + journal, repeating every
+    /// threshold while still armed). Real-money unlocks are meant to be
+    /// armed for a deliberate trading window, not for the life of the
+    /// process — an all-day arm is exactly the state monitoring must see.
+    /// Null disables the alert.</summary>
+    public TimeSpan? ArmStalenessThreshold { get; set; } = TimeSpan.FromHours(4);
+
+    /// <summary>Arm the per-session real-money unlock for one account.
+    /// The unlock lives only as long as this process; the gate re-checks
+    /// the API verdict on every start regardless. Arming is journalled as a
+    /// REAL_MONEY_UNLOCK_ARMED audit entry (with the API-verified account
+    /// state) and announced out-of-band, so the moment real trading became
+    /// possible is as visible as every refusal.</summary>
+    public void UnlockRealMoney(Guid accountId)
+    {
+        if (!TryArmUnlock(accountId))
+        {
+            return; // re-arming the same account is a no-op, not a new audit event
+        }
+
+        JournalUnlockArmed(new[] { Accounts.FirstOrDefault(a => a.Config.Id == accountId) },
+            manualSurfaces: false);
+    }
+
+    /// <summary>Arms the unlock without journaling or announcing. The unlock
+    /// panel uses this to arm a batch of accounts and write ONE summary
+    /// audit entry via <see cref="JournalUnlockArmed"/> afterwards. True
+    /// when the account was newly armed.</summary>
+    internal bool TryArmUnlock(Guid accountId)
+    {
+        DateTimeOffset armedAt;
+        lock (_runnerLock)
+        {
+            if (!_realMoneyUnlocked.Add(accountId))
+            {
+                return false;
+            }
+
+            armedAt = _timeProvider.GetUtcNow();
+            _unlockArmedAtUtc[accountId] = armedAt;
+            _unlockWindows[accountId] = (armedAt, Trades: 0, Net: 0m); // open the digest window
+        }
+
+        // The unlock is now on a clock: if it is still armed when the
+        // staleness threshold elapses, the hub flags it (toast + webhook +
+        // journal) instead of letting a forgotten arm sit silently for the
+        // rest of the process lifetime.
+        ScheduleUnlockStalenessCheck(accountId, armedAt);
+        return true;
+    }
+
+    /// <summary>When each account's session unlock was armed (UTC), for the
+    /// digest's arm-state leg. Only accounts currently unlocked appear.</summary>
+    internal IReadOnlyDictionary<Guid, DateTimeOffset> UnlockArmedAtUtc
+    {
+        get
+        {
+            lock (_runnerLock)
+            {
+                return _unlockArmedAtUtc.ToDictionary(kv => kv.Key, kv => kv.Value);
+            }
+        }
+    }
+
+    /// <summary>One-line summary of the current session unlock state for
+    /// the webhook digest: armed accounts (with arm age) and whether the
+    /// manual surfaces' shared unlock is on. Null while nothing is armed —
+    /// silence means no real trading is possible, which is not news.</summary>
+    public string? DescribeUnlockState()
+    {
+        Dictionary<Guid, DateTimeOffset> armed;
+        lock (_runnerLock)
+        {
+            armed = _unlockArmedAtUtc.ToDictionary(kv => kv.Key, kv => kv.Value);
+        }
+
+        if (armed.Count == 0 && !ManualRealMoneyGate.IsUnlocked)
+        {
+            return null;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var parts = new List<string>();
+        foreach (var kv in armed.OrderBy(kv => kv.Value))
+        {
+            var connection = Accounts.FirstOrDefault(a => a.Config.Id == kv.Key);
+            var name = connection?.Config.Label ?? kv.Key.ToString()[..8];
+            (var armedAt, var trades, var net) = _unlockWindows.TryGetValue(kv.Key, out var window)
+                ? window
+                : (kv.Value, 0, 0m);
+            parts.Add(trades > 0
+                ? $"{name} ({(now - armedAt).TotalMinutes:0}m ago, {trades} growth trade{(trades == 1 ? "" : "s")} · net {net:+0.##;-0.##;0})"
+                : $"{name} ({(now - armedAt).TotalMinutes:0}m ago, no growth trades)");
+        }
+
+        if (ManualRealMoneyGate.IsUnlocked)
+        {
+            parts.Add("manual surfaces");
+        }
+
+        return $"🔒 real-money unlock ARMED this session: {string.Join(", ", parts)}";
+    }
+
+    /// <summary>Flags an arm that has been live for more than
+    /// <see cref="ArmStalenessThreshold"/>: journalled, toasted, and posted
+    /// out-of-band on the webhook, repeating with every full threshold the
+    /// arm survives (4h, 8h, 12h…) so an all-day arm keeps resurfacing
+    /// instead of being dismissed once. Never throws — the alert must not
+    /// be able to take the hub down.</summary>
+    private void FlagStaleUnlock(Guid accountId, DateTimeOffset scheduledFor)
+    {
+        try
+        {
+            DateTimeOffset armedAt;
+            lock (_runnerLock)
+            {
+                // The stored arm time only ever moves forward (a re-arm) or
+                // disappears (drop/clear). Equal to this watch's scheduled
+                // generation → the flag is ours; newer → a re-arm superseded
+                // this timer and its (late) fire must stay silent.
+                if (!_unlockArmedAtUtc.TryGetValue(accountId, out armedAt) ||
+                    armedAt > scheduledFor)
+                {
+                    return; // re-armed (newer watch scheduled) or dropped meanwhile
+                }
+            }
+
+            var threshold = ArmStalenessThreshold;
+            if (threshold is not { } limit || limit <= TimeSpan.Zero)
+            {
+                return; // alerting disabled
+            }
+
+            var now = _timeProvider.GetUtcNow();
+            var age = now - armedAt;
+            var cycles = Math.Max(1, (int)Math.Floor(age / limit));
+            var connection = Accounts.FirstOrDefault(a => a.Config.Id == accountId);
+            var name = connection?.Config.Label ?? accountId.ToString()[..8];
+            var ageText = age.TotalHours >= 1
+                ? $"{(int)age.TotalHours}h{age.Minutes:00}m"
+                : $"{age.TotalMinutes:0}m";
+
+            _journal.Log(Guid.Empty, "REAL_MONEY_UNLOCK_STALE",
+                $"real-money unlock for '{name}' armed {ageText} ago " +
+                $"(threshold {limit.TotalHours:0.#}h × {cycles}) — " +
+                "still live; re-arm or let the session end to clear it");
+
+            var summary = $"{name}: unlock armed {ageText} ago (threshold {limit.TotalHours:0.#}h)";
+            _notifications?.NotifyRiskRailEngaged("🔓 Unlock left armed", summary);
+            _webhook?.PostRiskRail("🔓 Real-money unlock left armed",
+                $"'{name}' has been armed for {ageText} this session " +
+                $"(staleness threshold {limit.TotalHours:0.#}h, x{cycles}). " +
+                "Re-arm deliberately or let the session end.");
+
+            UnlockStale?.Invoke((accountId, name, age, cycles));
+
+            // Still armed → the next full threshold re-flags it. Scheduled
+            // from NOW, not armedAt + limit: a fire exactly on the threshold
+            // would otherwise reschedule with a zero due time and spin.
+            ScheduleUnlockStalenessCheck(accountId, _timeProvider.GetUtcNow());
+        }
+        catch (Exception)
+        {
+            // Journalling the failure keeps the audit trail honest even when
+            // the alert itself could not be delivered.
+            try
+            {
+                _journal.Log(accountId, "REAL_MONEY_UNLOCK_STALE",
+                    "staleness alert delivery failed");
+            }
+            catch
+            {
+                // Nothing left to do — never throw from a background alert.
+            }
+        }
+    }
+
+    /// <summary>Arms (or re-arms) the one-shot timer that flags an account's
+    /// unlock once it has been live for <see cref="ArmStalenessThreshold"/>.
+    /// Called from every arming path and again after each staleness flag so
+    /// an all-day arm keeps resurfacing on every threshold.</summary>
+    private void ScheduleUnlockStalenessCheck(Guid accountId, DateTimeOffset armedAt)
+    {
+        var threshold = ArmStalenessThreshold;
+        if (threshold is not { } limit || limit <= TimeSpan.Zero)
+        {
+            return; // alerting disabled
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        var due = armedAt + limit - now;
+        if (due < TimeSpan.Zero)
+        {
+            due = TimeSpan.Zero; // already stale (test clock, huge threshold change)
+        }
+
+        ITimer timer;
+        lock (_runnerLock)
+        {
+            if (_stalenessTimers.Remove(accountId, out var previous))
+            {
+                previous.Dispose(); // a newer arming supersedes the old watch
+            }
+
+            timer = _timeProvider.CreateTimer(
+                _ => FlagStaleUnlock(accountId, armedAt), null, due, Timeout.InfiniteTimeSpan);
+            _stalenessTimers[accountId] = timer;
+        }
+    }
+
+    /// <summary>Cancels an account's staleness watch and clears its arm
+    /// window (the arm itself is cleared by the callers under the lock).</summary>
+    private void CancelUnlockStalenessCheck(Guid accountId)
+    {
+        lock (_runnerLock)
+        {
+            if (_stalenessTimers.Remove(accountId, out var timer))
+            {
+                timer.Dispose();
+            }
+
+            _unlockWindows.Remove(accountId);
+            _unlockArmedAtUtc.Remove(accountId);
+        }
+    }
+
+    /// <summary>Journals + announces the arming of one or more accounts (and
+    /// optionally the manual surfaces). Called from UnlockRealMoney for
+    /// single-account arming and from the UI's unlock panel for the
+    /// one-phrase-arms-all flow. Never throws.</summary>
+    internal void JournalUnlockArmed(IReadOnlyList<AccountConnection?> connections, bool manualSurfaces)
+    {
+        try
+        {
+            var entries = connections
+                .Where(c => c is not null)
+                .Select(c => c!)
+                .DistinctBy(c => c.Config.Id)
+                .ToList();
+
+            _journal.LogRealMoneyUnlockArmed(
+                entries.Select(c => (c.Config.Id, c.Config.Label, VerifiedReal: c.ApiVerifiedVirtual == false))
+                       .ToList(),
+                manualSurfaces);
+
+            var names = entries.Select(c => c.Config.Label).ToList();
+            if (manualSurfaces)
+            {
+                names.Add("manual surfaces");
+            }
+
+            if (names.Count > 0)
+            {
+                var verified = entries.Count(c => c.ApiVerifiedVirtual == false);
+                var suffix = entries.Count > 0
+                    ? $" — {verified}/{entries.Count} API-verified real"
+                    : "";
+                _webhook?.PostStatus("🔓 Real-money unlock armed",
+                    $"Session unlock armed for {string.Join(", ", names)}{suffix}. " +
+                    "Expires with this process.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _journal.Log(Guid.Empty, "REAL_MONEY_UNLOCK",
+                "unlock journal/announce failed", ex.Message);
+        }
+    }
+
+    /// <summary>Thread-safe read of the session unlock set (the runner's
+    /// per-cycle and per-settlement gate re-checks call this from background
+    /// threads while the UI may arm it concurrently).</summary>
+    internal bool IsRealMoneyUnlocked(Guid accountId)
+    {
+        lock (_runnerLock)
+        {
+            return _realMoneyUnlocked.Contains(accountId);
+        }
+    }
+
     /// <summary>Starts a runner and remembers its plan for auto-restarts.</summary>
     private GrowthRunner? StartGrowthCore(AccountConnection connection, GrowthPlan plan,
         Func<AppSettings> settings, Func<bool> killSwitch)
     {
-        if (connection is null || !connection.IsConnected || !connection.Config.IsDemo)
+        if (connection is null || !connection.IsConnected)
         {
+            return null;
+        }
+
+        // Real-money gate: every condition must pass before an engine may
+        // run on an account the config marks real. Demo accounts pass
+        // through untouched (with a loud mismatch surface if the API says
+        // the config's demo flag is wrong). This check runs on EVERY start,
+        // including the automatic restart ladder — a deferred restart after
+        // a session unlock was never armed cannot slip through.
+        var decision = RealMoneyGate.Evaluate(
+            connection.Config.IsDemo,
+            connection.ApiVerifiedVirtual,
+            IsRealMoneyUnlocked(connection.Config.Id));
+        if (decision is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
+        {
+            var explanation = RealMoneyGate.Explain(decision);
+            _journal.LogGrowthState(connection.Config.Id, "real-money-gate", 0, 0,
+                $"start refused ({decision}): {explanation}");
+            _notifications?.NotifyRiskRailEngaged("Real-money gate",
+                $"{connection.DisplayName} — start refused");
+            _webhook?.PostRiskRail("🛑 Real-money gate refused an engine start",
+                $"{connection.DisplayName}: {explanation}");
+            RealMoneyRefused?.Invoke(connection, explanation);
             return null;
         }
 
@@ -553,7 +902,8 @@ public sealed class MultiAccountHub
             }
 
             var runner = new GrowthRunner(connection, _store, settings, killSwitch, _journal,
-                _tracker, _notifications, _webhook, _timeProvider, Metrics);
+                _tracker, _notifications, _webhook, _timeProvider, Metrics,
+                realMoneyUnlocked: () => IsRealMoneyUnlocked(connection.Config.Id));
             runner.Activity += line => GrowthActivity?.Invoke(runner, line);
             runner.Connection.StateChanged += OnConnectionStateChanged;
             runner.Exited += OnRunnerExited;
@@ -634,6 +984,14 @@ public sealed class MultiAccountHub
             }
 
             plan = _plans.TryGetValue(runner.Connection.Config.Id, out var p) ? p : _hubPlan;
+
+            // A growth trade inside an open unlock window counts toward the
+            // window's digest line: real mode was not just armed but used.
+            if (_unlockWindows.TryGetValue(runner.Connection.Config.Id, out var window))
+            {
+                _unlockWindows[runner.Connection.Config.Id] =
+                    (window.ArmedAt, window.Trades + 1, window.Net + trade.Profit);
+            }
 
             // One consistent settlement view decides BOTH the pre-trip
             // warning and the trip: the combined net and baseline are read
@@ -772,6 +1130,17 @@ public sealed class MultiAccountHub
     /// </summary>
     private void OnRunnerExited(GrowthRunner runner, GrowthExitReason reason)
     {
+        if (reason == GrowthExitReason.RealMoneyGate)
+        {
+            // The gate stopped the engine mid-session: the runner must be
+            // dropped here (StartGrowthCore otherwise keeps returning it),
+            // and NO restart ladder may fire — the account state failed the
+            // gate, so retrying without re-evaluation would loop. The next
+            // manual start re-runs the gate from scratch.
+            DropRunner(runner);
+            return;
+        }
+
         if (reason != GrowthExitReason.RepeatedFailures)
         {
             return;
@@ -819,6 +1188,28 @@ public sealed class MultiAccountHub
             journalReason: "after repeated failures",
             activityReason: "after repeated broker failures",
             webhookReason: "after repeated failures");
+    }
+
+    /// <summary>Removes a gate-stopped runner from the hub's tracking and
+    /// detaches its event handlers, mirroring the disconnect path. The runner
+    /// is already stopped (it stopped itself); the next start creates a fresh
+    /// one through the gate.</summary>
+    private void DropRunner(GrowthRunner runner)
+    {
+        var id = runner.Connection.Config.Id;
+        lock (_runnerLock)
+        {
+            if (_runners.TryGetValue(id, out var current) && ReferenceEquals(current, runner))
+            {
+                _runners.Remove(id);
+            }
+            _observedRunners.Remove(id);
+        }
+
+        runner.Connection.StateChanged -= OnConnectionStateChanged;
+        runner.Exited -= OnRunnerExited;
+        runner.Settled -= OnRunnerSettled;
+        CancelPendingRestart(id);
     }
 
     /// <summary>
