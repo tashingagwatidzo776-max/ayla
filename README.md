@@ -35,7 +35,6 @@ CI here does more than test the code — it **rehearses the paths**: every autom
 | Mon 06:23 | CI health check | the full pipeline on demand-week cadence; green runs post to the drift issue |
 | Wed 05:41 | [Weekly drills](.github/workflows/weekly-drills.yml) | the drift-alert lifecycle itself (fail → alert → green → resolve → staleness flag) against the real API |
 | Sat 05:23 | [Weekly bankroll drill](.github/workflows/weekly-bankroll-drill.yml) | the app's bankroll auto-publish path end-to-end: a synthetic trade store → the real exporter → the real publisher commit + push → the committed CSV parses under the trend page's reader; the python backfill must agree with the exporter's reduction. On dispatch it also smoke-checks the **live** Pages site (trend page renders the per-account drill-down from the deployed CSV) |
-
 | Sat 02:37 | [Real-money gate drill](.github/workflows/gate-drill.yml) | the full real-money gate lifecycle against the fake broker — locked start refused → unlock arms → mid-session stop, manual surfaces fail closed; release tags (`v*`) re-rehearse it before anything ships, and failures file on `ci-gate-drill` |
 
 The bankroll path earns the tightest scrutiny because its worst failure is silent: a publish that never happens raises no error anywhere — the money axis just stops. That is why it has three overlapping guards (the app's risk-rail surfacing of publish failures, the weekly end-to-end drill, and the watchdog's frozen-axis check), each covering a failure the others structurally cannot see.
@@ -226,7 +225,7 @@ tf/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run `dotnet test` to verify
+4. Run `pwsh ./scripts/ci-local.ps1` to run the same checks CI will (or enable the pre-push hook once with `git config core.hooksPath scripts/git-hooks`)
 5. Submit a pull request
 
 CI runs on every PR and posts a coverage-diff comment (this PR's merged line coverage vs the last successful run on `main`, against the 60% gate); a nightly scheduled run at 03:17 UTC catches drift such as runner/SDK updates and upstream API changes.

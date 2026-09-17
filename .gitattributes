@@ -1,0 +1,6 @@
+# Shell scripts must stay LF: Git for Windows' bash refuses CRLF files
+# ("\r: command not found"), and the pre-push hook in scripts/git-hooks is
+# checked out on Windows clones where core.autocrlf=true would otherwise
+# CRLF-ify it into an unrunnable state.
+*.sh text eol=lf
+scripts/git-hooks/* text eol=lf

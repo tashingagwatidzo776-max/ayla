@@ -58,8 +58,14 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
 else {
     $ghArgs = @('python', 'scripts/check_mergeability.py')
     if ($Pr -gt 0) { $ghArgs += "$Pr" }
+    # PS 5.1 + $ErrorActionPreference='Stop' turns any native stderr output
+    # under 2>&1 into a terminating NativeCommandError — which would kill
+    # this script before the exit-code classification below ran. The
+    # ErrorRecord stream is captured into $out instead and replayed after.
+    $ErrorActionPreference = 'Continue'
     $out = & $ghArgs[0] $ghArgs[1..($ghArgs.Count - 1)] @args 2>&1
     $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
     $out | ForEach-Object { Write-Host $_ }
     switch ($code) {
         0 { Write-Host 'OK: merge preview' -ForegroundColor Green }
