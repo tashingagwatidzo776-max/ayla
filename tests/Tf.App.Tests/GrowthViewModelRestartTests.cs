@@ -16,7 +16,6 @@ namespace Tf.App.Tests;
 /// real failure ladder is covered by the E2E integration tests.
 /// </summary>
 [Trait("Category", "Unit")]
-[Collection("ManualRealMoneyGate")]
 public class GrowthViewModelRestartTests : IDisposable
 {
     private readonly string _dir;
@@ -31,11 +30,16 @@ public class GrowthViewModelRestartTests : IDisposable
         _store = new TradeStore(_dir);
         _journal = new TradeJournal(Path.Combine(_dir, "journal"));
         _hub = new MultiAccountHub(new MemoryVault(), _store, _journal);
+        _gate = _hub.ManualGate;
     }
+
+    // The manual gate is instance-scoped; this class's scope lives on its
+    // default hub — the VMs under test resolve the same instance from it.
+    private readonly ManualRealMoneyGate _gate;
 
     public void Dispose()
     {
-        ManualRealMoneyGate.Reset(); // panel tests arm the shared manual unlock
+        _gate.Reset(); // panel tests arm the manual gate via the VM
         _journal.Dispose();
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
@@ -121,7 +125,7 @@ public class GrowthViewModelRestartTests : IDisposable
     [Fact]
     public void UnlockPanel_ArmsAllListedAccounts_AndTheManualGate_AtOnce()
     {
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
         var a = new AccountConfig { Label = "A", ApiToken = "tok-a", IsDemo = false, BrainKey = "Growth" };
         var b = new AccountConfig { Label = "B", ApiToken = "tok-b", IsDemo = false, BrainKey = "Growth" };
         var demo = new AccountConfig { Label = "Demo", ApiToken = "tok-d", IsDemo = true, BrainKey = "Growth" };
@@ -135,11 +139,11 @@ public class GrowthViewModelRestartTests : IDisposable
         // Both real accounts listed (demo never), one pass arms both — plus
         // the Brain/Trades tabs' shared manual gate.
         Assert.Equal(2, vm.UnlockableAccounts.Count);
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
         vm.UnlockPhrase = "wrong phrase";
         vm.ConfirmUnlockCommand.Execute(null);
         Assert.False(_hub.IsRealMoneyUnlocked(a.Id), "a wrong phrase must arm nothing");
-        Assert.False(ManualRealMoneyGate.IsUnlocked);
+        Assert.False(_gate.IsUnlocked);
         Assert.True(vm.IsUnlockPanelVisible, "a failed confirm keeps the panel open");
 
         vm.UnlockPhrase = $" {RealMoneyGate.ConfirmationPhrase} ";
@@ -147,7 +151,7 @@ public class GrowthViewModelRestartTests : IDisposable
         Assert.True(_hub.IsRealMoneyUnlocked(a.Id));
         Assert.True(_hub.IsRealMoneyUnlocked(b.Id));
         Assert.False(_hub.IsRealMoneyUnlocked(demo.Id), "demo accounts are not in the unlock set");
-        Assert.True(ManualRealMoneyGate.IsUnlocked, "one phrase arms the manual surfaces too");
+        Assert.True(_gate.IsUnlocked, "one phrase arms the manual surfaces too");
         Assert.False(vm.IsUnlockPanelVisible);
         Assert.Empty(vm.LockedRealAccountBanners);
     }
@@ -155,7 +159,7 @@ public class GrowthViewModelRestartTests : IDisposable
     [Fact]
     public void UnlockPanel_CancelArmsNothing()
     {
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
         var config = new AccountConfig { Label = "C", ApiToken = "tok-c", IsDemo = false, BrainKey = "Growth" };
         _hub.AddAccount(config);
         var vm = CreateVm();
@@ -166,7 +170,7 @@ public class GrowthViewModelRestartTests : IDisposable
 
         Assert.False(vm.IsUnlockPanelVisible);
         Assert.False(_hub.IsRealMoneyUnlocked(config.Id));
-        Assert.False(ManualRealMoneyGate.IsUnlocked);
+        Assert.False(_gate.IsUnlocked);
         Assert.Empty(vm.UnlockPhrase);
     }
 

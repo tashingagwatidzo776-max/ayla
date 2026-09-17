@@ -19,20 +19,25 @@ namespace Tf.App.Tests;
 /// unlock fails closed when omitted (headless tests never arm it).
 /// </summary>
 [Trait("Category", "Unit")]
-[Collection("ManualRealMoneyGate")]
 public class ManualRealMoneyGateTests : IDisposable
 {
     private readonly string _dir;
+
+    // The manual gate is instance-scoped: each test class owns a scope and
+    // hands it to the VMs under test, so parallel classes cannot race one
+    // another's unlock state (this used to be static state and did).
+    private readonly ManualRealMoneyGate _gate = new();
 
     public ManualRealMoneyGateTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), $"tf_manual_gate_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_dir);
+        _gate.Reset();
     }
 
     public void Dispose()
     {
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
 
@@ -69,7 +74,7 @@ public class ManualRealMoneyGateTests : IDisposable
         new DashboardViewModel(client, new MultiAccountHub(
             new EmptyVault(), new TradeStore(_dir),
             new TradeJournal(Path.Combine(_dir, "journal")))),
-        isRealMoneyUnlocked: () => ManualRealMoneyGate.IsUnlocked);
+        isRealMoneyUnlocked: () => _gate.IsUnlocked);
 
     [Fact]
     public async Task TradesTab_RealAccount_LockedRefuses_UnlockReachesBroker()
@@ -84,7 +89,7 @@ public class ManualRealMoneyGateTests : IDisposable
         Assert.False(client.Balance.IsVirtual, "the fake broker authorized a real account");
 
         // ── Locked: the gate refuses before anything else is consulted. ──
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
         Assert.True(vm.IsRealModeBlocked);
         await vm.PlaceDemoTradeCommand.ExecuteAsync(null);
         Assert.Contains("REFUSED", vm.StatusMessage);
@@ -92,7 +97,7 @@ public class ManualRealMoneyGateTests : IDisposable
 
         // ── Unlocked: the gate passes, the flow reaches the broker (whose
         // proposal error proves the request was actually sent). ──
-        ManualRealMoneyGate.Arm();
+        _gate.Arm();
         Assert.False(vm.IsRealModeBlocked);
         await vm.PlaceDemoTradeCommand.ExecuteAsync(null);
         Assert.DoesNotContain("REFUSED", vm.StatusMessage);
@@ -104,7 +109,7 @@ public class ManualRealMoneyGateTests : IDisposable
     {
         var client = new DerivClient(); // never authorized → no API verdict
         var vm = NewTradesVm(client, RealSettings());
-        ManualRealMoneyGate.Arm(); // even the unlock cannot fix "unverified"
+        _gate.Arm(); // even the unlock cannot fix "unverified"
 
         await vm.PlaceDemoTradeCommand.ExecuteAsync(null);
         Assert.Contains("REFUSED", vm.StatusMessage);
@@ -116,7 +121,7 @@ public class ManualRealMoneyGateTests : IDisposable
     {
         var client = new DerivClient();
         var vm = NewTradesVm(client, DemoSettings());
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
 
         await vm.PlaceDemoTradeCommand.ExecuteAsync(null);
         Assert.DoesNotContain("REFUSED", vm.StatusMessage);
@@ -126,19 +131,19 @@ public class ManualRealMoneyGateTests : IDisposable
     [Fact]
     public void Evaluate_MirrorsSharedGate()
     {
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
 
         // Config real + API real, locked → BlockedLocked; after Arm → Allowed.
-        Assert.Equal(RealMoneyDecision.BlockedLocked, ManualRealMoneyGate.Evaluate(false, false));
-        ManualRealMoneyGate.Arm();
-        Assert.Equal(RealMoneyDecision.Allowed, ManualRealMoneyGate.Evaluate(false, false));
+        Assert.Equal(RealMoneyDecision.BlockedLocked, _gate.Evaluate(false, false));
+        _gate.Arm();
+        Assert.Equal(RealMoneyDecision.Allowed, _gate.Evaluate(false, false));
 
         // Unverified stays refused even when unlocked.
-        Assert.Equal(RealMoneyDecision.BlockedUnverified, ManualRealMoneyGate.Evaluate(false, null));
+        Assert.Equal(RealMoneyDecision.BlockedUnverified, _gate.Evaluate(false, null));
         // Demo passthrough is untouched by the unlock state.
-        Assert.Equal(RealMoneyDecision.DemoPassthrough, ManualRealMoneyGate.Evaluate(true, true));
+        Assert.Equal(RealMoneyDecision.DemoPassthrough, _gate.Evaluate(true, true));
         // Config mismatch refuses regardless.
-        Assert.Equal(RealMoneyDecision.BlockedConfigMismatch, ManualRealMoneyGate.Evaluate(true, false));
+        Assert.Equal(RealMoneyDecision.BlockedConfigMismatch, _gate.Evaluate(true, false));
     }
 
     [Fact]
@@ -148,7 +153,7 @@ public class ManualRealMoneyGateTests : IDisposable
         // account): RunCycle must surface the refusal and never report a
         // placed trade. The command is async - it must be awaited, or the
         // assertions race the status update (lost once in CI).
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
         var client = new DerivClient();
         var hub = new MultiAccountHub(new EmptyVault(), new TradeStore(_dir),
             new TradeJournal(Path.Combine(_dir, "journal")));
@@ -160,7 +165,7 @@ public class ManualRealMoneyGateTests : IDisposable
             () => new[] { new Tick("frxEURUSD", 1.1, 1.1, 1.1, 1700000000, 5) },
             () => new RiskContext(false, 0, 1000m, 0m, 0, null, null),
             () => Array.Empty<string>(),
-            realMoneyDecision: () => ManualRealMoneyGate.Evaluate(false, apiVerifiedVirtual: false));
+            realMoneyDecision: () => _gate.Evaluate(false, apiVerifiedVirtual: false));
 
         await vm.RunCycleCommand.ExecuteAsync(null);
         Assert.Contains("REFUSED", vm.StatusText);

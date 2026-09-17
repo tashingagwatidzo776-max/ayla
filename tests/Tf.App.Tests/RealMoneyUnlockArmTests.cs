@@ -21,13 +21,16 @@ namespace Tf.App.Tests;
 /// possible is recorded just as loudly.
 /// </summary>
 [Trait("Category", "Unit")]
-[Collection("ManualRealMoneyGate")]
 public class RealMoneyUnlockArmTests : IDisposable
 {
     private readonly string _dir;
     private readonly TradeStore _store;
     private readonly TradeJournal _journal;
     private readonly MultiAccountHub _hub;
+
+    // The manual gate is instance-scoped; this class's scope lives on its
+    // default hub (and each test's local hub, below). No shared static state.
+    private readonly ManualRealMoneyGate _gate;
 
     public RealMoneyUnlockArmTests()
     {
@@ -36,12 +39,12 @@ public class RealMoneyUnlockArmTests : IDisposable
         _store = new TradeStore(_dir);
         _journal = new TradeJournal(Path.Combine(_dir, "journal"));
         _hub = new MultiAccountHub(new MemoryVault(), _store, _journal);
-        ManualRealMoneyGate.Reset();
+        _gate = _hub.ManualGate;
     }
 
     public void Dispose()
     {
-        ManualRealMoneyGate.Reset(); // arm tests touch the shared manual gate
+        _gate.Reset(); // keep the class's scope clean between tests
         _journal.Dispose();
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
@@ -128,7 +131,7 @@ public class RealMoneyUnlockArmTests : IDisposable
         Assert.Null(_hub.DescribeUnlockState()); // nothing armed → silence is healthy
 
         _hub.UnlockRealMoney(real.Config.Id);
-        ManualRealMoneyGate.Arm();
+        _gate.Arm();
 
         var state = _hub.DescribeUnlockState();
         Assert.NotNull(state);
@@ -138,7 +141,7 @@ public class RealMoneyUnlockArmTests : IDisposable
 
         // The manual gate resetting (app shutdown path) drops that scope
         // but the account arming still shows — each state is independent.
-        ManualRealMoneyGate.Reset();
+        _gate.Reset();
         state = _hub.DescribeUnlockState();
         Assert.NotNull(state);
         Assert.Contains("DescA", state);
@@ -241,7 +244,7 @@ public class RealMoneyUnlockArmTests : IDisposable
         var doc = JsonDocument.Parse(entry.Details).RootElement;
         Assert.Equal(2, doc.GetProperty("AccountCount").GetInt32());
         Assert.True(doc.GetProperty("ManualSurfaces").GetBoolean());
-        Assert.True(ManualRealMoneyGate.IsUnlocked);
+        Assert.True(_gate.IsUnlocked);
 
         // The activity log line names exactly what the journal entry covers.
         Assert.Contains("real-money unlock armed", vm.ActivityLog[0]);
@@ -278,6 +281,7 @@ public class RealMoneyUnlockArmTests : IDisposable
         var stale = new List<(string Name, TimeSpan Age, int Cycles)>();
         var hub = new MultiAccountHub(new MemoryVault(), new TradeStore(_dir), _journal,
             timeProvider: clock);
+        _gate.Reset(); // the VM built below resolves its gate from this hub
         hub.UnlockStale += s => stale.Add((s.Name, s.Age, s.Cycles));
         hub.ArmStalenessThreshold = TimeSpan.FromHours(4);
 

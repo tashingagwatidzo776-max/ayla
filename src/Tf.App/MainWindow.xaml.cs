@@ -1,4 +1,5 @@
 using System.Windows;
+using Microsoft.Extensions.DependencyInjection;
 using Tf.App.Infrastructure;
 using Tf.App.Services;
 using Tf.App.ViewModels;
@@ -39,7 +40,9 @@ public partial class MainWindow : Window
     {
         // The real-money unlocks are session-scoped by design: arming them
         // never survives a restart, so a fresh process always starts locked.
-        ManualRealMoneyGate.Reset();
+        // The gate is the DI singleton shared by every manual surface.
+        CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+            .GetRequiredService<ManualRealMoneyGate>().Reset();
         _trayIcon?.Dispose();
         base.OnClosed(e);
     }

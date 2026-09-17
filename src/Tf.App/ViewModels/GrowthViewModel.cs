@@ -22,6 +22,7 @@ public sealed partial class GrowthViewModel : ObservableObject
     private readonly Func<AppSettings> _settings;
     private readonly DashboardViewModel _dashboard;
     private readonly PerformanceTracker? _tracker;
+    private readonly ManualRealMoneyGate _manualGate;
     private readonly Dispatcher _dispatcher;
 
     [ObservableProperty]
@@ -117,13 +118,16 @@ public sealed partial class GrowthViewModel : ObservableObject
 
     public GrowthViewModel(MultiAccountHub hub, GrowthPlanStore planStore,
         Func<AppSettings> settings, DashboardViewModel dashboard,
-        PerformanceTracker? tracker = null)
+        PerformanceTracker? tracker = null, ManualRealMoneyGate? manualGate = null)
     {
         _hub = hub;
         _planStore = planStore;
         _settings = settings;
         _dashboard = dashboard;
         _tracker = tracker;
+        // Defaults to the hub's own manual-surface gate (which itself
+        // defaults to a private instance) — one shared scope either way.
+        _manualGate = manualGate ?? hub.ManualGate;
         _dispatcher = Dispatcher.CurrentDispatcher;
 
         LoadPlan();
@@ -377,8 +381,8 @@ public sealed partial class GrowthViewModel : ObservableObject
             }
         }
 
-        var manualWasLocked = !ManualRealMoneyGate.IsUnlocked;
-        ManualRealMoneyGate.Arm();
+        var manualWasLocked = !_manualGate.IsUnlocked;
+        _manualGate.Arm();
 
         _hub.JournalUnlockArmed(
             newlyArmed.Select(b => _hub.Accounts.FirstOrDefault(a => a.Config.Id == b.AccountId)).ToList(),

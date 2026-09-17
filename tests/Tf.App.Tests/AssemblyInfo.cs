@@ -8,8 +8,8 @@ using Xunit;
 // client shortens the settlement poll so the suites stay fast under contention.
 // The Core assembly stays parallel too — its port race is fixed at the source.
 // CollectionBehavior attribute omitted: xunit v2's default is collection-level
-// parallelism, which is exactly what we want — with one carve-out: the three
-// gate/unlock classes below share the STATIC ManualRealMoneyGate latch, so
-// they are pinned into the "ManualRealMoneyGate" collection and run
-// sequentially. A parallel Reset() from another class once flipped the latch
-// mid-test and failed the release drill on the v0.0.1 tag itself.
+// parallelism, which is exactly what we want. Nothing is shared across
+// collections — including unlock state: ManualRealMoneyGate is instance-
+// scoped (DI singleton in the app, per-test-hub in tests), so no class can
+// race another's latch. (When the gate was STATIC, a parallel Reset() once
+// flipped it mid-test and failed the release drill on the v0.0.1 tag.)
