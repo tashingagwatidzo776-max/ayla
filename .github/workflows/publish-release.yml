@@ -28,6 +28,12 @@ on:
 permissions:
   contents: write # upload the asset to the release
 
+env:
+  # Bare `gh run download` / `gh release upload` infer the repo from git
+  # remotes — and this job deliberately has no checkout, so without GH_REPO
+  # every gh call dies with "fatal: not a git repository".
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   attach:
     runs-on: ubuntu-latest
