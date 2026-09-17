@@ -16,6 +16,7 @@ namespace Tf.App.Tests;
 /// real failure ladder is covered by the E2E integration tests.
 /// </summary>
 [Trait("Category", "Unit")]
+[Collection("ManualRealMoneyGate")]
 public class GrowthViewModelRestartTests : IDisposable
 {
     private readonly string _dir;
