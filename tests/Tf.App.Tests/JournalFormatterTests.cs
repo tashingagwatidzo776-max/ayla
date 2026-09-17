@@ -14,6 +14,7 @@ namespace Tf.App.Tests;
 /// covered by the E2E tests.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class JournalFormatterTests : IDisposable
 {
     private readonly string _dir;

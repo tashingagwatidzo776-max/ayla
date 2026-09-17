@@ -11,6 +11,7 @@ namespace Tf.Core.Tests;
 /// account is treated as demo, never as real.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class RealMoneyGateTests
 {
     [Fact]
@@ -98,6 +99,7 @@ public class RealMoneyGateTests
 /// or malformed is_virtual flag parses as virtual (demo), never as real.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class AccountBalanceIsVirtualTests
 {
     private static bool Parse(string json)
@@ -160,6 +162,7 @@ public class AccountBalanceIsVirtualTests
 /// defence-in-depth layer on top of the gate at engine-start time.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class RiskEngineRealMoneyTests
 {
     private static AppSettings Settings() => new()

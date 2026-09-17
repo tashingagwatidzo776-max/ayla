@@ -18,6 +18,7 @@ namespace Tf.App.Tests;
 /// refusal is journaled + announced.
 /// </summary>
 [Trait("Category", "Integration")]
+[Trait("Category", "RealMoney")]
 public class RealMoneyGateHubTests
 {
     private static readonly TimeSpan FastPollInterval = TimeSpan.FromMilliseconds(50);

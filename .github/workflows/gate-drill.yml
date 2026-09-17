@@ -51,16 +51,25 @@ jobs:
     - name: Build
       run: dotnet build --no-restore --configuration Release
 
-    # The drill IS the gate test suite: Core's decision/parse matrix plus
-    # the App-level E2E lifecycle (start refused until unlock, unlock arms,
-    # per-settlement re-check stops the engine, hub drops without a restart
-    # ladder, manual surfaces fail closed). All against fake brokers — no
-    # network, no real funds, ever.
-    - name: Rehearse the gate lifecycle — Core decisions and parse matrix
-      run: dotnet test tests/Tf.Core.Tests/Tf.Core.Tests.csproj --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~RealMoneyGate"
+    # The drill IS the gate test suite, selected by the Category=RealMoney
+    # trait (not name substrings — a new rail class is in the drill the
+    # moment it carries the trait):
+    #   Core: RealMoneyGateTests (decision/parse matrix, balance-verified,
+    #         risk-engine), JournalLoggingSurfaceTests (arm audit entries)
+    #   App:  ManualRealMoneyGateTests, RealMoneyUnlockArmTests,
+    #         GrowthViewModelRestartTests (panel/banners),
+    #         MetricsDigestServiceTests (arm leg), ManualMaxStakeTests,
+    #         JournalFormatterTests (unlock lines),
+    #         RealMoneyGateHubTests + RealMoneyGateMidSessionTests (E2E:
+    #         start refused until unlock, unlock arms, per-settlement
+    #         re-check stops the engine, hub drops without a restart
+    #         ladder). All against fake brokers — no network, no real
+    #         funds, ever.
+    - name: Rehearse the gate lifecycle — Core (Category=RealMoney)
+      run: dotnet test tests/Tf.Core.Tests/Tf.Core.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
 
-    - name: Rehearse the gate lifecycle — hub, mid-session, manual surfaces, arm audit
-      run: dotnet test tests/Tf.App.Tests/Tf.App.Tests.csproj --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~RealMoneyGate|FullyQualifiedName~ManualRealMoneyGate|FullyQualifiedName~RealMoneyUnlock"
+    - name: Rehearse the gate lifecycle — App surfaces + E2E (Category=RealMoney)
+      run: dotnet test tests/Tf.App.Tests/Tf.App.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
 
     # A failing drill files the drift alert; a green one records health the
     # same way the nightly's resolve leg does (keyword-safe note, issue left

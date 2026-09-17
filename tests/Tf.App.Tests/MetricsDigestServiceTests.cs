@@ -14,6 +14,7 @@ namespace Tf.App.Tests;
 /// real local capture listener.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class MetricsDigestServiceTests : IDisposable
 {
     private readonly HttpListener _listener;

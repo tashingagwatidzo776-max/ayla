@@ -8,6 +8,7 @@ namespace Tf.Core.Tests;
 /// tolerance in GetRecent, and journal stats edge cases.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class JournalLoggingSurfaceTests : IDisposable
 {
     private readonly string _dir;

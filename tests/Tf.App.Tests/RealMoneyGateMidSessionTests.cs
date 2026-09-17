@@ -16,6 +16,7 @@ namespace Tf.App.Tests;
 /// the hub must drop the runner so no restart ladder re-launches it.
 /// </summary>
 [Trait("Category", "Integration")]
+[Trait("Category", "RealMoney")]
 public class RealMoneyGateMidSessionTests : IDisposable
 {
     private readonly string _dir;

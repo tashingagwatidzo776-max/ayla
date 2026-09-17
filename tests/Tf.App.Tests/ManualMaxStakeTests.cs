@@ -14,6 +14,7 @@ namespace Tf.App.Tests;
 /// a mistyped stake must not reach a real account.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class ManualMaxStakeTests : IDisposable
 {
     private readonly string _dir;
