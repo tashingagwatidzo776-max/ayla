@@ -21,8 +21,9 @@ Without a PR number it checks the PR whose head branch is the current branch
 (same default as `gh pr view`).
 
 Exit codes: 0 = mergeable now (or nothing to merge), 1 = blocked (findings
-listed), 2 = usage or API error. Needs `gh` authenticated with repo admin
-scope to read branch protection (404 is handled as "no rule active").
+listed), 2 = usage or API error, 3 = remedial push (see check()). Needs
+`gh` authenticated with repo admin scope to read branch protection (404
+is handled as "no rule active").
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ import sys
 OK = 0
 BLOCKED = 1
 ERROR = 2
+REMEDIARY = 3
 
 
 class ApiError(Exception):
@@ -62,7 +64,7 @@ def load_pr(number: int | None) -> dict:
     view = ["pr", "view"] + ([str(number)] if number else [])
     pr = gh_json(view + ["--json",
                          "number,title,state,author,baseRefName,mergeable,"
-                         "mergeStateStatus,reviewDecision,reviews"])
+                         "mergeStateStatus,reviewDecision,reviews,headRefName"])
     if not isinstance(pr, dict):
         raise ApiError("unexpected gh pr view payload")
     return pr
@@ -87,8 +89,28 @@ def load_collaborators() -> list[dict]:
     return json.loads(proc.stdout)
 
 
-def check(pr: dict) -> tuple[list[str], bool]:
-    """Return (findings, mergeable)."""
+def current_branch() -> str | None:
+    """The working tree's branch, or None when git is unavailable/detached."""
+    try:
+        proc = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    except ApiError:
+        return None
+    if proc.returncode != 0:
+        return None
+    branch = proc.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
+def check(pr: dict, head_branch: str | None = None) -> tuple[list[str], bool, bool]:
+    """Return (findings, mergeable, remedial).
+
+    remedial means: the push being gated delivers this PR's own head branch.
+    Every merge-state finding (BEHIND, UNSTABLE, DIRTY, a missing review)
+    then describes the PRE-push head; this push carries the next state, CI
+    re-runs on it, and the merge gate re-checks at merge time. Failing such
+    a push deadlocks the branch - the push IS the remedy for the finding
+    (PR #60's rebase was blocked exactly so, and needed --no-verify to
+    land). Pre-PR pushes are unaffected and keep the hard blocks below."""
     findings: list[str] = []
     mergeable = True
     state = pr["state"]
@@ -96,9 +118,11 @@ def check(pr: dict) -> tuple[list[str], bool]:
 
     if state != "OPEN":
         findings.append(f"ℹ️  PR state is {state} - nothing to merge.")
-        return findings, True
+        return findings, True, False
 
     rules = load_protection(pr["baseRefName"])
+    head_branch = head_branch if head_branch is not None else current_branch()
+    remedial = bool(head_branch and head_branch == pr.get("headRefName"))
     if rules is None:
         findings.append("⚠️  No classic branch-protection rule on "
                         f"{pr['baseRefName']}. If the repo uses rulesets, "
@@ -124,6 +148,14 @@ def check(pr: dict) -> tuple[list[str], bool]:
     if rule_reviews:
         if approvals >= rule_reviews:
             findings.append(f"✅ Approvals: {approvals}/{rule_reviews}.")
+        elif remedial:
+            # CI re-runs on the pushed head and the merge gate re-checks at
+            # merge time; the push must not be blocked for the state it
+            # itself is about to replace.
+            findings.append(f"⚠️  Approvals: {approvals}/{rule_reviews} - "
+                            "deferred: this push delivers the PR's own head "
+                            "branch; CI re-runs on it and the merge gate "
+                            "re-checks at merge time.")
         else:
             mergeable = False
             writers = [c["login"] for c in load_collaborators()
@@ -149,7 +181,13 @@ def check(pr: dict) -> tuple[list[str], bool]:
                     "bypass the review requirement either.")
 
     status = pr.get("mergeStateStatus")
-    if status == "DIRTY":
+    if remedial and status in ("BEHIND", "UNSTABLE", "UNKNOWN"):
+        # The pre-push head's merge state. The pushed head (this branch)
+        # replaces it; GitHub re-evaluates the state on arrival.
+        findings.append(f"⚠️  Merge state {status} is the PRE-push head's; "
+                        "deferred - this push delivers the PR's own head "
+                        "branch and GitHub re-evaluates on arrival.")
+    elif status == "DIRTY":
         mergeable = False
         findings.append("❌ Merge conflict against the base branch.")
     elif status == "UNSTABLE":
@@ -162,7 +200,14 @@ def check(pr: dict) -> tuple[list[str], bool]:
         mergeable = False
         findings.append(f"❌ Merge state: {status}.")
 
-    return findings, mergeable
+    if remedial:
+        findings.append("ℹ️  Remedial push: this branch is the open PR's head, "
+                        "so merge-state findings describe the PRE-push head "
+                        "and cannot block this push (exit 3). CI re-runs on "
+                        "the pushed head and the merge gate re-checks at "
+                        "merge time.")
+
+    return findings, mergeable, remedial
 
 
 def main() -> int:
@@ -182,22 +227,29 @@ def main() -> int:
 
     try:
         pr = load_pr(args.pr)
-        findings, mergeable = check(pr)
+        findings, mergeable, remedial = check(pr)
     except ApiError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return ERROR
 
     if args.json:
         print(json.dumps({"number": pr["number"], "state": pr["state"],
-                          "mergeable": mergeable, "findings": findings}))
+                          "mergeable": mergeable, "remedial": remedial,
+                          "findings": findings}))
     else:
         print(f"PR #{pr['number']} \"{pr['title'][:70]}\"  "
               f"[{pr['state']}]  base={pr['baseRefName']}")
         for line in findings:
             print(line)
-        verdict = "MERGEABLE" if mergeable else "BLOCKED"
+        verdict = ("MERGEABLE" if mergeable else
+                   "REMEDIARY PUSH (proceed)" if remedial else "BLOCKED")
         print(f"Verdict: {verdict}")
 
+    if remedial and not mergeable:
+        # Gate semantics live in ci-local.ps1: 1 fails the push (a blocked,
+        # unmergeable PR), 3 skips this one leg (the push itself is the
+        # remedy for what the pre-push snapshot reports).
+        return REMEDIARY
     return OK if mergeable else BLOCKED
 
 
