@@ -91,13 +91,32 @@ jobs:
         TAG: ${{ inputs.tag }}
       run: |
         set -euo pipefail
-        if ! gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id' > /dev/null 2>&1; then
+        # `releases/tags/<tag>` never returns DRAFTS (a draft has no tag ref
+        # yet) — discover the release through the list endpoint instead,
+        # which sees drafts, then work by release id from there.
+        RID=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+          --jq "[.[] | select(.tag_name == \"$TAG\")][0].id" \
+        )
+        if [ -z "$RID" ] || [ "$RID" = "null" ]; then
           echo "::error::no release (draft or published) exists for $TAG — create the draft first"
           exit 1
         fi
-        gh release upload "$TAG" dist/Tf.exe --clobber
-        echo "### Draft state after attach" >> "$GITHUB_STEP_SUMMARY"
+        echo "release id: $RID"
+        # Idempotency: drop a previous Tf.exe asset first so the POST below
+        # is a replace, not a 422 duplicate-name error (this is --clobber).
+        for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.assets[] | select(.name == "Tf.exe") | .id'); do
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$AID"
+          echo "replaced existing asset $AID"
+        done
+        # gh release upload resolves by tag and cannot see drafts, so POST
+        # the asset directly to the release's upload_url.
+        curl -sS -X POST \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Content-Type: application/octet-stream" \
+          --data-binary @dist/Tf.exe \
+          "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.upload_url' | sed 's/{.*}//')?name=Tf.exe"
+        echo "### Release state after attach" >> "$GITHUB_STEP_SUMMARY"
         echo '```json' >> "$GITHUB_STEP_SUMMARY"
-        gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+        gh api "repos/$GITHUB_REPOSITORY/releases/$RID" \
           --jq '{draft, assets: [.assets[] | {name, size, state}]}' >> "$GITHUB_STEP_SUMMARY"
         echo '```' >> "$GITHUB_STEP_SUMMARY"
