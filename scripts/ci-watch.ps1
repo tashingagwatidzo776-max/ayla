@@ -4,6 +4,8 @@
 # Usage:   pwsh ./scripts/ci-watch.ps1 [-QuietSeconds 8] [-InitialRun]
 # Stop:    Ctrl+C
 # Status:  .ci-watch-status (last line: "GREEN <utc>" / "RED <utc>: <failed>")
+# Toasts:  RED always surfaces a Windows toast (fallback: message box),
+#          GREEN too with -Toast; silence both with -NoToast.
 #
 # What runs per change set:
 #   - docs (*.md) / scripts (*.py) only  -> workflow-lint + safety-audit (fast)
@@ -22,6 +24,8 @@ param(
     [int]$PollSeconds = 2,
     [switch]$InitialRun,
     [switch]$NoInitialBuild,
+    [switch]$NoToast,
+    [switch]$Toast,
     [int]$MaxCycles = 0 # 0 = watch forever; N = run at most N gate cycles (smoke tests)
 )
 
@@ -29,6 +33,29 @@ $ErrorActionPreference = 'Stop'
 $root = (Get-Item $PSScriptRoot).Parent.FullName
 $statusFile = Join-Path $root '.ci-watch-status'
 $ciLocal = Join-Path $PSScriptRoot 'ci-local.ps1'
+
+function Show-Toast {
+    param([string]$State, [string]$Detail, [switch]$Green)
+    if ($NoToast) { return }
+    $text = if ($Detail) { "ci-watch $State - $Detail" } else { "ci-watch $State" }
+    try {
+        # Primary: a real Windows 10/11 toast (works from any script, no STA
+        # requirement - the AppUserModelID is arbitrary for script-sourced toasts).
+        [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+        $texts = $xml.GetElementsByTagName('text')
+        [void]$texts.Item(0).AppendChild($xml.CreateTextNode('Local CI gate'))
+        [void]$texts.Item(1).AppendChild($xml.CreateTextNode($text))
+        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Microsoft.Windows.PowerShell').Show($toast)
+    }
+    catch {
+        # Fallback: blocking message box (no toast infrastructure available).
+        $icon = if ($Green) { [System.Windows.MessageBoxImage]::Information } else { [System.Windows.MessageBoxImage]::Warning }
+        try { Add-Type -AssemblyName PresentationFramework } catch { }
+        [void][System.Windows.MessageBox]::Show($text, 'Local CI gate', [System.Windows.MessageBoxButton]::OK, $icon)
+    }
+}
 
 # Plain substrings on normalized forward-slash paths — deliberately no
 # regex: escaping through shells/editors has bitten this repo before.
@@ -69,6 +96,7 @@ function Invoke-Gate {
         Write-Host "`n[ci-watch] docs/scripts change -> lint + audit only" -ForegroundColor DarkCyan
         python (Join-Path $PSScriptRoot 'lint_workflows.py'); if ($LASTEXITCODE -ne 0) { $failed += 'workflow-lint' }
         python (Join-Path $PSScriptRoot 'check_safety_audit.py'); if ($LASTEXITCODE -ne 0) { $failed += 'safety-audit' }
+        python (Join-Path $PSScriptRoot 'check_rail_traits.py'); if ($LASTEXITCODE -ne 0) { $failed += 'rail-traits' }
     }
     else {
         Write-Host "`n[ci-watch] source change -> full local gate (no build)" -ForegroundColor DarkCyan
@@ -79,10 +107,12 @@ function Invoke-Gate {
     if ($failed.Count -gt 0) {
         Write-Host "[ci-watch] RED: $($failed -join ', ')" -ForegroundColor Red
         Write-Status 'RED' "($($failed -join ', '))"
+        Show-Toast 'RED' ($failed -join ', ')
     }
     else {
         Write-Host "[ci-watch] GREEN" -ForegroundColor Green
         Write-Status 'GREEN'
+        if ($Toast) { Show-Toast 'GREEN' -Green }
     }
 }
 
