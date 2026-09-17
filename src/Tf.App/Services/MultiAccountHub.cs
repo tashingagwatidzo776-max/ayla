@@ -586,8 +586,45 @@ public sealed class MultiAccountHub
     /// threshold while still armed). Real-money unlocks are meant to be
     /// armed for a deliberate trading window, not for the life of the
     /// process — an all-day arm is exactly the state monitoring must see.
-    /// Null disables the alert.</summary>
+    /// Null disables the alert. Read from the user's settings live via
+    /// <see cref="SetThresholdSource"/>; tests set the property directly.</summary>
     public TimeSpan? ArmStalenessThreshold { get; set; } = TimeSpan.FromHours(4);
+
+    private Func<int>? _armStalenessHoursSource;
+
+    /// <summary>Wires the threshold to the user's settings (read live, so a
+    /// save takes effect on the next scheduled fire without a restart). The
+    /// mapping: hours &lt;= 0 disables alerting; anything else clamps to at
+    /// least one hour below. Tests without settings keep the 4h default.</summary>
+    public void SetThresholdSource(Func<int>? hours)
+    {
+        _armStalenessHoursSource = hours;
+        RefreshArmStalenessThreshold();
+    }
+
+    /// <summary>Re-reads the threshold from the wired source (settings) and
+    /// reschedules any live watches so a lowered threshold catches an arm
+    /// that is already past the new limit sooner, and a raised one delays
+    /// the next flag. Safe to call repeatedly.</summary>
+    internal void RefreshArmStalenessThreshold()
+    {
+        var hours = _armStalenessHoursSource?.Invoke() ?? 0;
+        ArmStalenessThreshold = hours <= 0
+            ? null
+            : TimeSpan.FromHours(Math.Min(hours, 72));
+
+        // Reschedule live watches against the new threshold.
+        Dictionary<Guid, DateTimeOffset> armed;
+        lock (_runnerLock)
+        {
+            armed = _unlockArmedAtUtc.ToDictionary(kv => kv.Key, kv => kv.Value);
+        }
+
+        foreach (var kv in armed)
+        {
+            ScheduleUnlockStalenessCheck(kv.Key, kv.Value);
+        }
+    }
 
     /// <summary>Arm the per-session real-money unlock for one account.
     /// The unlock lives only as long as this process; the gate re-checks

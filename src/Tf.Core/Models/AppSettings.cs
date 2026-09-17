@@ -81,6 +81,12 @@ public sealed class AppSettings
     /// by the settings editor; default 6).</summary>
     public int MetricsDigestIntervalHours { get; set; } = 6;
 
+    /// <summary>Toast + webhook when a real-money session unlock has been
+    /// armed this many hours (clamped 0–72 by the settings editor; default
+    /// 4). 0 disables the staleness alert entirely — the arm stays silent
+    /// but every other rail still applies.</summary>
+    public int ArmStalenessHours { get; set; } = 4;
+
     // ── Logging ─────────────────────────────────────────────────
     /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>
     public int LogLevel { get; set; } = 1;

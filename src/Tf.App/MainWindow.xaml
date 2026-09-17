@@ -211,8 +211,9 @@
                             <RowDefinition Height="Auto" />  <!-- 26 Monitoring title -->
                             <RowDefinition Height="Auto" />  <!-- 27 Digest toggle -->
                             <RowDefinition Height="Auto" />  <!-- 28 Digest interval -->
-                            <RowDefinition Height="Auto" />  <!-- 29 Actions -->
-                            <RowDefinition Height="Auto" />  <!-- 30 Status -->
+                            <RowDefinition Height="Auto" />  <!-- 29 Unlock staleness -->
+                            <RowDefinition Height="Auto" />  <!-- 30 Actions -->
+                            <RowDefinition Height="Auto" />  <!-- 31 Status -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -311,11 +312,16 @@
                                  Text="{Binding SettingsVm.MetricsDigestIntervalHours, UpdateSourceTrigger=PropertyChanged, TargetNullValue=6}"
                                  ToolTip="Hours between cycle-telemetry digest posts (1–168, default 6). Takes effect on the next app start." />
 
-                        <StackPanel Grid.Row="29" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
+                        <TextBlock Grid.Row="29" Grid.Column="0" Text="Unlock staleness (h)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="29" Grid.Column="1" Margin="0,0,0,10" Width="120" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.ArmStalenessHours, UpdateSourceTrigger=PropertyChanged, TargetNullValue=4}"
+                                 ToolTip="Toast + webhook when a real-money session unlock has been armed this long (1–72, default 4). Live on save; 0 disables the alert." />
+
+                        <StackPanel Grid.Row="30" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
                             <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
                         </StackPanel>
-                        <TextBlock Grid.Row="30" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                        <TextBlock Grid.Row="31" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
                                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                     </Grid>

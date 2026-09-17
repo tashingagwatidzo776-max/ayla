@@ -75,6 +75,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int metricsDigestIntervalHours = 6;
 
+    /// <summary>Hours an unlock may stay armed before the staleness alert
+    /// fires (0 = alert disabled). Default mirrors AppSettings.</summary>
+    [ObservableProperty]
+    private int armStalenessHours = 4;
+
     [ObservableProperty]
     private int logLevel = 1;
 
@@ -142,6 +147,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnCircuitBreaker = settings.WebhookOnCircuitBreaker;
         MetricsDigestEnabled = settings.MetricsDigestEnabled;
         MetricsDigestIntervalHours = settings.MetricsDigestIntervalHours;
+        ArmStalenessHours = settings.ArmStalenessHours;
         LogLevel = settings.LogLevel;
         StatusMessage = "Settings loaded.";
     }
@@ -175,6 +181,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnCircuitBreaker = WebhookOnCircuitBreaker,
         MetricsDigestEnabled = MetricsDigestEnabled,
         MetricsDigestIntervalHours = Math.Clamp(MetricsDigestIntervalHours, 1, 168),
+        ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         LogLevel = LogLevel
     };
 

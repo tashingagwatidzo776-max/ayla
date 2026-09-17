@@ -351,6 +351,52 @@ public class RealMoneyUnlockArmTests : IDisposable
         await hub.RemoveAccountAsync(real); // cancels the follow-up watch
     }
 
+    // ─── Configurable staleness threshold ────────────────
+
+    [Fact]
+    public void ArmStalenessThreshold_ReadsFromTheConfiguredSource()
+    {
+        var hub = new MultiAccountHub(new MemoryVault(), new TradeStore(_dir), _journal);
+
+        Assert.Equal(TimeSpan.FromHours(4), hub.ArmStalenessThreshold); // default
+
+        hub.SetThresholdSource(() => 12);
+        Assert.Equal(TimeSpan.FromHours(12), hub.ArmStalenessThreshold);
+
+        hub.SetThresholdSource(() => 0); // 0 disables the alert
+        Assert.Null(hub.ArmStalenessThreshold);
+
+        hub.SetThresholdSource(() => 999); // clamped to 72h
+        Assert.Equal(TimeSpan.FromHours(72), hub.ArmStalenessThreshold);
+    }
+
+    [Fact]
+    public async Task LoweredThreshold_CatchesAnArmAlreadyPastIt_OnTheNextTick()
+    {
+        var clock = new TestVirtualClock();
+        var stale = 0;
+        var hub = new MultiAccountHub(new MemoryVault(), new TradeStore(_dir), _journal,
+            timeProvider: clock);
+        hub.UnlockStale += _ => stale++;
+        hub.SetThresholdSource(() => 10); // generous window
+
+        var real = AddReal("ThreshA", verifiedVirtual: false, hub: hub);
+        hub.UnlockRealMoney(real.Config.Id);
+
+        clock.Advance((long)TimeSpan.FromHours(5).TotalMilliseconds);
+        Assert.Equal(0, stale);
+
+        // The user lowers the threshold to 1h — the arm is already 5h in.
+        // SetThresholdSource refreshes the watches, so the next tick fires.
+        hub.SetThresholdSource(() => 1);
+        Assert.Equal(TimeSpan.FromHours(1), hub.ArmStalenessThreshold);
+
+        clock.Advance(0); // the rescheduled watch is due immediately
+        Assert.Equal(1, stale);
+
+        await hub.RemoveAccountAsync(real);
+    }
+
     // ─── Unlock-window trade counting (digest arm leg) ─────
 
     [Fact]

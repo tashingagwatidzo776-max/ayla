@@ -224,6 +224,11 @@ public partial class App : System.Windows.Application
         // restart (and its absence the rest of the time).
         var hub = provider.GetRequiredService<MultiAccountHub>();
         digest.UnlockStateProvider = hub.DescribeUnlockState;
+        // The unlock-staleness alert reads its hours from the settings
+        // editor LIVE — a save re-arms the watches without an app restart
+        // (0 disables the alert). Default 4h when never configured.
+        var settingsFactory = provider.GetRequiredService<Func<AppSettings>>();
+        hub.SetThresholdSource(() => settingsFactory().ArmStalenessHours);
         digest.Start();
 
         // Live telemetry panel on the Performance tab (cycles/latency/errors
