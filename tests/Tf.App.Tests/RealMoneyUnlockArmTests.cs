@@ -21,6 +21,7 @@ namespace Tf.App.Tests;
 /// possible is recorded just as loudly.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class RealMoneyUnlockArmTests : IDisposable
 {
     private readonly string _dir;
