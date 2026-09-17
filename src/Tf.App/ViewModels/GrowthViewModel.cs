@@ -87,6 +87,28 @@ public sealed partial class GrowthViewModel : ObservableObject
     /// <summary>One banner per account whose auto-restart budget is exhausted.</summary>
     public ObservableCollection<GaveUpBanner> GaveUpBanners { get; } = new();
 
+    /// <summary>One banner per API-verified real-money account whose session
+    /// unlock is not armed (typically right after app start). Real accounts
+    /// stay locked by design until the typed-phrase unlock is re-armed.</summary>
+    public ObservableCollection<LockedRealAccountBanner> LockedRealAccountBanners { get; } = new();
+
+    /// <summary>Accounts listed in the in-tab unlock panel (the locked real
+    /// accounts the phrase will arm — possibly several in one pass).</summary>
+    public ObservableCollection<LockedRealAccountBanner> UnlockableAccounts { get; } = new();
+
+    /// <summary>True while the in-tab real-money unlock panel is open.</summary>
+    [ObservableProperty]
+    private bool isUnlockPanelVisible;
+
+    /// <summary>The typed confirmation phrase for the unlock panel.</summary>
+    [ObservableProperty]
+    private string unlockPhrase = "";
+
+    /// <summary>Panel notice line (why the list is empty, etc.).
+    /// Null hides the line entirely (NullToVisibility).</summary>
+    [ObservableProperty]
+    private string? unlockPanelNotice;
+
     public GrowthViewModel(MultiAccountHub hub, GrowthPlanStore planStore,
         Func<AppSettings> settings, DashboardViewModel dashboard,
         PerformanceTracker? tracker = null)
@@ -108,7 +130,13 @@ public sealed partial class GrowthViewModel : ObservableObject
         _hub.PortfolioGovernorTripped += OnGovernorTripped;
         _hub.PortfolioGovernorWarning += OnGovernorWarning;
         _hub.GovernorRearmed += OnGovernorRearmed;
+        _hub.RealMoneyRefused += OnRealMoneyRefused;
         RefreshPortfolioPnl();
+
+        // Startup banner: session unlocks die with the process, so every app
+        // start re-locks real-money accounts — surface them immediately
+        // instead of leaving them to be discovered on the next start click.
+        RebuildLockedBanners();
 
         // The hub restores a latched governor from the journal before this VM
         // exists — surface the breach immediately instead of waiting for an
@@ -210,10 +238,20 @@ public sealed partial class GrowthViewModel : ObservableObject
         var autonomy = AutonomyEnabled;
         var plan = BuildPlan();
         var started = 0;
+        var blocked = 0;
         foreach (var connection in _hub.Accounts)
         {
             if (!connection.IsConnected)
             {
+                continue;
+            }
+
+            // Real-money accounts need the explicit typed-phrase unlock for
+            // this session before any engine may start on them — the in-tab
+            // unlock panel is the way to arm it (modals are gone).
+            if (!connection.Config.IsDemo && !_hub.IsRealMoneyUnlocked(connection.Config.Id))
+            {
+                blocked++;
                 continue;
             }
 
@@ -232,12 +270,129 @@ public sealed partial class GrowthViewModel : ObservableObject
         // The autonomy notice must survive the result line — it used to be a
         // dead store overwritten by the status below before ever being seen.
         StatusMessage = (started == 0
-            ? "No connected demo accounts to run — connect accounts on this tab first."
+            ? (blocked > 0
+                ? "No engines started — real-money accounts stayed locked."
+                : "No connected demo accounts to run — connect accounts on this tab first.")
             : $"Growth engine started on {started} account(s). Watch the activity log below.")
+            + (blocked > 0
+                ? $" {blocked} real-money account(s) stayed locked — open the unlock panel (🔒) to arm this session."
+                : "")
             + (autonomy
                 ? ""
                 : " Autonomy is OFF (Settings → Autonomy): engines run decisions only — " +
                   "no trades are placed until you enable it.");
+    }
+
+    /// <summary>Opens the in-tab unlock panel listing every locked real-
+    /// money account (verified or not — the panel shows the verification
+    /// state honestly; unverified accounts stay gated by the API verdict
+    /// even when the phrase arms the session unlock).</summary>
+    [RelayCommand]
+    private void ShowUnlockPanel()
+    {
+        UnlockableAccounts.Clear();
+        foreach (var connection in _hub.Accounts)
+        {
+            if (!connection.Config.IsDemo && !_hub.IsRealMoneyUnlocked(connection.Config.Id))
+            {
+                UnlockableAccounts.Add(new LockedRealAccountBanner(
+                    connection.Config.Id,
+                    connection.DisplayName,
+                    connection.ApiVerifiedVirtual is false
+                        ? "verified REAL by the API"
+                        : connection.ApiVerifiedVirtual is true
+                            ? "API says virtual (demo funds) — fix the account flag"
+                            : "type unverified (fails closed until connected)"));
+            }
+        }
+
+        UnlockPanelNotice = UnlockableAccounts.Count == 0
+            ? "No locked real-money accounts — nothing to unlock."
+            : null;
+        UnlockPhrase = "";
+        IsUnlockPanelVisible = true;
+    }
+
+    /// <summary>Arms the session unlock for every account listed in the
+    /// panel — plus the Brain/Trades tabs' shared manual unlock — after the
+    /// confirmation phrase was typed exactly. A wrong phrase unlocks
+    /// nothing.</summary>
+    [RelayCommand]
+    private void ConfirmUnlock()
+    {
+        if (!string.Equals(UnlockPhrase?.Trim(), RealMoneyGate.ConfirmationPhrase, StringComparison.Ordinal))
+        {
+            StatusMessage = "Confirmation phrase did not match — nothing was unlocked.";
+            UnlockPhrase = "";
+            return;
+        }
+
+        // One phrase, one session: the manual surfaces (Brain tab cycles,
+        // Trades tab trade) share this unlock for the primary client. Their
+        // own gates still require the account to be config-real AND API-
+        // verified real — arming alone trades nothing.
+        //
+        // Arm via the batch seam so the whole pass writes ONE summary audit
+        // entry (REAL_MONEY_UNLOCK_ARMED) instead of one per account.
+        var newlyArmed = new List<LockedRealAccountBanner>();
+        foreach (var account in UnlockableAccounts)
+        {
+            if (_hub.TryArmUnlock(account.AccountId))
+            {
+                newlyArmed.Add(account);
+            }
+        }
+
+        var manualWasLocked = !ManualRealMoneyGate.IsUnlocked;
+        ManualRealMoneyGate.Arm();
+
+        _hub.JournalUnlockArmed(
+            newlyArmed.Select(b => _hub.Accounts.FirstOrDefault(a => a.Config.Id == b.AccountId)).ToList(),
+            manualSurfaces: manualWasLocked);
+
+        var scope = new List<string>();
+        if (newlyArmed.Count > 0)
+        {
+            scope.Add($"{newlyArmed.Count} hub account(s)");
+        }
+
+        if (manualWasLocked)
+        {
+            scope.Add("manual surfaces");
+        }
+
+        if (scope.Count == 0)
+        {
+            StatusMessage = "Nothing new to unlock — everything listed was already armed this session.";
+        }
+        else
+        {
+            var joined = string.Join(" + ", scope);
+            ActivityLog.Insert(0, $"{DateTime.Now:HH:mm:ss} — real-money unlock armed (journalled): {joined} (this session)");
+            StatusMessage = $"Real-money trading unlocked for {joined} this session.";
+        }
+
+        UnlockPhrase = "";
+        IsUnlockPanelVisible = false;
+        RebuildRows();
+        RebuildLockedBanners();
+    }
+
+    /// <summary>Closes the unlock panel without arming anything.</summary>
+    [RelayCommand]
+    private void CancelUnlock()
+    {
+        UnlockPhrase = "";
+        IsUnlockPanelVisible = false;
+    }
+
+    private void OnRealMoneyRefused(AccountConnection connection, string explanation)
+    {
+        OnUiThread(() =>
+        {
+            StatusMessage = explanation;
+            ActivityLog.Insert(0, $"{DateTime.Now:HH:mm:ss} — {connection.DisplayName}: {explanation}");
+        });
     }
 
     [RelayCommand]
@@ -255,7 +410,11 @@ public sealed partial class GrowthViewModel : ObservableObject
 
     private void OnAccountsChanged()
     {
-        OnUiThread(RebuildRows);
+        OnUiThread(() =>
+        {
+            RebuildRows();
+            RebuildLockedBanners();
+        });
     }
 
     private void OnGrowthActivity(GrowthRunner runner, string line)
@@ -365,6 +524,44 @@ public sealed partial class GrowthViewModel : ObservableObject
         }
     }
 
+    /// <summary>Rebuilds the locked-real-account banners from current hub
+    /// state: an API-verified real account (config agrees) whose session
+    /// unlock is not armed gets one banner. Runs on construction (unlocks
+    /// die with the process, so app start always re-locks) and whenever the
+    /// account set changes.</summary>
+    /// <summary>Test seam: rebuilds the locked-real-account banners from
+    /// current hub state without raising hub events (mirrors the hub's
+    /// TestRaise* pattern).</summary>
+    internal void TestRebuildLockedBanners() => RebuildLockedBanners();
+
+    private void RebuildLockedBanners()
+    {
+        LockedRealAccountBanners.Clear();
+        foreach (var connection in _hub.Accounts)
+        {
+            // API-verified real (or never verified — fail closed) with a
+            // config that agrees, and no session unlock: locked. A demo-
+            // flagged config never shows here — its mismatch surfaces as a
+            // refusal, not an unlock affordance.
+            if (connection.Config.IsDemo)
+            {
+                continue;
+            }
+
+            if (_hub.IsRealMoneyUnlocked(connection.Config.Id))
+            {
+                continue;
+            }
+
+            LockedRealAccountBanners.Add(new LockedRealAccountBanner(
+                connection.Config.Id,
+                connection.DisplayName,
+                connection.ApiVerifiedVirtual is null
+                    ? "type unverified (fails closed)"
+                    : "verified REAL by the API"));
+        }
+    }
+
     private void OnRestartStateChanged(Guid accountId, int attempt, bool gaveUp)
     {
         OnUiThread(() =>
@@ -394,7 +591,8 @@ public sealed partial class GrowthViewModel : ObservableObject
 
     /// <summary>
     /// Manually restarts one engine after the auto-restart budget was
-    /// exhausted; also clears the gave-up state via the hub.
+    /// exhausted; also clears the gave-up state via the hub. Real-money
+    /// accounts must pass the same typed-phrase unlock as StartAll first.
     /// </summary>
     [RelayCommand]
     private void RestartAccount(Guid accountId)
@@ -406,6 +604,15 @@ public sealed partial class GrowthViewModel : ObservableObject
             return;
         }
 
+        if (!connection.Config.IsDemo && !_hub.IsRealMoneyUnlocked(connection.Config.Id))
+        {
+            // No modal: route to the in-tab unlock panel (Start All does the
+            // same) so the refusal and the affordance live in one place.
+            StatusMessage = $"{connection.DisplayName} is locked — open the unlock panel to arm this session first.";
+            ShowUnlockPanel();
+            return;
+        }
+
         var runner = _hub.StartGrowth(connection, BuildPlan(), _settings, () => _dashboard.IsKillSwitchEngaged);
         var row = Rows.FirstOrDefault(r => r.Connection == connection);
         if (row is not null && runner is not null)
@@ -414,7 +621,8 @@ public sealed partial class GrowthViewModel : ObservableObject
         }
 
         StatusMessage = runner is null
-            ? "Cannot restart — the account must be a connected demo account."
+            ? "Cannot restart — the account must be connected, and real-money starts " +
+              "must pass the unlock (see the activity log for the exact refusal)."
             : $"Restarted the growth engine on {connection.DisplayName}.";
     }
 
@@ -463,3 +671,8 @@ public sealed partial class GrowthRowViewModel : ObservableObject
 
 /// <summary>One gave-up banner in the growth tab; carries the restart target.</summary>
 public sealed record GaveUpBanner(Guid AccountId, string AccountName);
+
+/// <summary>One banner per API-verified real-money account whose session
+/// unlock is not armed — the visible reminder that app restarts re-lock
+/// real trading until the phrase is typed again.</summary>
+public sealed record LockedRealAccountBanner(Guid AccountId, string AccountName, string VerificationText);

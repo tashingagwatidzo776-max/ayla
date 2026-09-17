@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -48,7 +49,8 @@ public partial class JournalViewModel : ObservableObject
     public IReadOnlyList<string> Categories { get; } = new[]
     {
         "ALL", "BRAIN_DECISION", "TRADE_EXECUTION", "TRADE_SETTLEMENT",
-        "GROWTH_STATE", "ACCOUNT_EVENT"
+        "GROWTH_STATE", "ACCOUNT_EVENT", "REAL_MONEY_UNLOCK_ARMED",
+        "REAL_MONEY_UNLOCK_STALE"
     };
 
     public JournalViewModel(TradeJournal journal, TradeStore store, Func<bool> killSwitch)
@@ -160,6 +162,8 @@ public partial class JournalViewModel : ObservableObject
                 "TRADE_SETTLEMENT" => FormatTradeSettlement(entry),
                 "GROWTH_STATE" => FormatGrowthState(entry),
                 "ACCOUNT_EVENT" => FormatAccountEvent(entry),
+                "REAL_MONEY_UNLOCK_ARMED" => FormatRealMoneyUnlockArmed(entry),
+                "REAL_MONEY_UNLOCK_STALE" => FormatRealMoneyUnlockStale(entry),
                 _ => entry.Details
             };
         }
@@ -218,6 +222,74 @@ public partial class JournalViewModel : ObservableObject
         var detailsText = ExtractJsonValue(details, "Details");
 
         return $"👤 {eventName}" + (string.IsNullOrEmpty(detailsText) ? "" : $" | {detailsText}");
+    }
+
+    /// <summary>The moment real trading became possible this session —
+    /// formatted like a settlement so the audit trail reads at a glance:
+    /// who was armed, whether the manual surfaces joined, and how many of
+    /// the accounts are API-verified real.</summary>
+    private string FormatRealMoneyUnlockArmed(JournalEntry entry)
+    {
+        var details = entry.Details;
+        var countText = ExtractJsonValue(details, "AccountCount");
+        var verifiedText = ExtractJsonValue(details, "VerifiedReal");
+        var manual = ExtractJsonValue(details, "ManualSurfaces");
+        var armedBy = ExtractJsonValue(details, "ArmedBy");
+
+        int.TryParse(countText, out var accountCount);
+        int.TryParse(verifiedText, out var verifiedCount);
+
+        var scopes = new List<string>();
+        if (accountCount > 0)
+        {
+            var names = ExtractJsonArray(details, "Accounts");
+            scopes.Add(!string.IsNullOrEmpty(names) ? names : $"{accountCount} account(s)");
+        }
+
+        if (manual == "true")
+        {
+            scopes.Add("manual surfaces");
+        }
+
+        if (scopes.Count == 0)
+        {
+            return $"🔓 {details}"; // malformed payload — show it raw rather than an empty arm line
+        }
+
+        var verified = accountCount > 0 ? $" ({verifiedCount}/{accountCount} API-verified real)" : "";
+        var via = string.IsNullOrEmpty(armedBy) ? "" : $" | via {armedBy}";
+        return "🔓 REAL-MONEY UNLOCK ARMED | " + string.Join(" + ", scopes) + verified + via;
+    }
+
+    /// <summary>An unlock left armed past the staleness threshold. Logged
+    /// through the journal's plain-message path, so the details string IS
+    /// the line — no JSON to unpack.</summary>
+    private string FormatRealMoneyUnlockStale(JournalEntry entry) =>
+        $"⏰ STALE UNLOCK | {entry.Details}";
+
+    /// <summary>Extracts a JSON string array as comma-joined values, using
+    /// the same hand-rolled parsing as <see cref="ExtractJsonValue"/> (the
+    /// formatter deliberately avoids a JSON DOM dependency).</summary>
+    private string ExtractJsonArray(string json, string key)
+    {
+        var search = $"\"{key}\":";
+        var idx = json.IndexOf(search, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return "";
+
+        idx += search.Length;
+        while (idx < json.Length && json[idx] == ' ') idx++;
+
+        if (idx >= json.Length || json[idx] != '[') return "";
+
+        var start = idx + 1;
+        var end = json.IndexOf(']', start);
+        if (end < 0) return "";
+
+        var items = json[start..end]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(item => item.Trim('"'))
+            .Where(item => item.Length > 0);
+        return string.Join(", ", items);
     }
 
     private string ExtractJsonValue(string json, string key)
