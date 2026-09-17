@@ -140,6 +140,8 @@ jobs:
       run: dotnet restore
 
     - name: Publish the self-contained exe
+      # InformationalVersion carries the release identity into the binary
+      # (window title + About box): "vX.Y.Z+<full sha>".
       run: >
         dotnet publish src/Tf.App/Tf.App.csproj
         -c Release
@@ -149,6 +151,7 @@ jobs:
         -p:PublishSingleFile=true
         -p:IncludeNativeLibrariesForSelfExtract=true
         -p:EnableCompressionInSingleFile=true
+        -p:InformationalVersion=${{ github.ref_name }}+${{ github.sha }}
 
     - name: Upload the release artifact
       uses: actions/upload-artifact@v4

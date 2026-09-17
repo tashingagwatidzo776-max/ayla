@@ -24,6 +24,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>Tf</AssemblyName>
     <Product>Tf — Deriv options trader</Product>
+    <!-- Dev fallback. Publish stamps the real identity: scripts/publish_exe.ps1
+         and the tag workflow pass -p:InformationalVersion="<tag>+<commit>" (CLI
+         properties override the generated one), which the window title and
+         About box read at runtime so shipped binaries identify themselves. -->
     <Version>0.7.0</Version>
   </PropertyGroup>
 

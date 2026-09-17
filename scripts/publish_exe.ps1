@@ -54,6 +54,12 @@ if ($LASTEXITCODE -eq 0 -and $tag -match '^v') {
     Write-Host "Gate drill verified green for $tag - release may proceed." -ForegroundColor Green
 }
 
+# Stamp the binary's identity (window title + About box): the release tag
+# when publishing from one, else the git describe of the current commit.
+$stamp = if ($isReleaseTag) { "$tag+$((git rev-parse HEAD).Trim())" }
+         else { (git describe --tags --long --always --dirty 2>$null) }
+if ($stamp) { Write-Host "Stamping version: $stamp" }
+
 $args = @(
     "publish", $proj,
     "-c", $Configuration,
@@ -69,6 +75,9 @@ if (-not $FrameworkDependent) {
         "-p:IncludeNativeLibrariesForSelfExtract=true",
         "-p:EnableCompressionInSingleFile=true"
     )
+}
+if ($stamp) {
+    $args += "-p:InformationalVersion=$stamp"
 }
 
 & dotnet $args
