@@ -239,8 +239,12 @@
                         <TextBox Grid.Row="7" Grid.Column="1" Margin="0,0,0,10"
                                  Text="{Binding SettingsVm.DurationMinutes, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="8" Grid.Column="0" Text="Stake" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="8" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.Stake, UpdateSourceTrigger=PropertyChanged}" />
+                        <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <TextBox Width="120" Text="{Binding SettingsVm.Stake, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                            <TextBlock Text="Manual max stake" Style="{StaticResource FieldLabel}" Margin="16,0,8,0" VerticalAlignment="Center"
+                                       ToolTip="Hard ceiling on the Trades tab's manual stake and the Brain tab's cycles (blank/0 = no extra limit beyond the growth risk engine's own MaxStake). Keeps a mistyped stake from reaching a real account." />
+                            <TextBox Width="120" Text="{Binding SettingsVm.ManualMaxStake, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" VerticalAlignment="Center" />
+                        </StackPanel>
 
                         <TextBlock Grid.Row="9" Grid.ColumnSpan="2" Text="AUTONOMY" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
                         <TextBlock Grid.Row="10" Grid.Column="0" Text="Autonomy" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
@@ -339,6 +343,7 @@
                         <RowDefinition Height="190" />    <!-- growth grid -->
                         <RowDefinition Height="Auto" />   <!-- locked real-money banners -->
                         <RowDefinition Height="Auto" />   <!-- in-tab unlock panel -->
+                        <RowDefinition Height="Auto" />   <!-- stale-unlock banners -->
                         <RowDefinition Height="Auto" />   <!-- gave-up banners -->
                         <RowDefinition Height="Auto" />   <!-- governor latch banner -->
                         <RowDefinition Height="Auto" />   <!-- governor warning banner -->
@@ -656,8 +661,22 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- ── Stale-unlock banners (armed past the staleness threshold) ── -->
+                    <ItemsControl Grid.Row="8" ItemsSource="{Binding GrowthVm.StaleUnlockBanners}" Margin="0,0,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
+                                        CornerRadius="4" Padding="10,6" Margin="0,0,0,6">
+                                    <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
+                                        <Run Text="⏰ " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text="'s real-money unlock has been armed for " /><Run Text="{Binding ArmedForText, Mode=OneWay}" FontWeight="Bold" /><Run Text=" (threshold " /><Run Text="{Binding ThresholdText, Mode=OneWay}" FontStyle="Italic" /><Run Text=") — real trading is live. Re-arm deliberately or let the session end clear it." />
+                                    </TextBlock>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
                     <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->
-                    <ItemsControl Grid.Row="8" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
+                    <ItemsControl Grid.Row="9" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
@@ -676,7 +695,7 @@
                     </ItemsControl>
 
                     <!-- ── Portfolio governor latch banner ────────── -->
-                    <Border Grid.Row="9" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="10" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -696,7 +715,7 @@
                     </Border>
 
                     <!-- ── Portfolio governor warning banner ──────── -->
-                    <Border Grid.Row="10" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="11" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -716,8 +735,8 @@
                     </Border>
 
                     <!-- ── Activity log ──────────────────────────────── -->
-                    <TextBlock Grid.Row="11" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="12" Style="{StaticResource Card}" Padding="10">
+                    <TextBlock Grid.Row="12" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="13" Style="{StaticResource Card}" Padding="10">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <ItemsControl ItemsSource="{Binding GrowthVm.ActivityLog}">
                                 <ItemsControl.ItemTemplate>
@@ -731,8 +750,8 @@
                     </Border>
 
                     <!-- ── Intraday P&amp;L curve (per account, cumulative) ───── -->
-                    <TextBlock Grid.Row="13" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="14" Style="{StaticResource Card}" Padding="6">
+                    <TextBlock Grid.Row="14" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="15" Style="{StaticResource Card}" Padding="6">
                         <controls:PnlCurveControl x:Name="PnlCurve" />
                     </Border>
                 </Grid>

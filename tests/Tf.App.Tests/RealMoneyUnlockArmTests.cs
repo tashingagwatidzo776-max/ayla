@@ -397,6 +397,60 @@ public class RealMoneyUnlockArmTests : IDisposable
         await hub.RemoveAccountAsync(real);
     }
 
+    // ─── Stale-unlock banner surface (Growth tab) ─────────
+
+    [Fact]
+    public async Task StaleBanners_MirrorTheHubArmState()
+    {
+        var clock = new TestVirtualClock();
+        var hub = new MultiAccountHub(new MemoryVault(), new TradeStore(_dir), _journal,
+            timeProvider: clock);
+        hub.ArmStalenessThreshold = TimeSpan.FromHours(4);
+        var real = AddReal("StaleUi", verifiedVirtual: false, hub: hub);
+        var vm = new GrowthViewModel(hub, new GrowthPlanStore(),
+            () => new AppSettings { AutonomyEnabled = true },
+            new DashboardViewModel(new DerivClient(), hub), tracker: null);
+
+        // Nothing armed → no stale banner.
+        Assert.Empty(vm.StaleUnlockBanners);
+
+        // Fresh arm → still no stale banner (the lock banner disappears too).
+        hub.UnlockRealMoney(real.Config.Id);
+        vm.TestRebuildStaleBanners();
+        Assert.Empty(vm.StaleUnlockBanners);
+
+        // Past the threshold the staleness timer fires the hub's UnlockStale
+        // event — the VM rebuilds on it, so the banner appears without any
+        // manual refresh (this is the exact production path).
+        clock.Advance((long)TimeSpan.FromHours(4).TotalMilliseconds + 1);
+        var banner = Assert.Single(vm.StaleUnlockBanners);
+        Assert.Equal("StaleUi", banner.AccountName);
+        Assert.Equal("4h", banner.ThresholdText);
+        Assert.Contains("h", banner.ArmedForText);
+
+        // Removing the account rebuilds the surface — the banner leaves.
+        await hub.RemoveAccountAsync(real);
+        Assert.Empty(vm.StaleUnlockBanners);
+    }
+
+    [Fact]
+    public void StaleBanners_DisappearWhenAlertingIsDisabled()
+    {
+        var clock = new TestVirtualClock();
+        var hub = new MultiAccountHub(new MemoryVault(), new TradeStore(_dir), _journal,
+            timeProvider: clock);
+        hub.SetThresholdSource(() => 0); // alerting off — no stale surface either
+        var real = AddReal("StaleOff", verifiedVirtual: false, hub: hub);
+        var vm = new GrowthViewModel(hub, new GrowthPlanStore(),
+            () => new AppSettings { AutonomyEnabled = true },
+            new DashboardViewModel(new DerivClient(), hub), tracker: null);
+
+        hub.UnlockRealMoney(real.Config.Id);
+        vm.TestRebuildStaleBanners();
+
+        Assert.Empty(vm.StaleUnlockBanners); // disabled alert ⇒ disabled banner
+    }
+
     // ─── Unlock-window trade counting (digest arm leg) ─────
 
     [Fact]

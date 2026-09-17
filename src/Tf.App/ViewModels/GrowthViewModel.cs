@@ -92,6 +92,12 @@ public sealed partial class GrowthViewModel : ObservableObject
     /// stay locked by design until the typed-phrase unlock is re-armed.</summary>
     public ObservableCollection<LockedRealAccountBanner> LockedRealAccountBanners { get; } = new();
 
+    /// <summary>One banner per account whose session unlock is ARMED but
+    /// past the staleness threshold — real trading has been possible all
+    /// this time without anyone re-armming deliberately. Toasts/webhooks go
+    /// out-of-band; this is the in-app mirror of the same state.</summary>
+    public ObservableCollection<StaleUnlockBanner> StaleUnlockBanners { get; } = new();
+
     /// <summary>Accounts listed in the in-tab unlock panel (the locked real
     /// accounts the phrase will arm — possibly several in one pass).</summary>
     public ObservableCollection<LockedRealAccountBanner> UnlockableAccounts { get; } = new();
@@ -131,12 +137,17 @@ public sealed partial class GrowthViewModel : ObservableObject
         _hub.PortfolioGovernorWarning += OnGovernorWarning;
         _hub.GovernorRearmed += OnGovernorRearmed;
         _hub.RealMoneyRefused += OnRealMoneyRefused;
+        _hub.UnlockStale += OnUnlockStale;
         RefreshPortfolioPnl();
 
         // Startup banner: session unlocks die with the process, so every app
         // start re-locks real-money accounts — surface them immediately
         // instead of leaving them to be discovered on the next start click.
         RebuildLockedBanners();
+
+        // A session restored around an armed unlock may already be stale —
+        // build the stale surface from the arm state on construction too.
+        RebuildStaleBanners();
 
         // The hub restores a latched governor from the journal before this VM
         // exists — surface the breach immediately instead of waiting for an
@@ -414,6 +425,7 @@ public sealed partial class GrowthViewModel : ObservableObject
         {
             RebuildRows();
             RebuildLockedBanners();
+            RebuildStaleBanners();
         });
     }
 
@@ -533,6 +545,49 @@ public sealed partial class GrowthViewModel : ObservableObject
     /// current hub state without raising hub events (mirrors the hub's
     /// TestRaise* pattern).</summary>
     internal void TestRebuildLockedBanners() => RebuildLockedBanners();
+
+    internal void TestRebuildStaleBanners() => RebuildStaleBanners();
+
+    /// <summary>The hub flagged an arm as stale (threshold elapsed) — the
+    /// banner list mirrors it. The event fires on a background thread in
+    /// production; OnUiThread marshals to the dispatcher.</summary>
+    private void OnUnlockStale((Guid AccountId, string Name, TimeSpan Age, int Cycles) payload) =>
+        OnUiThread(RebuildStaleBanners);
+
+    /// <summary>Rebuilds the stale-unlock banners straight from the hub's
+    /// arm state: every account whose unlock is armed for longer than the
+    /// staleness threshold gets one. Runs on construction (a hub restored
+    /// from a latched state may already be stale), on account changes, and
+    /// on every UnlockStale flag.</summary>
+    private void RebuildStaleBanners()
+    {
+        StaleUnlockBanners.Clear();
+        var threshold = _hub.ArmStalenessThreshold;
+        if (threshold is not { } limit || limit <= TimeSpan.Zero)
+        {
+            return; // alerting disabled — no stale surface either
+        }
+
+        var now = _hub.UtcNow; // the arm timestamps' own clock — never the wall
+        foreach (var kv in _hub.UnlockArmedAtUtc.OrderBy(kv => kv.Value))
+        {
+            var age = now - kv.Value;
+            if (age < limit)
+            {
+                // Not stale yet. The hub flags at age == threshold exactly,
+                // so the banner uses the same boundary (>=) — otherwise an
+                // event-driven rebuild at the exact due moment shows nothing.
+                continue;
+            }
+
+            var connection = _hub.Accounts.FirstOrDefault(a => a.Config.Id == kv.Key);
+            StaleUnlockBanners.Add(new StaleUnlockBanner(
+                kv.Key,
+                connection?.DisplayName ?? kv.Key.ToString()[..8],
+                age.TotalHours >= 1 ? $"{(int)age.TotalHours}h{age.Minutes:00}m" : $"{age.TotalMinutes:0}m",
+                $"{(int)limit.TotalHours}h"));
+        }
+    }
 
     private void RebuildLockedBanners()
     {
@@ -676,3 +731,8 @@ public sealed record GaveUpBanner(Guid AccountId, string AccountName);
 /// unlock is not armed — the visible reminder that app restarts re-lock
 /// real trading until the phrase is typed again.</summary>
 public sealed record LockedRealAccountBanner(Guid AccountId, string AccountName, string VerificationText);
+
+/// <summary>One banner per account whose session unlock is armed but past
+/// the staleness threshold — the in-app mirror of the hub's out-of-band
+/// stale alert, so dismissing the toast cannot hide the state.</summary>
+public sealed record StaleUnlockBanner(Guid AccountId, string AccountName, string ArmedForText, string ThresholdText);

@@ -670,6 +670,12 @@ public sealed class MultiAccountHub
         return true;
     }
 
+    /// <summary>The hub's clock: every arm timestamp is taken from this
+    /// source, so anything measuring arm ages (digest line, banner surface,
+    /// staleness timers) must read the SAME clock rather than the wall —
+    /// tests inject virtual time here.</summary>
+    internal DateTimeOffset UtcNow => _timeProvider.GetUtcNow();
+
     /// <summary>When each account's session unlock was armed (UTC), for the
     /// digest's arm-state leg. Only accounts currently unlocked appear.</summary>
     internal IReadOnlyDictionary<Guid, DateTimeOffset> UnlockArmedAtUtc
