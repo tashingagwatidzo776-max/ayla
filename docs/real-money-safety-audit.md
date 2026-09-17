@@ -79,8 +79,9 @@ GrowthRunner → AutonomousScheduler → TradingBrain → DerivClient`
 - **The manual trade's stake is not bounded by the risk engine.** Closed by
   the `ManualMaxStake` ceiling (Settings tab): the Trades tab refuses any
   stake above it before requesting a proposal, so a mistyped stake cannot
-  reach a real account. 0/blank disables the extra limit — accepted again
-  only if the user explicitly turns it off.
+  reach a real account. Ships capped at 10.00 (the risk engine's `MaxStake`),
+  so a fresh install is bounded out of the box; 0/blank is an explicit
+  opt-out that the Growth tab's go-live readiness panel flags red.
 - **Locked-real-account visibility at startup.** Closed by the Growth tab's
   locked-account banners: session unlocks die with the process, so app start
   re-locks real accounts — the banners list them (with the API verification
@@ -148,6 +149,7 @@ here.
 | `ManualRealMoneyGateTests` (Tf.App) | The manual-surface unlock latch and its refusal matrix (Trades/Brain paths). |
 | `RealMoneyUnlockArmTests` (Tf.App) | Unlock-panel arming: journal arm entries, activity logging, staleness. |
 | `GrowthViewModelRestartTests` (Tf.App) | The Growth tab's unlock panel arming every listed account at once. |
+| `GrowthViewModelReadinessTests` (Tf.App) | The go-live readiness panel's five checks: locked unlock / unverified account / disabled manual cap / absent governor cap / missing webhook each flip exactly the right leg red. |
 | `ManualMaxStakeTests` (Tf.App) | The manual stake cap on the Trades tab path. |
 | `MetricsDigestServiceTests` (Tf.App) | The digest's arm-state leg and rail table. |
 | `RealMoneyGateHubTests` (Tf.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |

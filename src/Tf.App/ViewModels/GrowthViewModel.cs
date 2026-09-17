@@ -62,6 +62,73 @@ public sealed partial class GrowthViewModel : ObservableObject
     [ObservableProperty]
     private string combinedPnlText = "$0.00";
 
+    /// <summary>One line per go-live readiness check (accounts verified, real
+    /// unlock armed, manual stake cap, portfolio governor cap, webhook).
+    /// Green when the condition holds, red with the fix otherwise — the
+    /// "can I trade real?" surface, answered at a glance.</summary>
+    public ObservableCollection<ReadinessCheck> ReadinessChecks { get; } = new();
+
+    /// <summary>True when every readiness check is green — drives the panel's
+    /// header tick.</summary>
+    public bool IsReadyForReal => ReadinessChecks.All(c => c.IsMet);
+
+    /// <summary>Text of the first unmet check (null when ready) for the header line.</summary>
+    public string? FirstBlocker => ReadinessChecks.FirstOrDefault(c => !c.IsMet)?.Name;
+
+    /// <summary>Rebuilds the readiness checks from hub + settings state. Cheap
+    /// (a handful of property reads) — called on construction, account
+    /// changes, arm/disarm, and cap-text edits.</summary>
+    internal void RebuildReadinessChecks()
+    {
+        var s = _settings();
+        var realAccounts = _hub.Accounts.Where(a => !a.Config.IsDemo).ToList();
+        var verified = realAccounts.Where(a => a.ApiVerifiedVirtual == false).Count();
+        var unverified = realAccounts.Count - verified;
+
+        ReadinessChecks.Clear();
+        ReadinessChecks.Add(new ReadinessCheck(
+            "Accounts",
+            realAccounts.Count == 0
+                ? "no real accounts configured (demo only)"
+                : verified == realAccounts.Count
+                    ? $"{verified} real account(s) verified by the API"
+                    : $"{verified}/{realAccounts.Count} verified — connect to verify the rest (unverified fails closed)",
+            realAccounts.Count == 0 || verified == realAccounts.Count));
+        var unlocked = realAccounts.All(a => _hub.IsRealMoneyUnlocked(a.Config.Id));
+        ReadinessChecks.Add(new ReadinessCheck(
+            "Unlock",
+            realAccounts.Count == 0
+                ? "no real accounts (demo needs no unlock)"
+                : unlocked
+                    ? "real-money session unlock armed"
+                    : "locked — arm the session unlock from this tab's panel",
+            unlocked));
+        ReadinessChecks.Add(new ReadinessCheck(
+            "Manual cap",
+            s.ManualMaxStake > 0
+                ? $"manual trades capped at {s.ManualMaxStake:0.##}"
+                : "disabled — set a ceiling in Settings (ManualMaxStake)",
+            s.ManualMaxStake > 0));
+        var governorOk = !string.IsNullOrWhiteSpace(PortfolioDrawdownCapText) && !_hub.IsGovernorTripped;
+        ReadinessChecks.Add(new ReadinessCheck(
+            "Governor",
+            string.IsNullOrWhiteSpace(PortfolioDrawdownCapText)
+                ? "off — set Portfolio DD cap above to bound the day"
+                : _hub.IsGovernorTripped
+                    ? "latched after a breach — re-arm before starting"
+                    : $"portfolio drawdown cap active ({PortfolioDrawdownCapText})",
+            governorOk));
+        ReadinessChecks.Add(new ReadinessCheck(
+            "Webhook",
+            !string.IsNullOrWhiteSpace(s.WebhookUrl)
+                ? "configured — alerts reach you out-of-band"
+                : "not configured — refusals/unlocks stay in-app only",
+            !string.IsNullOrWhiteSpace(s.WebhookUrl)));
+
+        OnPropertyChanged(nameof(IsReadyForReal));
+        OnPropertyChanged(nameof(FirstBlocker));
+    }
+
     /// <summary>True while the portfolio drawdown governor is latched after a trip.</summary>
     [ObservableProperty]
     private bool isGovernorTripped;
@@ -152,6 +219,10 @@ public sealed partial class GrowthViewModel : ObservableObject
         // A session restored around an armed unlock may already be stale —
         // build the stale surface from the arm state on construction too.
         RebuildStaleBanners();
+
+        // First paint of the go-live readiness panel (re-checked on every
+        // account/arm/cap change below).
+        RebuildReadinessChecks();
 
         // The hub restores a latched governor from the journal before this VM
         // exists — surface the breach immediately instead of waiting for an
@@ -414,6 +485,7 @@ public sealed partial class GrowthViewModel : ObservableObject
         IsUnlockPanelVisible = false;
         RebuildRows();
         RebuildLockedBanners();
+        RebuildReadinessChecks();
     }
 
     /// <summary>Closes the unlock panel without arming anything.</summary>
@@ -453,6 +525,7 @@ public sealed partial class GrowthViewModel : ObservableObject
             RebuildRows();
             RebuildLockedBanners();
             RebuildStaleBanners();
+            RebuildReadinessChecks();
         });
     }
 
@@ -490,6 +563,7 @@ public sealed partial class GrowthViewModel : ObservableObject
             GovernorWarningText = "";
             var signedNet = ShowGovernorBanner(net);
             ActivityLog.Insert(0, $"{DateTime.Now:HH:mm:ss} — portfolio drawdown cap breached ({signedNet})");
+            RebuildReadinessChecks();
         });
     }
 
@@ -530,6 +604,7 @@ public sealed partial class GrowthViewModel : ObservableObject
             StatusMessage = "Portfolio governor re-armed — engines may start again.";
             ActivityLog.Insert(0, $"{DateTime.Now:HH:mm:ss} — portfolio governor re-armed");
             RefreshPortfolioPnl();
+            RebuildReadinessChecks();
         });
     }
 
@@ -561,6 +636,11 @@ public sealed partial class GrowthViewModel : ObservableObject
         {
             GaveUpBanners.Add(new GaveUpBanner(row.Connection.Config.Id, row.Connection.DisplayName));
         }
+
+        // API verification (an AccountConnection.StateChanged consequence)
+        // lands between connects — the Accounts check must follow without
+        // waiting for an account-set change.
+        RebuildReadinessChecks();
     }
 
     /// <summary>Rebuilds the locked-real-account banners from current hub
@@ -575,11 +655,20 @@ public sealed partial class GrowthViewModel : ObservableObject
 
     internal void TestRebuildStaleBanners() => RebuildStaleBanners();
 
+    /// <summary>Test seam: rebuilds the readiness checks from current hub +
+    /// settings state (mirrors the hub's TestRaise* pattern — the real paths
+    /// rebuild on arm/account/cap changes).</summary>
+    internal void TestRebuildReadinessChecks() => RebuildReadinessChecks();
+
     /// <summary>The hub flagged an arm as stale (threshold elapsed) — the
     /// banner list mirrors it. The event fires on a background thread in
     /// production; OnUiThread marshals to the dispatcher.</summary>
     private void OnUnlockStale((Guid AccountId, string Name, TimeSpan Age, int Cycles) payload) =>
         OnUiThread(RebuildStaleBanners);
+
+    /// <summary>PortfolioDrawdownCapText edits re-check the governor leg of
+    /// the readiness panel live (the typed text IS the setting until saved).</summary>
+    partial void OnPortfolioDrawdownCapTextChanged(string value) => RebuildReadinessChecks();
 
     /// <summary>Rebuilds the stale-unlock banners straight from the hub's
     /// arm state: every account whose unlock is armed for longer than the
@@ -765,3 +854,8 @@ public sealed record LockedRealAccountBanner(Guid AccountId, string AccountName,
 /// the staleness threshold — the in-app mirror of the hub's out-of-band
 /// stale alert, so dismissing the toast cannot hide the state.</summary>
 public sealed record StaleUnlockBanner(Guid AccountId, string AccountName, string ArmedForText, string ThresholdText);
+
+/// <summary>One go-live readiness check in the Growth tab: the condition and
+/// a human line for either state. IsMet drives the ✓/✗ glyph and color —
+/// the answer to "what is still between me and real trading?".</summary>
+public sealed record ReadinessCheck(string Name, string Text, bool IsMet);
