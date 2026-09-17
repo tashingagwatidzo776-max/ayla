@@ -397,6 +397,71 @@ public class RealMoneyUnlockArmTests : IDisposable
         await hub.RemoveAccountAsync(real);
     }
 
+    // ─── One-click config-flag fix (API says virtual, config says real) ───
+
+    [Fact]
+    public void FixAccountFlagToDemo_RelabelsPersistsAndJournals()
+    {
+        var vault = new MemoryVault();
+        var hub = new MultiAccountHub(vault, new TradeStore(_dir), _journal);
+        var mismatched = hub.AddAccount(new AccountConfig
+        {
+            Label = "Mismatch", ApiToken = "t", IsDemo = false, BrainKey = "Growth"
+        });
+        mismatched.ApiVerifiedVirtual = true; // API says virtual, config claims real
+
+        Assert.True(hub.FixAccountFlagToDemo(mismatched.Config.Id));
+        Assert.True(mismatched.Config.IsDemo); // relabelled
+        Assert.Single(vault.Items); // persisted through the vault
+        Assert.True(vault.Items[0].IsDemo);
+
+        _journal.Flush();
+        Assert.Contains(_journal.GetRecent(count: 50), e =>
+            e.Category == "ACCOUNT_EVENT" && e.Details.Contains("re-labelled to demo"));
+
+        // The gate now passes it through as a demo account — the mismatch
+        // refusal is gone.
+        Assert.Equal(RealMoneyDecision.DemoPassthrough,
+            RealMoneyGate.Evaluate(mismatched.Config.IsDemo, mismatched.ApiVerifiedVirtual,
+                unlockArmed: false));
+
+        // The fixed account drops out of the unlock panel list.
+        var vm = new GrowthViewModel(hub, new GrowthPlanStore(),
+            () => new AppSettings { AutonomyEnabled = true },
+            new DashboardViewModel(new DerivClient(), hub), tracker: null);
+        vm.ShowUnlockPanelCommand.Execute(null);
+        Assert.Empty(vm.UnlockableAccounts);
+    }
+
+    [Fact]
+    public void FixAccountFlagToDemo_RefusesEverythingButTheExactMismatch()
+    {
+        var hub = new MultiAccountHub(new MemoryVault(), new TradeStore(_dir), _journal);
+
+        // Unknown id.
+        Assert.False(hub.FixAccountFlagToDemo(Guid.NewGuid()));
+
+        // Genuinely real (API-verified real) — must stay a human decision.
+        var real = AddReal("RealStay", verifiedVirtual: false, hub: hub);
+        Assert.False(hub.FixAccountFlagToDemo(real.Config.Id));
+
+        // Already demo — nothing to fix.
+        var demo = hub.AddAccount(new AccountConfig
+        {
+            Label = "DemoStay", ApiToken = "d", IsDemo = true, BrainKey = "Growth"
+        });
+        demo.ApiVerifiedVirtual = true;
+        Assert.False(hub.FixAccountFlagToDemo(demo.Config.Id));
+
+        // Unverified (never authorized) — fixing it would be a guess.
+        var unverified = hub.AddAccount(new AccountConfig
+        {
+            Label = "Unverif", ApiToken = "u", IsDemo = false, BrainKey = "Growth"
+        });
+        unverified.ApiVerifiedVirtual = null;
+        Assert.False(hub.FixAccountFlagToDemo(unverified.Config.Id));
+    }
+
     // ─── Stale-unlock banner surface (Growth tab) ─────────
 
     [Fact]

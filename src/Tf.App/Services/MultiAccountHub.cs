@@ -835,6 +835,37 @@ public sealed class MultiAccountHub
         }
     }
 
+    /// <summary>One-click fix for a config/API mismatch: the Deriv API
+    /// verified the account as VIRTUAL (demo funds) but the config claims
+    /// real, so the gate refuses every start with a mismatch the user must
+    /// fix by hand. This re-labels the config to demo — the honest state —
+    /// persisting the change and journaling it as an account event. False
+    /// when the account does not exist, has not been API-verified as
+    /// virtual, or already claims demo (the fix must never run on an
+    /// unverified or genuinely real account — that stays a human edit).</summary>
+    public bool FixAccountFlagToDemo(Guid accountId)
+    {
+        lock (_runnerLock)
+        {
+            var connection = Accounts.FirstOrDefault(a => a.Config.Id == accountId);
+            if (connection is null || connection.ApiVerifiedVirtual != true ||
+                connection.Config.IsDemo)
+            {
+                return false;
+            }
+
+            connection.Config.IsDemo = true;
+            Save();
+        }
+
+        _journal.Log(accountId, "ACCOUNT_EVENT",
+            "real-money flag fixed: the Deriv API verified this account as virtual " +
+            "(demo funds), so the config was re-labelled to demo — the mismatch " +
+            "refusal is cleared");
+
+        return true;
+    }
+
     /// <summary>Cancels an account's staleness watch and clears its arm
     /// window (the arm itself is cleared by the callers under the lock).</summary>
     private void CancelUnlockStalenessCheck(Guid accountId)

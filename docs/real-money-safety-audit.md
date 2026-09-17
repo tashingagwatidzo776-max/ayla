@@ -71,7 +71,11 @@ GrowthRunner → AutonomousScheduler → TradingBrain → DerivClient`
 
 - **Settings still decide `IsDemo` per account.** The gate cross-checks the
   config against the API verdict, so a wrong config is refused loudly rather
-  than silently traded — but the fix is manual (edit the account's flag).
+  than silently traded. The one direction the app can verify — the API says
+  virtual while the config claims real — is fixable with one click from the
+  unlock panel ("✓ Fix flag → demo": re-labels, persists, journals). The
+  opposite direction (config claims demo, API says real) stays a manual fix:
+  re-labelling to real is a human decision by definition.
 - **The manual trade's stake is not bounded by the risk engine.** Closed by
   the `ManualMaxStake` ceiling (Settings tab): the Trades tab refuses any
   stake above it before requesting a proposal, so a mistyped stake cannot

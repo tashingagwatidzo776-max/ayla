@@ -306,14 +306,16 @@ public sealed partial class GrowthViewModel : ObservableObject
         {
             if (!connection.Config.IsDemo && !_hub.IsRealMoneyUnlocked(connection.Config.Id))
             {
+                var apiSaysVirtual = connection.ApiVerifiedVirtual == true;
                 UnlockableAccounts.Add(new LockedRealAccountBanner(
                     connection.Config.Id,
                     connection.DisplayName,
                     connection.ApiVerifiedVirtual is false
                         ? "verified REAL by the API"
-                        : connection.ApiVerifiedVirtual is true
+                        : apiSaysVirtual
                             ? "API says virtual (demo funds) — fix the account flag"
-                            : "type unverified (fails closed until connected)"));
+                            : "type unverified (fails closed until connected)",
+                    apiSaysVirtual));
             }
         }
 
@@ -328,6 +330,27 @@ public sealed partial class GrowthViewModel : ObservableObject
     /// panel — plus the Brain/Trades tabs' shared manual unlock — after the
     /// confirmation phrase was typed exactly. A wrong phrase unlocks
     /// nothing.</summary>
+    /// <summary>One-click fix for the one mismatch the app can repair: the
+    /// API verified the account as virtual while the config claims real.
+    /// The hub re-labels, persists, and journals; the panel refreshes so the
+    /// fixed account drops out of the unlock list (it is a demo account
+    /// now — the gate passes it through without any unlock).</summary>
+    [RelayCommand]
+    private void FixAccountFlag(Guid accountId)
+    {
+        var connection = _hub.Accounts.FirstOrDefault(a => a.Config.Id == accountId);
+        if (!_hub.FixAccountFlagToDemo(accountId))
+        {
+            StatusMessage = "Could not fix the account flag — it must be API-verified as " +
+                            "virtual (demo funds) and currently claim real.";
+            return;
+        }
+
+        StatusMessage = $"{(connection?.DisplayName ?? "Account")} re-labelled to demo — " +
+                        "the mismatch refusal is cleared.";
+        ShowUnlockPanel(); // refresh in place: the fixed account drops out
+    }
+
     [RelayCommand]
     private void ConfirmUnlock()
     {
@@ -729,8 +752,10 @@ public sealed record GaveUpBanner(Guid AccountId, string AccountName);
 
 /// <summary>One banner per API-verified real-money account whose session
 /// unlock is not armed — the visible reminder that app restarts re-lock
-/// real trading until the phrase is typed again.</summary>
-public sealed record LockedRealAccountBanner(Guid AccountId, string AccountName, string VerificationText);
+/// real trading until the phrase is typed again. CanFixFlag marks panel
+/// rows where the API has verified the account as VIRTUAL while the config
+/// claims real — the one mismatch the app can fix with one click.</summary>
+public sealed record LockedRealAccountBanner(Guid AccountId, string AccountName, string VerificationText, bool CanFixFlag = false);
 
 /// <summary>One banner per account whose session unlock is armed but past
 /// the staleness threshold — the in-app mirror of the hub's out-of-band

@@ -642,9 +642,15 @@
                             <ItemsControl ItemsSource="{Binding GrowthVm.UnlockableAccounts}" Margin="0,0,0,8">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <TextBlock TextWrapping="Wrap" Margin="0,1">
-                                            <Run Text="• " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" — " /><Run Text="{Binding VerificationText, Mode=OneWay}" FontStyle="Italic" Foreground="{StaticResource TextSecondaryBrush}" />
-                                        </TextBlock>
+                                        <StackPanel Orientation="Horizontal" Margin="0,1">
+                                            <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
+                                                <Run Text="• " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" — " /><Run Text="{Binding VerificationText, Mode=OneWay}" FontStyle="Italic" Foreground="{StaticResource TextSecondaryBrush}" />
+                                            </TextBlock>
+                                            <Button Content="✓ Fix flag → demo" Margin="10,0,0,0" Padding="10,2" FontSize="11"
+                                                    Visibility="{Binding CanFixFlag, Converter={StaticResource BoolToVis}}"
+                                                    Command="{Binding DataContext.GrowthVm.FixAccountFlagCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding AccountId}" />
+                                        </StackPanel>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
