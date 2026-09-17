@@ -158,4 +158,148 @@ public class MetricsDigestServiceTests : IDisposable
 
         Assert.Equal(0, Count);
     }
+
+    // ── Safety-audit digest leg ──────────────────────────────────────────
+
+    private const string AuditMarkdown = """
+        # Real-money safety rails — coverage audit
+
+        intro text
+
+        ## The rails
+
+        | Rail | Where |
+        |---|---|
+        | Kill switch | Dashboard latch |
+
+        ## Path 1 — Growth engines
+
+        table rows
+        """;
+
+    private MetricsDigestService NewAuditService(string markdown, string statePath) =>
+        new(new MetricsCollector(), new WebhookService { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero })
+        {
+            SafetyAuditPath = "audit.md", // non-null enables the leg; content comes from the override
+            SafetyAuditContentOverride = () => markdown,
+            SafetyAuditStatePath = statePath,
+        };
+
+    private static string StatePath() =>
+        Path.Combine(Path.GetTempPath(), $"tf_audit_{Guid.NewGuid():N}.state");
+
+    [Fact]
+    public async Task SafetyAudit_ChangedTable_IsPostedOnce()
+    {
+        var state = StatePath();
+        var digest = NewAuditService(AuditMarkdown, state);
+
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 1);
+
+        var body = Assert.Single(Bodies);
+        using var doc = JsonDocument.Parse(body);
+        var embed = doc.RootElement.GetProperty("embeds")[0];
+        Assert.Contains("safety rails changed", embed.GetProperty("description").GetString());
+        Assert.Contains("Kill switch", embed.GetProperty("description").GetString());
+
+        // The state now records the posted hash — a second tick is silent
+        // (no telemetry, unchanged table ⇒ nothing to report).
+        Assert.Equal(SafetyAuditDigest.Hash(
+            SafetyAuditDigest.ExtractCoverageTable(AuditMarkdown)!),
+            File.ReadAllText(state).Trim());
+
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 2, 300);
+        Assert.Equal(1, Count);
+    }
+
+    [Fact]
+    public async Task SafetyAudit_RailEdit_RepostsTheNewTable()
+    {
+        var state = StatePath();
+        var markdown = AuditMarkdown;
+        var digest = NewAuditService(markdown, state);
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 1);
+
+        // A rail change (the release scenario): the edited table posts again.
+        markdown = AuditMarkdown.Replace("| Kill switch | Dashboard latch |",
+            "| Kill switch | Dashboard latch |\n| Real-money gate | RealMoneyGate.Evaluate |", StringComparison.Ordinal);
+        digest.SafetyAuditContentOverride = () => markdown;
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 2);
+
+        Assert.Equal(2, Count);
+        Assert.Contains("RealMoneyGate.Evaluate", Bodies[1]);
+    }
+
+    [Fact]
+    public void SafetyAudit_MissingCoverageSection_IsSurfacedNotSilenced()
+    {
+        var digest = NewAuditService("# broken doc — no rails section", StatePath());
+
+        var section = digest.ComposeDigest();
+
+        Assert.NotNull(section);
+        Assert.Contains("missing its coverage table", section);
+    }
+
+    [Fact]
+    public void SafetyAuditDigest_FindAuditPath_WalksToCheckoutAndExtractsTheRealDoc()
+    {
+        // The real audit doc must yield its table — guards against the doc
+        // structure drifting away from the extractor silently.
+        var auditPath = SafetyAuditDigest.FindAuditPath(AppContext.BaseDirectory);
+        Assert.NotNull(auditPath);
+        Assert.True(File.Exists(auditPath));
+
+        var table = SafetyAuditDigest.ExtractCoverageTable(File.ReadAllText(auditPath));
+        Assert.NotNull(table);
+        Assert.Contains("The rails", table);
+        Assert.Contains("RealMoneyGate", table);
+    }
+
+    // ── Unlock arm-state leg ────────────────────────────────────────────
+
+    [Fact]
+    public void UnlockState_NothingArmed_IsSilent()
+    {
+        var digest = NewService(new MetricsCollector());
+        digest.UnlockStateProvider = () => null; // nothing armed → silence
+
+        Assert.Null(digest.ComposeDigest()); // no telemetry, no arms → no post
+    }
+
+    [Fact]
+    public void UnlockState_Armed_AccountsPost_EvenWithoutTelemetry()
+    {
+        var digest = NewService(new MetricsCollector());
+        digest.UnlockStateProvider = () =>
+            "🔒 real-money unlock ARMED this session: Beta (3m ago), manual surfaces";
+
+        var text = digest.ComposeDigest();
+
+        // This is the restart-visibility guarantee: real trading was
+        // re-enabled and the digest says so even on a quiet machine.
+        Assert.NotNull(text);
+        Assert.Contains("ARMED", text);
+        Assert.Contains("Beta", text);
+        Assert.Contains("manual surfaces", text);
+    }
+
+    [Fact]
+    public void UnlockState_ProviderThrows_IsDroppedWithoutBreakingTheDigest()
+    {
+        var collector = new MetricsCollector();
+        collector.RecordError("Alpha", DateTimeOffset.UtcNow);
+        var digest = NewService(collector);
+        digest.UnlockStateProvider = () => throw new InvalidOperationException("boom");
+
+        var text = digest.ComposeDigest();
+
+        Assert.NotNull(text);
+        Assert.Contains("errors", text);
+        Assert.DoesNotContain("boom", text);
+    }
 }
