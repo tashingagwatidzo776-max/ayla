@@ -47,6 +47,9 @@ Invoke-Step 'workflow-lint' {
 Invoke-Step 'safety-audit' {
     python scripts/check_safety_audit.py
 }
+Invoke-Step 'rail-traits' {
+    python scripts/check_rail_traits.py
+}
 
 # Merge preview: only meaningful when the branch has (or will have) a PR and
 # gh is authenticated. Missing gh or no PR is a skip, not a failure; a BLOCKED
@@ -72,6 +75,13 @@ else {
         1 {
             Write-Host 'FAILED: merge preview (PR cannot merge despite green CI - see findings above)' -ForegroundColor Red
             $failed += 'merge preview'
+        }
+        3 {
+            # Remedial push: the pushed branch IS the open PR's head, so every
+            # finding described the pre-push head. The push itself delivers the
+            # next state; the merge gate re-checks at merge time. (This is why
+            # delivering a rebase no longer needs git push --no-verify.)
+            Write-Host 'DEFERRED: merge preview findings are remedial - this push delivers the PR head; merge gate re-checks at merge time.' -ForegroundColor Yellow
         }
         default { Write-Host "SKIP: merge preview unavailable (exit $code)" -ForegroundColor Yellow }
     }
