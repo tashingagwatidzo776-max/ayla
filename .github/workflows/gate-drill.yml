@@ -58,6 +58,7 @@ jobs:
     #         risk-engine), JournalLoggingSurfaceTests (arm audit entries)
     #   App:  ManualRealMoneyGateTests, RealMoneyUnlockArmTests,
     #         GrowthViewModelRestartTests (panel/banners),
+    #         GrowthViewModelReadinessTests (go-live checks),
     #         MetricsDigestServiceTests (arm leg), ManualMaxStakeTests,
     #         JournalFormatterTests (unlock lines),
     #         RealMoneyGateHubTests + RealMoneyGateMidSessionTests (E2E:

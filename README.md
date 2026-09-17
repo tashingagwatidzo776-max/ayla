@@ -134,6 +134,31 @@ On first launch, a setup wizard will guide you through:
 3. Setting a daily budget
 4. Configuring basic settings
 
+## Going live — from demo to real
+
+Nothing in the app is demo-only by accident: the same gate stands at every
+trade path, and it unlocks per session. The Growth tab's **GO-LIVE READINESS**
+panel shows exactly what is still between you and real trading — five checks,
+green or red with the fix:
+
+| Check | Green means |
+|---|---|
+| Accounts | every real account's config is confirmed REAL by the Deriv API (unverified fails closed) |
+| Unlock | the session unlock is armed (it dies with the process — re-arm each session) |
+| Manual cap | `ManualMaxStake` bounds the Trades/Brain tabs (ships at 10.00; blank disables and shows red) |
+| Governor | `Portfolio DD cap` is set so a bad day is bounded, and the governor isn't latched |
+| Webhook | alerts reach you out-of-band (refusals, arms, staleness) — optional but recommended |
+
+Run demo until a full session looks boring (settlements in the Journal, no
+gate refusals, no reconnect storm), then arm the unlock and go.
+`scripts/soak_report.py` turns a demo session's journal + heartbeats into an
+evidence report with pass/fail verdicts:
+
+```bash
+python scripts/soak_report.py --since 2026-09-17 --out soak-report.md
+# exit 0 = clean (gate silent, telemetry intact, connections stable)
+```
+
 ## Configuration
 
 All settings are stored under `%APPDATA%\tf\data\`:
