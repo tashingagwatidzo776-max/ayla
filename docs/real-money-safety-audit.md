@@ -118,6 +118,9 @@ rehearsal files a `ci-gate-drill` drift alert; a green one records health.
 PRs additionally get the safety-audit coverage-table diff posted as a comment
 (`safety-audit-diff` job), so rail changes are reviewed before merge.
 
+The classes the drill selects are listed in
+[Test class coverage](#test-class-coverage) below.
+
 Releases are gated on the drill: every `v*` tag runs it, and the workflow's
 `release-gate` job fails the tag when the rehearsal did not pass on that
 exact commit. The tag workflow's `publish-exe` job then builds the
@@ -126,3 +129,27 @@ self-contained Windows exe (same recipe as the local script) only after
 binary from an unproven gate. The local path enforces the same rule:
 `scripts/publish_exe.ps1` refuses to publish from a release tag until a green
 gate-drill run exists for it, so neither route ships from an unproven gate.
+
+## Test class coverage
+
+The drill selects the rail's own tests by `[Trait("Category", "RealMoney")]`
+(PR #61), so every test class that exercises gate state must carry the trait.
+`scripts/check_rail_traits.py` (workflow-lint job) fails when a gate-touching
+class ships without it, and keeps this table honest in both directions:
+classes listed here must exist on disk, and traited classes must be listed
+here.
+
+| Test class | What it exercises |
+|---|---|
+| `RealMoneyGateTests` (Tf.Core) | The gate's decision matrix: demo passthrough; locked, unverified, and config-mismatch refusals; fail-closed on unknown verification. |
+| `RiskEngineRealMoneyTests` (Tf.Core) | The risk engine rejecting a decision when the gate refuses. |
+| `AccountBalanceIsVirtualTests` (Tf.Core) | Deriv's `is_virtual` verification feeding the gate. |
+| `JournalLoggingSurfaceTests` (Tf.Core) | The journal surface the gate writes through, including `REAL_MONEY_UNLOCK_ARMED` entries. |
+| `ManualRealMoneyGateTests` (Tf.App) | The manual-surface unlock latch and its refusal matrix (Trades/Brain paths). |
+| `RealMoneyUnlockArmTests` (Tf.App) | Unlock-panel arming: journal arm entries, activity logging, staleness. |
+| `GrowthViewModelRestartTests` (Tf.App) | The Growth tab's unlock panel arming every listed account at once. |
+| `ManualMaxStakeTests` (Tf.App) | The manual stake cap on the Trades tab path. |
+| `MetricsDigestServiceTests` (Tf.App) | The digest's arm-state leg and rail table. |
+| `RealMoneyGateHubTests` (Tf.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
+| `RealMoneyGateMidSessionTests` (Tf.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
+| `JournalFormatterTests` (Tf.App) | The Journal tab's dedicated unlock-arm/stale formatting and category filter. |

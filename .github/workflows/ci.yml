@@ -492,6 +492,8 @@ jobs:
     # trade path appears without its audit section.
     - name: Check safety-audit coverage of BuyAsync call sites
       run: python3 scripts/check_safety_audit.py
+    - name: Check rail-test trait coverage (gate drill selects by trait)
+      run: python3 scripts/check_rail_traits.py
 
   # On PRs: diff the safety-audit coverage table against main so rail
   # changes are visible in-thread before merge — the same update-in-place
