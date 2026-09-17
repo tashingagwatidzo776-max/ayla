@@ -203,9 +203,21 @@ git config core.hooksPath scripts/git-hooks
 The hook file lives in the repo, but Git does not auto-update already-enabled
 clones: after pulling a commit that changes `scripts/git-hooks/pre-push`, an
 enabled clone keeps running the **old** copy until you re-run the
-`git config core.hooksPath scripts/git-hooks` command above. Bypass for a
-deliberate, exceptional push: `git push --no-verify`. Faster iteration on
-non-test changes: `TF_CI_LOCAL_SKIP_BUILD=1` (or
+`git config core.hooksPath scripts/git-hooks` command above.
+
+A push that delivers an **open PR's head branch** (a rebase, a fix, any head
+update) is *remedial*: every merge-preview finding describes the pre-push
+head, so findings are reported and **deferred** (exit 3) instead of blocking
+the push — CI re-runs on the pushed head and the merge gate re-checks at
+merge time. Before this, delivering a rebase to the strict, review-protected
+main deadlocked: the hook blocked the one push that fixed the block, and
+only `--no-verify` could land it (PR #60's case; `check_mergeability.py`
+exits 3, `ci-local.ps1` maps it to DEFERRED). Hard blocks survive where the
+push cannot be the remedy: merge conflicts (DIRTY), pre-PR pushes, and all
+non-merge-preview checks.
+
+Bypass for a deliberate, exceptional push: `git push --no-verify`. Faster
+iteration on non-test changes: `TF_CI_LOCAL_SKIP_BUILD=1` (or
 `git config hooks.ciLocalSkipBuild true`) skips the build step.
 
 ## History
