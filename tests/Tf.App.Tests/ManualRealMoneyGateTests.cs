@@ -141,11 +141,12 @@ public class ManualRealMoneyGateTests : IDisposable
     }
 
     [Fact]
-    public void BrainTab_GateRefusal_BlocksManualCycle()
+    public async Task BrainTab_GateRefusal_BlocksManualCycle()
     {
         // A BrainViewModel with a gate source that refuses (locked real
         // account): RunCycle must surface the refusal and never report a
-        // placed trade.
+        // placed trade. The command is async - it must be awaited, or the
+        // assertions race the status update (lost once in CI).
         ManualRealMoneyGate.Reset();
         var client = new DerivClient();
         var hub = new MultiAccountHub(new EmptyVault(), new TradeStore(_dir),
@@ -160,7 +161,7 @@ public class ManualRealMoneyGateTests : IDisposable
             () => Array.Empty<string>(),
             realMoneyDecision: () => ManualRealMoneyGate.Evaluate(false, apiVerifiedVirtual: false));
 
-        vm.RunCycleCommand.Execute(null);
+        await vm.RunCycleCommand.ExecuteAsync(null);
         Assert.Contains("REFUSED", vm.StatusText);
         Assert.Contains("locked", vm.StatusText, StringComparison.OrdinalIgnoreCase);
 
