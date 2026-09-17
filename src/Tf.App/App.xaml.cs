@@ -67,6 +67,9 @@ public partial class App : System.Windows.Application
         services.AddSingleton(_ => new ApiAuditLog(SettingsService.DataDir));
         services.AddSingleton<NotificationService>();
         services.AddSingleton<WebhookService>();
+        // One process-wide manual-surface gate: Trades/Brain evaluate it, the
+        // Growth tab's unlock panel arms it, shutdown resets it.
+        services.AddSingleton<ManualRealMoneyGate>();
         services.AddSingleton(_ => new TradeJournal(Path.Combine(SettingsService.DataDir, "journal")));
         services.AddSingleton(_ => new PerformanceTracker(Path.Combine(SettingsService.DataDir, "analytics")));
         // Keeps the growth-bankroll CSV (the trend page's money axis) fresh on
@@ -94,7 +97,8 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<TickHistoryCache>(),
                 sp.GetRequiredService<HeartbeatLog>(),
                 sp.GetRequiredService<NotificationService>(),
-                sp.GetRequiredService<WebhookService>()));
+                sp.GetRequiredService<WebhookService>(),
+                manualGate: sp.GetRequiredService<ManualRealMoneyGate>()));
 
         services.AddSingleton(sp =>
             new DashboardViewModel(
@@ -122,7 +126,7 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<TradeStore>(),
                 sp.GetRequiredService<Func<AppSettings>>(),
                 sp.GetRequiredService<DashboardViewModel>(),
-                isRealMoneyUnlocked: () => ManualRealMoneyGate.IsUnlocked));
+                isRealMoneyUnlocked: () => sp.GetRequiredService<ManualRealMoneyGate>().IsUnlocked));
         services.AddSingleton(sp =>
             new BrainViewModel(
                 sp.GetRequiredService<DerivClient>(),
@@ -132,7 +136,7 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<Func<IReadOnlyList<Tick>>>(),
                 sp.GetRequiredService<Func<RiskContext>>(),
                 sp.GetRequiredService<Func<IReadOnlyList<string>>>(),
-                realMoneyDecision: () => ManualRealMoneyGate.Evaluate(
+                realMoneyDecision: () => sp.GetRequiredService<ManualRealMoneyGate>().Evaluate(
                     sp.GetRequiredService<Func<AppSettings>>()().IsDemo,
                     sp.GetRequiredService<DerivClient>().LoginId is null
                         ? null : sp.GetRequiredService<DerivClient>().Balance.IsVirtual)));
@@ -143,7 +147,8 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<GrowthPlanStore>(),
                 sp.GetRequiredService<Func<AppSettings>>(),
                 sp.GetRequiredService<DashboardViewModel>(),
-                sp.GetRequiredService<PerformanceTracker>()));
+                sp.GetRequiredService<PerformanceTracker>(),
+                manualGate: sp.GetRequiredService<ManualRealMoneyGate>()));
         services.AddSingleton(sp =>
             (Func<bool>)(() => sp.GetRequiredService<DashboardViewModel>().IsKillSwitchEngaged));
         services.AddSingleton(sp =>

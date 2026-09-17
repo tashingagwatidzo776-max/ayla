@@ -68,11 +68,18 @@ public sealed class MultiAccountHub
 
     private readonly object _runnerLock = new();
 
+    /// <summary>The manual surfaces' shared session gate. Defaults to a
+    /// private instance when not injected: unlock state is scoped to this
+    /// hub (or, via DI, to the one singleton the whole app shares), never
+    /// to the process.</summary>
+    public ManualRealMoneyGate ManualGate => _manualGate;
+    private readonly ManualRealMoneyGate _manualGate;
+
     public MultiAccountHub(IAccountVault vault, TradeStore store, TradeJournal journal,
         PerformanceTracker? tracker = null, TickHistoryCache? tickCache = null,
         HeartbeatLog? heartbeat = null, NotificationService? notifications = null,
         WebhookService? webhook = null, GrowthPlan? hubPlan = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null, ManualRealMoneyGate? manualGate = null)
     {
         _vault = vault;
         _store = store;
@@ -84,6 +91,7 @@ public sealed class MultiAccountHub
         _webhook = webhook;
         _hubPlan = hubPlan ?? GrowthPlan.Default;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _manualGate = manualGate ?? new ManualRealMoneyGate();
 
         foreach (var config in vault.Load())
         {
@@ -701,7 +709,7 @@ public sealed class MultiAccountHub
             armed = _unlockArmedAtUtc.ToDictionary(kv => kv.Key, kv => kv.Value);
         }
 
-        if (armed.Count == 0 && !ManualRealMoneyGate.IsUnlocked)
+        if (armed.Count == 0 && !_manualGate.IsUnlocked)
         {
             return null;
         }
@@ -720,7 +728,7 @@ public sealed class MultiAccountHub
                 : $"{name} ({(now - armedAt).TotalMinutes:0}m ago, no growth trades)");
         }
 
-        if (ManualRealMoneyGate.IsUnlocked)
+        if (_manualGate.IsUnlocked)
         {
             parts.Add("manual surfaces");
         }
