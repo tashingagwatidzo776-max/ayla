@@ -30,7 +30,13 @@ public enum GrowthExitReason
     KillSwitchEngaged,
 
     /// <summary>Too many consecutive failed cycles (broker or LLM errors).</summary>
-    RepeatedFailures
+    RepeatedFailures,
+
+    /// <summary>The real-money gate refused to continue: the account state
+    /// (config flag, API-verified type, session unlock) no longer allows
+    /// trading. The hub must drop the runner without any restart ladder —
+    /// the next start re-evaluates the gate from scratch.</summary>
+    RealMoneyGate
 }
 
 /// <summary>
@@ -44,6 +50,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     private readonly TradeStore _store;
     private readonly Func<AppSettings> _settings;
     private readonly Func<bool> _killSwitch;
+    private readonly Func<bool> _realMoneyUnlocked;
     private readonly TradeJournal _journal;
     private readonly PerformanceTracker? _tracker;
     private readonly NotificationService? _notifications;
@@ -83,6 +90,10 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     /// so tests drive real bankroll/target math without a live session.</summary>
     internal void TestAttachEngine(GrowthSessionEngine engine) => _engine = engine;
 
+    /// <summary>Test seam: builds the per-cycle risk context (including the
+    /// real-money verdict) without a live scheduler.</summary>
+    internal RiskContext TestBuildRiskContext() => BuildRiskContext();
+
     /// <summary>Display state for dashboard composition (safe from any thread;
     /// engine stats are null until the session starts).</summary>
     public GrowthRunnerSnapshot Snapshot => new(
@@ -110,12 +121,16 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         Func<AppSettings> settings, Func<bool> killSwitch, TradeJournal journal,
         PerformanceTracker? tracker = null, NotificationService? notifications = null,
         WebhookService? webhook = null, TimeProvider? timeProvider = null,
-        MetricsCollector? metrics = null)
+        MetricsCollector? metrics = null,
+        Func<bool>? realMoneyUnlocked = null)
     {
         Connection = connection;
         _store = store;
         _settings = settings;
         _killSwitch = killSwitch;
+        // The per-cycle real-money gate needs the session unlock state; tests
+        // without a hub default to locked (fail closed).
+        _realMoneyUnlocked = realMoneyUnlocked ?? (() => false);
         _journal = journal;
         _tracker = tracker;
         _notifications = notifications;
@@ -135,6 +150,29 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     {
         if (IsRunning)
         {
+            return Task.CompletedTask;
+        }
+
+        // Structural real-money gate on the runner itself: every start path —
+        // hub-owned (StartGrowthCore already gated, this is defence in depth)
+        // and externally started (ObserveRunner, which bypasses the hub's
+        // start gate entirely) — re-evaluates the gate before anything else.
+        // Fail closed: without an unlock accessor the default is locked.
+        var gate = RealMoneyGate.Evaluate(
+            Connection.Config.IsDemo,
+            Connection.ApiVerifiedVirtual,
+            _realMoneyUnlocked());
+        if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
+        {
+            var explanation = RealMoneyGate.Explain(gate);
+            _journal.LogGrowthState(Connection.Config.Id, "real-money-gate", 0, 0,
+                $"runner start refused ({gate}): {explanation}");
+            LastActivity = $"{DateTime.Now:HH:mm:ss} {explanation}";
+            SessionStateText = "stopped — real-money gate";
+            _webhook?.PostRiskRail("🛑 Real-money gate refused an engine start",
+                $"{Connection.DisplayName}: {explanation}");
+            _notifications?.NotifyRiskRailEngaged("Real-money gate",
+                $"{Connection.DisplayName} — start refused");
             return Task.CompletedTask;
         }
 
@@ -348,7 +386,14 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             DailyNetProfit: net,
             TradesToday: todayGrowth.Length,
             LastTradeAt: last?.SettledAt,
-            LastTradeOutcome: last?.Outcome);
+            LastTradeOutcome: last?.Outcome,
+            // Every cycle re-checks the real-money gate against the live
+            // API-verified account type — the engine must stop trading the
+            // moment the account state no longer allows real trading.
+            RealMoney: RealMoneyGate.Evaluate(
+                Connection.Config.IsDemo,
+                Connection.ApiVerifiedVirtual,
+                _realMoneyUnlocked()));
     }
 
     private void OnCycle(BrainCycleResult result)
@@ -439,6 +484,16 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             // The trade is now in the store — safe for portfolio-level checks.
             Settled?.Invoke(this, tagged);
 
+            // Per-settlement real-money re-check: the account state (config
+            // flag, API-verified type, session unlock) is evaluated against
+            // the gate AFTER every settlement. A runner that started legally
+            // — or whose account was swapped/reconfigured underneath it —
+            // must not place another trade once the gate would refuse.
+            if (EnforceRealMoneyGateAfterSettlement() is { } refusal)
+            {
+                return refusal;
+            }
+
             // Fire notifications for trade settlements.
             _notifications?.NotifyTradeSettled(Connection.DisplayName, trade.IsWin, trade.Profit, trade.Symbol);
             _webhook?.PostTradeSettled(Connection.DisplayName, trade.IsWin, trade.Profit,
@@ -456,6 +511,42 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
         return $"{DateTime.Now:HH:mm:ss} {decision.Direction} stake {decision.Stake:0.##} " +
                $"(conf {decision.Confidence:P0}) · {verdict} · bankroll ${engine?.Bankroll ?? 0:0.##}";
+    }
+
+    /// <summary>Per-settlement real-money re-check. Returns the refusal
+    /// activity line when the gate now refuses (the engine was stopped, the
+    /// hub notified via <see cref="Exited"/>), or null when trading may
+    /// continue. Internal so tests can drive the re-check deterministically
+    /// without waiting for a second real trade cycle.</summary>
+    internal string? EnforceRealMoneyGateAfterSettlement()
+    {
+        var gate = RealMoneyGate.Evaluate(
+            Connection.Config.IsDemo,
+            Connection.ApiVerifiedVirtual,
+            _realMoneyUnlocked());
+        if (gate is RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed)
+        {
+            return null; // trading may continue
+        }
+
+        var explanation = RealMoneyGate.Explain(gate);
+        _journal.LogGrowthState(Connection.Config.Id, "real-money-gate",
+            _engine?.Bankroll ?? 0, _engine?.LossStreak ?? 0,
+            $"settlement re-check refused ({gate}): {explanation}");
+        _webhook?.PostRiskRail("🛑 Real-money gate stopped an engine",
+            $"{Connection.DisplayName}: {explanation}");
+        _notifications?.NotifyRiskRailEngaged("Real-money gate",
+            $"{Connection.DisplayName} — engine stopped");
+        Stop();
+        LastActivity = $"{DateTime.Now:HH:mm:ss} {explanation}";
+        SessionStateText = "stopped — real-money gate";
+        Activity?.Invoke(LastActivity);
+        // Tell the hub the session ended for good (Stop() nulled the
+        // scheduler, so the self-exit path will not fire again): the hub
+        // drops the runner so the next start re-evaluates the gate with a
+        // fresh session instead of returning this stopped one.
+        Exited?.Invoke(this, GrowthExitReason.RealMoneyGate);
+        return LastActivity;
     }
 
     /// <summary>Refreshes observable row fields (may run on a background thread).</summary>

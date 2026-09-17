@@ -141,6 +141,55 @@ public class JournalLoggingSurfaceTests : IDisposable
     }
 
     [Fact]
+    public void LogRealMoneyUnlockArmed_PersistsAccountsScopeAndVerifiedState()
+    {
+        using var journal = new TradeJournal(_dir);
+        var id1 = Guid.NewGuid();
+        var id2 = Guid.NewGuid();
+
+        journal.LogRealMoneyUnlockArmed(new List<(Guid, string, bool)>
+        {
+            (id1, "Alpha", true),
+            (id2, "Beta", false)
+        }, manualSurfaces: true);
+        journal.Dispose();
+
+        var entry = Assert.Single(journal.GetRecent());
+        Assert.Equal("REAL_MONEY_UNLOCK_ARMED", entry.Category);
+        Assert.Equal(id1, entry.AccountId);
+
+        var doc = System.Text.Json.JsonDocument.Parse(entry.Details).RootElement;
+        Assert.Equal(2, doc.GetProperty("AccountCount").GetInt32());
+        Assert.Equal(1, doc.GetProperty("VerifiedReal").GetInt32());
+        Assert.True(doc.GetProperty("ManualSurfaces").GetBoolean());
+        Assert.Contains("Alpha", doc.GetProperty("Accounts").EnumerateArray().First().GetString());
+        Assert.Contains("unlock panel", doc.GetProperty("ArmedBy").GetString());
+    }
+
+    [Fact]
+    public void LogRealMoneyUnlockArmed_ManualOnly_UsesEmptyAccountAndStillPersists()
+    {
+        using var journal = new TradeJournal(_dir);
+
+        journal.LogRealMoneyUnlockArmed(new List<(Guid, string, bool)>(), manualSurfaces: true);
+        journal.Dispose();
+
+        var entry = Assert.Single(journal.GetRecent());
+        Assert.Equal(Guid.Empty, entry.AccountId);
+        Assert.Contains("ManualSurfaces", entry.Details);
+    }
+
+    [Fact]
+    public void LogRealMoneyUnlockArmed_NothingToRecord_WritesNothing()
+    {
+        using var journal = new TradeJournal(_dir);
+
+        journal.LogRealMoneyUnlockArmed(new List<(Guid, string, bool)>(), manualSurfaces: false);
+
+        Assert.Empty(journal.GetRecent()); // nothing became possible — nothing recorded
+    }
+
+    [Fact]
     public void GetStats_EmptyJournal_FallsBackToUtcNow()
     {
         using var journal = new TradeJournal(_dir);

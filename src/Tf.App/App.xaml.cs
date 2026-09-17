@@ -113,8 +113,29 @@ public partial class App : System.Windows.Application
         services.AddSingleton(sp =>
             (Func<IReadOnlyList<string>>)(() =>
                 MarketContextBuilder.LessonsFrom(sp.GetRequiredService<TradeStore>().Trades, 5)));
-        services.AddSingleton<TradesViewModel>();
-        services.AddSingleton<BrainViewModel>();
+        // The manual trading surfaces share one session unlock (typed
+        // confirmation phrase) and evaluate the same real-money gate as the
+        // growth engines — the primary client has no per-account hub gate.
+        services.AddSingleton(sp =>
+            new TradesViewModel(
+                sp.GetRequiredService<DerivClient>(),
+                sp.GetRequiredService<TradeStore>(),
+                sp.GetRequiredService<Func<AppSettings>>(),
+                sp.GetRequiredService<DashboardViewModel>(),
+                isRealMoneyUnlocked: () => ManualRealMoneyGate.IsUnlocked));
+        services.AddSingleton(sp =>
+            new BrainViewModel(
+                sp.GetRequiredService<DerivClient>(),
+                sp.GetRequiredService<TradeStore>(),
+                sp.GetRequiredService<DashboardViewModel>(),
+                sp.GetRequiredService<Func<AppSettings>>(),
+                sp.GetRequiredService<Func<IReadOnlyList<Tick>>>(),
+                sp.GetRequiredService<Func<RiskContext>>(),
+                sp.GetRequiredService<Func<IReadOnlyList<string>>>(),
+                realMoneyDecision: () => ManualRealMoneyGate.Evaluate(
+                    sp.GetRequiredService<Func<AppSettings>>()().IsDemo,
+                    sp.GetRequiredService<DerivClient>().LoginId is null
+                        ? null : sp.GetRequiredService<DerivClient>().Balance.IsVirtual)));
         services.AddSingleton<AccountsViewModel>();
         services.AddSingleton(sp =>
             new GrowthViewModel(
@@ -195,6 +216,19 @@ public partial class App : System.Windows.Application
         var digest = provider.GetRequiredService<MetricsDigestService>();
         digest.Disabled = !settings.MetricsDigestEnabled;
         digest.Interval = TimeSpan.FromHours(Math.Max(1, settings.MetricsDigestIntervalHours));
+        // Safety-audit leg: post the real-money rail coverage table whenever
+        // it changes so monitoring sees rail changes after each release.
+        digest.SafetyAuditPath = SafetyAuditDigest.FindAuditPath(AppContext.BaseDirectory);
+        // Unlock arm-state leg: every digest carries the current session
+        // unlock state, so monitoring sees real trading re-enabled after a
+        // restart (and its absence the rest of the time).
+        var hub = provider.GetRequiredService<MultiAccountHub>();
+        digest.UnlockStateProvider = hub.DescribeUnlockState;
+        // The unlock-staleness alert reads its hours from the settings
+        // editor LIVE — a save re-arms the watches without an app restart
+        // (0 disables the alert). Default 4h when never configured.
+        var settingsFactory = provider.GetRequiredService<Func<AppSettings>>();
+        hub.SetThresholdSource(() => settingsFactory().ArmStalenessHours);
         digest.Start();
 
         // Live telemetry panel on the Performance tab (cycles/latency/errors

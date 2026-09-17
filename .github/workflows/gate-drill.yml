@@ -1,0 +1,180 @@
+name: Real-money gate drill
+
+# The real-money gate is the rail that stands between the app and live
+# funds — a silent regression there is unacceptable, and "the tests exist"
+# is not enough: they only protect when they are actually run and their
+# failure is actually seen. This scheduled drill rehearses the full gate
+# lifecycle against the fake broker (locked start refused → unlock arms →
+# mid-session stop + hub drop, plus the manual-surface and parse fail-closed
+# matrices) every week. A failing rehearsal is filed through the same
+# drift-alert machinery as the nightly (dedicated `ci-gate-drill` label,
+# log-excerpt classification), so a broken gate is triaged like any other
+# drift instead of noticed by accident.
+#
+# The drill ALSO runs on release tags (v*): there, the `release-gate` job
+# below turns a failed rehearsal into a failed workflow that any release
+# pipeline must depend on — the gate lifecycle is re-proven on the exact
+# commit being shipped, not trusted from the last scheduled run.
+
+on:
+  schedule:
+    - cron: '37 2 * * 6' # Saturdays 02:37 UTC — clear of the nightly (03:17), the weekly drills (Wed 05:41) and the watchdog (06:00)
+  push:
+    tags:
+      - 'v*' # every release tag re-rehearses the gate before the release ships
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: 'Rehearse the alert path only (issue open/close cycle, no test run)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write # drift-alert opens/updates the ci-gate-drill issue
+
+jobs:
+  gate-drill:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+
+    # The drill IS the gate test suite: Core's decision/parse matrix plus
+    # the App-level E2E lifecycle (start refused until unlock, unlock arms,
+    # per-settlement re-check stops the engine, hub drops without a restart
+    # ladder, manual surfaces fail closed). All against fake brokers — no
+    # network, no real funds, ever.
+    - name: Rehearse the gate lifecycle — Core decisions and parse matrix
+      run: dotnet test tests/Tf.Core.Tests/Tf.Core.Tests.csproj --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~RealMoneyGate"
+
+    - name: Rehearse the gate lifecycle — hub, mid-session, manual surfaces, arm audit
+      run: dotnet test tests/Tf.App.Tests/Tf.App.Tests.csproj --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~RealMoneyGate|FullyQualifiedName~ManualRealMoneyGate|FullyQualifiedName~RealMoneyUnlock"
+
+    # A failing drill files the drift alert; a green one records health the
+    # same way the nightly's resolve leg does (keyword-safe note, issue left
+    # open for human takedown). Both legs are skipped for alert drills.
+    - name: File the drift alert
+      if: ${{ failure() }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: fail
+        DRILL_LABEL: ci-gate-drill
+        ISSUE_TITLE: 'Real-money gate drill is failing'
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+        GH_RUN_ID: ${{ github.run_id }}
+        NEEDS_JSON: ${{ toJSON(needs) }}
+      run: |
+        export FAILING_JOBS="gate-drill (real-money gate lifecycle)"
+        bash scripts/drift-alert.sh
+
+    - name: Record the drill went green
+      if: ${{ success() }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRIFT_MODE: resolve
+        DRILL_LABEL: ci-gate-drill
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+        DRIFT_RESOLVE_CLOSE: '0' # record health, never auto-close
+      run: bash scripts/drift-alert.sh
+
+  # The hard release stop: runs only on v* tags and fails when the
+  # rehearsal above did not pass on this exact commit. A release pipeline
+  # (or the local publish preflight) must require BOTH jobs green before
+  # binaries are built and shipped — a red tag workflow is a blocked
+  # release, not a warning.
+  release-gate:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: gate-drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Verify the gate lifecycle passed on the release commit
+      shell: bash
+      run: |
+        echo "### 🛡 Real-money gate on release tag \`${GITHUB_REF_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+        if [ "${{ needs.gate-drill.result }}" != "success" ]; then
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "❌ **RELEASE BLOCKED** — the real-money gate lifecycle rehearsal did not pass on this commit. Fix the gate and re-tag." >> "$GITHUB_STEP_SUMMARY"
+          echo "REAL-MONEY GATE DRILL FAILED ON RELEASE TAG ${GITHUB_REF_NAME} — release blocked (gate-drill: ${{ needs.gate-drill.result }})."
+          exit 1
+        fi
+        echo "✅ Gate lifecycle rehearsal passed (locked start → unlock → mid-session stop). Release may proceed." >> "$GITHUB_STEP_SUMMARY"
+
+  # Tag releases ship from CI: builds the self-contained Windows exe (same
+  # recipe as scripts/publish_exe.ps1) but ONLY after release-gate passed —
+  # a tag whose gate drill failed never gets as far as a binary. The artifact
+  # is attached to the run for the humans to download and publish; nothing
+  # here pushes anywhere.
+  publish-exe:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: release-gate
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Publish the self-contained exe
+      run: >
+        dotnet publish src/Tf.App/Tf.App.csproj
+        -c Release
+        -r win-x64
+        -o publish/win-x64
+        --self-contained true
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:EnableCompressionInSingleFile=true
+
+    - name: Upload the release artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Tf-${{ github.ref_name }}-win-x64
+        path: publish/win-x64/Tf.exe
+        if-no-files-found: error
+
+  # On-demand rehearsal of the alert path itself (Actions → Real-money gate
+  # drill → Run workflow → "Alert drill"): exercises the ci-gate-drill issue
+  # open/close cycle without a test run, using a dedicated drill label so
+  # the real alert issue is never touched.
+  alert-drill:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.alert_drill }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Rehearse the gate-drill alert cycle
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DRILL_LABEL: ci-gate-drill-drill
+        ISSUE_TITLE: '[Drill] Real-money gate drill alert rehearsal'
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        COMMIT_SHA: ${{ github.sha }}
+      run: |
+        DRIFT_MODE=fail bash scripts/drift-alert.sh # fail leg: open/update the drill issue
+        DRIFT_MODE=resolve DRIFT_RESOLVE_CLOSE=1 bash scripts/drift-alert.sh # green leg: note + close

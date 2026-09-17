@@ -486,3 +486,100 @@ jobs:
       run: |
         python3 -m pip install --quiet pyyaml
         python3 scripts/lint_workflows.py
+    # Safety-rail coverage gate: every file that can place a Deriv trade
+    # (a .BuyAsync call site) must have a coverage entry — naming its rails
+    # — in docs/real-money-safety-audit.md. Fails the PR the moment a new
+    # trade path appears without its audit section.
+    - name: Check safety-audit coverage of BuyAsync call sites
+      run: python3 scripts/check_safety_audit.py
+
+  # On PRs: diff the safety-audit coverage table against main so rail
+  # changes are visible in-thread before merge — the same update-in-place
+  # marker-comment pattern the coverage report uses. Pushes to main skip it
+  # (nothing to diff against).
+  safety-audit-diff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Compute PR audit hash
+      id: pr
+      run: |
+        table=$(python3 - <<'PY'
+        import sys
+        sys.path.insert(0, 'scripts')
+        from check_safety_audit import DOC
+        text = DOC.read_text(encoding='utf-8')
+        lines = text.split('\n')
+        start = next((i for i, l in enumerate(lines) if l.strip().startswith('## The rails')), None)
+        end = next((i for i, l in enumerate(lines[start+1:], start+1) if l.strip().startswith('## ')), None) if start is not None else None
+        table = '\n'.join(lines[start:end]).strip() if start is not None and end else ''
+        print(table)
+        PY
+        )
+        hash=$(printf '%s' "$table" | sha256sum | cut -c1-16)
+        echo "pr_hash=$hash" >> "$GITHUB_OUTPUT"
+        echo "PR audit hash: $hash"
+    - name: Resolve baseline run on main
+      id: baseline
+      run: |
+        run_id=$(gh run list --repo "${{ github.repository }}" \
+          --workflow CI --branch main --event push --status success --limit 1 \
+          --json databaseId --jq '.[0].databaseId // empty')
+        echo "baseline_run_id=$run_id" >> "$GITHUB_OUTPUT"
+        echo "Baseline CI run on main: ${run_id:-none}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Fetch main's audit table from the baseline commit
+      id: main
+      if: steps.baseline.outputs.baseline_run_id != ''
+      run: |
+        git fetch --no-tags --depth=1 origin main
+        table=$(git show origin/main:docs/real-money-safety-audit.md | python3 - <<'PY'
+        import sys
+        text = sys.stdin.read()
+        lines = text.split('\n')
+        start = next((i for i, l in enumerate(lines) if l.strip().startswith('## The rails')), None)
+        end = next((i for i, l in enumerate(lines[start+1:], start+1) if l.strip().startswith('## ')), None) if start is not None else None
+        table = '\n'.join(lines[start:end]).strip() if start is not None and end else ''
+        print(table)
+        PY
+        )
+        hash=$(printf '%s' "$table" | sha256sum | cut -c1-16)
+        echo "main_hash=$hash" >> "$GITHUB_OUTPUT"
+        echo "main audit hash: $hash"
+    - name: Post the rail diff comment on the PR
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        pr_hash="${{ steps.pr.outputs.pr_hash }}"
+        main_hash="${{ steps.main.outputs.main_hash || 'unknown' }}"
+        run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        {
+          echo "## 🛡 Safety-rail audit"
+          echo ""
+          if [ "$main_hash" = "$pr_hash" ]; then
+            echo "Coverage table unchanged vs main (\`$pr_hash\`) — no rail changes in this PR."
+            icon="✅"
+          elif [ "$main_hash" = "unknown" ]; then
+            echo "No baseline on main yet — PR table hash \`$pr_hash\`."
+            icon="ℹ️"
+          else
+            echo "**Rail coverage changed** vs main: \`$main_hash\` → \`$pr_hash\`. Review the audit tables: [docs/real-money-safety-audit.md](https://github.com/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha }}/docs/real-money-safety-audit.md)"
+            icon="⚠"
+          fi
+          echo ""
+          echo "The real-money gate rails (kill switch, governor, real-money gate, risk engine) cover every \\\(BuyAsync\\) call site; the audit hash changes whenever that coverage changes."
+          echo "<!-- safety-audit-diff -->"
+        } > comment.md
+        cat comment.md
+        number="${{ github.event.pull_request.number }}"
+        repo="${{ github.repository }}"
+        comment_id=$(gh api "repos/$repo/issues/$number/comments" \
+          --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("safety-audit-diff")) | .id' | tail -1)
+        if [ -n "$comment_id" ]; then
+          gh api -X PATCH "repos/$repo/issues/comments/$comment_id" -F body=@comment.md > /dev/null
+          echo "Updated safety-audit comment $comment_id"
+        else
+          gh pr comment "$number" --repo "$repo" --body-file comment.md
+        fi

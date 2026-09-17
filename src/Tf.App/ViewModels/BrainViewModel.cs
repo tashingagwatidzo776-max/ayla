@@ -24,6 +24,7 @@ public sealed partial class BrainViewModel : ObservableObject
     private readonly Func<RiskContext> _riskContext;
     private readonly Func<IReadOnlyList<string>> _recentLessons;
     private readonly MetricsCollector _metrics;
+    private readonly Func<RealMoneyDecision>? _realMoneyDecision;
     private AutonomousScheduler? _scheduler;
 
     [ObservableProperty]
@@ -57,9 +58,15 @@ public sealed partial class BrainViewModel : ObservableObject
     public BrainViewModel(DerivClient client, TradeStore store,
         DashboardViewModel dashboard, Func<AppSettings> settings,
         Func<IReadOnlyList<Tick>> tickWindow, Func<RiskContext> riskContext,
-        Func<IReadOnlyList<string>> recentLessons, MetricsCollector? metrics = null)
+        Func<IReadOnlyList<string>> recentLessons, MetricsCollector? metrics = null,
+        Func<RealMoneyDecision>? realMoneyDecision = null)
     {
         _metrics = metrics ?? new MetricsCollector();
+        // Optional real-money gate source: when supplied, the manual Brain
+        // tab evaluates it before every cycle and autonomy start. Tests and
+        // demo-only constructions omit it (the risk context then carries the
+        // default passthrough).
+        _realMoneyDecision = realMoneyDecision;
         _client = client;
         _store = store;
         _dashboard = dashboard;
@@ -114,6 +121,16 @@ public sealed partial class BrainViewModel : ObservableObject
         if (window.Count == 0)
         {
             StatusText = "No market data yet — connect on the Dashboard first.";
+            return;
+        }
+
+        // Manual cycles obey the same real-money gate as the growth engines:
+        // a refusal here means no LLM decision may act on this account.
+        var gate = CurrentRealMoneyDecision();
+        if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
+        {
+            StatusText = RealMoneyGate.Explain(gate);
+            LastDecisionText = StatusText;
             return;
         }
 
@@ -193,6 +210,16 @@ public sealed partial class BrainViewModel : ObservableObject
             return;
         }
 
+        // Starting autonomy is a deliberate act: evaluate the real-money
+        // gate up front so a locked/unverified account never enters the loop.
+        var gate = CurrentRealMoneyDecision();
+        if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
+        {
+            StatusText = RealMoneyGate.Explain(gate);
+            LastDecisionText = StatusText;
+            return;
+        }
+
         _scheduler = new AutonomousScheduler(
             _brain, _settings, _tickWindow, _riskContext, _recentLessons, OnScheduledCycle,
             onCycleLatencyMs: ms => _metrics.RecordLatency(ms, "LlmTab", DateTimeOffset.UtcNow),
@@ -265,6 +292,13 @@ public sealed partial class BrainViewModel : ObservableObject
             DailyNetProfit: today.NetProfit,
             TradesToday: today.Count,
             LastTradeAt: last?.SettledAt,
-            LastTradeOutcome: last?.Outcome);
+            LastTradeOutcome: last?.Outcome,
+            RealMoney: _realMoneyDecision?.Invoke() ?? RealMoneyDecision.DemoPassthrough);
     }
+
+    /// <summary>Evaluates the real-money gate for this tab (null source →
+    /// passthrough, the demo default). Used by the cycle pre-check and the
+    /// autonomy start guard.</summary>
+    private RealMoneyDecision CurrentRealMoneyDecision() =>
+        _realMoneyDecision?.Invoke() ?? RealMoneyDecision.DemoPassthrough;
 }

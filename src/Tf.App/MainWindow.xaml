@@ -211,8 +211,9 @@
                             <RowDefinition Height="Auto" />  <!-- 26 Monitoring title -->
                             <RowDefinition Height="Auto" />  <!-- 27 Digest toggle -->
                             <RowDefinition Height="Auto" />  <!-- 28 Digest interval -->
-                            <RowDefinition Height="Auto" />  <!-- 29 Actions -->
-                            <RowDefinition Height="Auto" />  <!-- 30 Status -->
+                            <RowDefinition Height="Auto" />  <!-- 29 Unlock staleness -->
+                            <RowDefinition Height="Auto" />  <!-- 30 Actions -->
+                            <RowDefinition Height="Auto" />  <!-- 31 Status -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -238,8 +239,12 @@
                         <TextBox Grid.Row="7" Grid.Column="1" Margin="0,0,0,10"
                                  Text="{Binding SettingsVm.DurationMinutes, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="8" Grid.Column="0" Text="Stake" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="8" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.Stake, UpdateSourceTrigger=PropertyChanged}" />
+                        <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <TextBox Width="120" Text="{Binding SettingsVm.Stake, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                            <TextBlock Text="Manual max stake" Style="{StaticResource FieldLabel}" Margin="16,0,8,0" VerticalAlignment="Center"
+                                       ToolTip="Hard ceiling on the Trades tab's manual stake and the Brain tab's cycles (blank/0 = no extra limit beyond the growth risk engine's own MaxStake). Keeps a mistyped stake from reaching a real account." />
+                            <TextBox Width="120" Text="{Binding SettingsVm.ManualMaxStake, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" VerticalAlignment="Center" />
+                        </StackPanel>
 
                         <TextBlock Grid.Row="9" Grid.ColumnSpan="2" Text="AUTONOMY" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
                         <TextBlock Grid.Row="10" Grid.Column="0" Text="Autonomy" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
@@ -311,11 +316,16 @@
                                  Text="{Binding SettingsVm.MetricsDigestIntervalHours, UpdateSourceTrigger=PropertyChanged, TargetNullValue=6}"
                                  ToolTip="Hours between cycle-telemetry digest posts (1–168, default 6). Takes effect on the next app start." />
 
-                        <StackPanel Grid.Row="29" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
+                        <TextBlock Grid.Row="29" Grid.Column="0" Text="Unlock staleness (h)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="29" Grid.Column="1" Margin="0,0,0,10" Width="120" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.ArmStalenessHours, UpdateSourceTrigger=PropertyChanged, TargetNullValue=4}"
+                                 ToolTip="Toast + webhook when a real-money session unlock has been armed this long (1–72, default 4). Live on save; 0 disables the alert." />
+
+                        <StackPanel Grid.Row="30" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
                             <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
                         </StackPanel>
-                        <TextBlock Grid.Row="30" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                        <TextBlock Grid.Row="31" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
                                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                     </Grid>
@@ -331,6 +341,9 @@
                         <RowDefinition Height="Auto" />   <!-- growth plan card -->
                         <RowDefinition Height="Auto" />   <!-- growth grid header -->
                         <RowDefinition Height="190" />    <!-- growth grid -->
+                        <RowDefinition Height="Auto" />   <!-- locked real-money banners -->
+                        <RowDefinition Height="Auto" />   <!-- in-tab unlock panel -->
+                        <RowDefinition Height="Auto" />   <!-- stale-unlock banners -->
                         <RowDefinition Height="Auto" />   <!-- gave-up banners -->
                         <RowDefinition Height="Auto" />   <!-- governor latch banner -->
                         <RowDefinition Height="Auto" />   <!-- governor warning banner -->
@@ -551,6 +564,7 @@
                             <DataGridTextColumn Header="Login" Width="110" Binding="{Binding Connection.LoginIdText}" />
                             <DataGridTextColumn Header="Status" Width="120" Binding="{Binding Connection.StatusText}" />
                             <DataGridTextColumn Header="Balance" Width="100" Binding="{Binding Connection.BalanceText}" />
+                            <DataGridTextColumn Header="Type" Width="90" Binding="{Binding Connection.VerifiedText}" />
                             <DataGridTextColumn Header="Budget" Width="70" Binding="{Binding BudgetText}" />
                             <DataGridTextColumn Header="Bankroll" Width="110" Binding="{Binding Runner.BankrollText}" />
                             <DataGridTemplateColumn Header="P&amp;L today" Width="110">
@@ -589,8 +603,86 @@
                         </DataGrid.Columns>
                     </DataGrid>
 
+                    <!-- ── Locked real-money banners (session unlock not armed) ── -->
+                    <ItemsControl Grid.Row="6" ItemsSource="{Binding GrowthVm.LockedRealAccountBanners}" Margin="0,0,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
+                                        CornerRadius="4" Padding="10,6" Margin="0,0,0,6">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
+                                            <Run Text="🔒 " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" is a real-money account, " /><Run Text="{Binding VerificationText, Mode=OneWay}" FontStyle="Italic" /><Run Text=" — real trading stays locked until the session unlock is armed (app restarts always re-lock)." />
+                                        </TextBlock>
+                                        <Button Content="🔓 Unlock…" Margin="10,0,0,0" Padding="12,3"
+                                                Command="{Binding GrowthVm.ShowUnlockPanelCommand}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- ── In-tab real-money unlock panel ────────── -->
+                    <Border Grid.Row="7" Margin="0,0,0,4" CornerRadius="4" Padding="12,10"
+                            Background="#22FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Setter Property="Grid.Row" Value="7" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding GrowthVm.IsUnlockPanelVisible}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <TextBlock Text="⚠ UNLOCK REAL-MONEY TRADING — THIS SESSION" FontWeight="Bold" Margin="0,0,0,4" />
+                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                       Text="App restarts always re-lock real accounts. The phrase below arms the session unlock for every listed account AND the Brain/Trades tabs' manual surfaces. Nothing trades unless each account is also API-verified as real and not paused/kill-switched." />
+                            <ItemsControl ItemsSource="{Binding GrowthVm.UnlockableAccounts}" Margin="0,0,0,8">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Margin="0,1">
+                                            <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
+                                                <Run Text="• " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" — " /><Run Text="{Binding VerificationText, Mode=OneWay}" FontStyle="Italic" Foreground="{StaticResource TextSecondaryBrush}" />
+                                            </TextBlock>
+                                            <Button Content="✓ Fix flag → demo" Margin="10,0,0,0" Padding="10,2" FontSize="11"
+                                                    Visibility="{Binding CanFixFlag, Converter={StaticResource BoolToVis}}"
+                                                    Command="{Binding DataContext.GrowthVm.FixAccountFlagCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding AccountId}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{Binding GrowthVm.UnlockPanelNotice}" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,6"
+                                       Visibility="{Binding GrowthVm.UnlockPanelNotice, Converter={StaticResource NullToVisibility}}" />
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Type the phrase to unlock: " VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBox Width="220" Text="{Binding GrowthVm.UnlockPhrase, UpdateSourceTrigger=PropertyChanged}" FontFamily="Consolas" />
+                                <Button Content="Arm unlock" Margin="8,0,0,0" Padding="14,3"
+                                        Command="{Binding GrowthVm.ConfirmUnlockCommand}" />
+                                <Button Content="Cancel" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding GrowthVm.CancelUnlockCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ── Stale-unlock banners (armed past the staleness threshold) ── -->
+                    <ItemsControl Grid.Row="8" ItemsSource="{Binding GrowthVm.StaleUnlockBanners}" Margin="0,0,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
+                                        CornerRadius="4" Padding="10,6" Margin="0,0,0,6">
+                                    <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
+                                        <Run Text="⏰ " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text="'s real-money unlock has been armed for " /><Run Text="{Binding ArmedForText, Mode=OneWay}" FontWeight="Bold" /><Run Text=" (threshold " /><Run Text="{Binding ThresholdText, Mode=OneWay}" FontStyle="Italic" /><Run Text=") — real trading is live. Re-arm deliberately or let the session end clear it." />
+                                    </TextBlock>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
                     <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->
-                    <ItemsControl Grid.Row="6" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
+                    <ItemsControl Grid.Row="9" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
@@ -609,7 +701,7 @@
                     </ItemsControl>
 
                     <!-- ── Portfolio governor latch banner ────────── -->
-                    <Border Grid.Row="7" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="10" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -629,7 +721,7 @@
                     </Border>
 
                     <!-- ── Portfolio governor warning banner ──────── -->
-                    <Border Grid.Row="8" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="11" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -649,8 +741,8 @@
                     </Border>
 
                     <!-- ── Activity log ──────────────────────────────── -->
-                    <TextBlock Grid.Row="9" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="10" Style="{StaticResource Card}" Padding="10">
+                    <TextBlock Grid.Row="12" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="13" Style="{StaticResource Card}" Padding="10">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <ItemsControl ItemsSource="{Binding GrowthVm.ActivityLog}">
                                 <ItemsControl.ItemTemplate>
@@ -664,8 +756,8 @@
                     </Border>
 
                     <!-- ── Intraday P&amp;L curve (per account, cumulative) ───── -->
-                    <TextBlock Grid.Row="11" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="12" Style="{StaticResource Card}" Padding="6">
+                    <TextBlock Grid.Row="14" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="15" Style="{StaticResource Card}" Padding="6">
                         <controls:PnlCurveControl x:Name="PnlCurve" />
                     </Border>
                 </Grid>
@@ -703,6 +795,9 @@
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Trades.IsBusy}" Value="True">
                                                     <Setter Property="Content" Value="Placing…" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Trades.IsRealModeBlocked}" Value="True">
+                                                    <Setter Property="Content" Value="🔒 Real account locked" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>

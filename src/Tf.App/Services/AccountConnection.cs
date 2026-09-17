@@ -62,6 +62,20 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     [ObservableProperty]
     private bool isDegraded;
 
+    /// <summary>Deriv's own demo/real verdict for the authorized account:
+    /// null = not verified yet (no authorize/balance response seen),
+    /// true = the API says the account plays with virtual funds, false = the
+    /// API confirmed a real-money account. The real-money gate refuses to
+    /// start engines while this is null or true.</summary>
+    [ObservableProperty]
+    private bool? apiVerifiedVirtual;
+
+    /// <summary>Human-readable form of <see cref="ApiVerifiedVirtual"/> for
+    /// the runners grid — what the Deriv API says this account is, as opposed
+    /// to what the config claims.</summary>
+    [ObservableProperty]
+    private string verifiedText = "unverified";
+
     /// <summary>Human-readable circuit breaker status.</summary>
     [ObservableProperty]
     private string circuitStatus = "";
@@ -195,6 +209,8 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         StatusText = "Not connected";
         IsConnected = false;
         BalanceText = Config.IsDemo ? "demo" : "REAL";
+        ApiVerifiedVirtual = null;
+        VerifiedText = "unverified";
         _consecutiveFailures = 0;
         IsDegraded = false;
         CircuitStatus = "";
@@ -236,6 +252,8 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private void OnBalanceUpdated(AccountBalance balance)
     {
         BalanceText = $"{balance.Balance:0.##} {balance.Currency}";
+        ApiVerifiedVirtual = balance.IsVirtual;
+        VerifiedText = balance.IsVirtual ? "demo (API)" : "REAL (API)";
         if (!string.IsNullOrEmpty(balance.LoginId))
         {
             LoginIdText = balance.LoginId;

@@ -1,5 +1,6 @@
 using System.Windows;
 using Tf.App.Infrastructure;
+using Tf.App.Services;
 using Tf.App.ViewModels;
 
 namespace Tf.App;
@@ -36,6 +37,9 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        // The real-money unlocks are session-scoped by design: arming them
+        // never survives a restart, so a fresh process always starts locked.
+        ManualRealMoneyGate.Reset();
         _trayIcon?.Dispose();
         base.OnClosed(e);
     }

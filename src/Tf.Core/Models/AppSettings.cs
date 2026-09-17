@@ -31,6 +31,14 @@ public sealed class AppSettings
     /// <summary>Stake per contract in account currency (used from milestone 2).</summary>
     public decimal Stake { get; set; } = 1.00m;
 
+    /// <summary>Hard ceiling on the MANUAL trade surfaces (Trades tab stake,
+    /// Brain tab cycles). The growth engines are already bounded by the risk
+    /// engine's MaxStake and the session plan ladder; this closes the last
+    /// unbounded path — a mistyped stake reaching a real account. 0 disables
+    /// the extra limit (the manual paths are still gated by the real-money
+    /// gate and the kill switch).</summary>
+    public decimal ManualMaxStake { get; set; }
+
     /// <summary>Master autonomy switch; when off the brain never places trades.</summary>
     public bool AutonomyEnabled { get; set; }
 
@@ -80,6 +88,12 @@ public sealed class AppSettings
     /// <summary>Hours between cycle-telemetry digest posts (clamped 1–168
     /// by the settings editor; default 6).</summary>
     public int MetricsDigestIntervalHours { get; set; } = 6;
+
+    /// <summary>Toast + webhook when a real-money session unlock has been
+    /// armed this many hours (clamped 0–72 by the settings editor; default
+    /// 4). 0 disables the staleness alert entirely — the arm stays silent
+    /// but every other rail still applies.</summary>
+    public int ArmStalenessHours { get; set; } = 4;
 
     // ── Logging ─────────────────────────────────────────────────
     /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>

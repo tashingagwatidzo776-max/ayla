@@ -15,6 +15,7 @@ public sealed partial class TradesViewModel : ObservableObject
     private readonly Func<AppSettings> _settings;
     private readonly DashboardViewModel _dashboard;
     private readonly Dispatcher _dispatcher;
+    private readonly Func<bool>? _isRealMoneyUnlocked;
 
     public ObservableCollection<Trade> Trades { get; } = new();
 
@@ -36,13 +37,23 @@ public sealed partial class TradesViewModel : ObservableObject
     [ObservableProperty]
     private bool canTrade;
 
+    /// <summary>True when the manual trade button is blocked by the
+    /// real-money gate (a real/unverified account without the session
+    /// unlock) — the button then advertises the lock instead of trading.</summary>
+    public bool IsRealModeBlocked =>
+        !_settings().IsDemo && _isRealMoneyUnlocked?.Invoke() != true;
+
     public TradesViewModel(DerivClient client, TradeStore store,
-        Func<AppSettings> settings, DashboardViewModel dashboard)
+        Func<AppSettings> settings, DashboardViewModel dashboard,
+        Func<bool>? isRealMoneyUnlocked = null)
     {
         _client = client;
         _store = store;
         _settings = settings;
         _dashboard = dashboard;
+        // Session-unlock accessor for the manual trade gate; tests may omit
+        // it (locked ⇒ the gate fails closed on real accounts).
+        _isRealMoneyUnlocked = isRealMoneyUnlocked;
         _dispatcher = Dispatcher.CurrentDispatcher;
 
         _client.StatusChanged += _ => RefreshCanTrade();
@@ -68,16 +79,37 @@ public sealed partial class TradesViewModel : ObservableObject
 
     /// <summary>
     /// Manual end-to-end demo trade: proposal → buy → poll until settlement
-    /// → append to the log. Guarded to demo mode, a connected+authorized
+    /// → append to the log. Guarded to demo mode (or an unlocked, API-verified
+    /// real account via the shared real-money gate), a connected+authorized
     /// session, and the master kill switch.
     /// </summary>
     [RelayCommand]
     private async Task PlaceDemoTradeAsync()
     {
         var settings = _settings();
-        if (!settings.IsDemo)
+
+        // Manual stake ceiling: the typed Stake is otherwise unbounded, and
+        // this is the one trade path that bypasses the risk engine's stake
+        // checks (the brain and growth paths are bounded by MaxStake and the
+        // session plan ladder). A mistyped stake must not reach a real
+        // account — refuse loudly instead of silently clamping.
+        if (settings.ManualMaxStake > 0 && settings.Stake > settings.ManualMaxStake)
         {
-            StatusMessage = "Manual demo trades are only allowed in Demo mode.";
+            StatusMessage = $"Stake {settings.Stake:0.##} {settings.Currency} exceeds the manual max " +
+                $"of {settings.ManualMaxStake:0.##} — lower the stake in Settings (Stake field) to trade.";
+            return;
+        }
+
+        // Real-money gate: a real account needs the session unlock. The
+        // API-verified flag comes from the client's own authorize/balance —
+        // unverified fails closed (never treated as real).
+        var apiVerifiedVirtual = string.IsNullOrEmpty(_client.LoginId)
+            ? (bool?)null : _client.Balance.IsVirtual;
+        var decision = RealMoneyGate.Evaluate(
+            settings.IsDemo, apiVerifiedVirtual, _isRealMoneyUnlocked?.Invoke() ?? false);
+        if (decision is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
+        {
+            StatusMessage = RealMoneyGate.Explain(decision);
             return;
         }
 

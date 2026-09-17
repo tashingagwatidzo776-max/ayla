@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -47,6 +48,27 @@ public sealed class MetricsDigestService : IDisposable
     /// <summary>repository/repo for the dispatch leg, e.g. "owner/ayla".</summary>
     public string? GitHubRepo { get; set; }
 
+    /// <summary>Path of docs/real-money-safety-audit.md, or null when the app
+    /// runs outside a checkout (the audit leg silently no-ops then).</summary>
+    public string? SafetyAuditPath { get; set; }
+
+    /// <summary>Where the last-posted audit hash is persisted. Defaults to a
+    /// file next to the app's settings data; tests point it at a temp path.</summary>
+    public string SafetyAuditStatePath { get; set; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "tf", "notifications", "safety-audit-digest.state");
+
+    /// <summary>Override for tests (and exotic installs): the audit markdown.
+    /// Null = load from <see cref="SafetyAuditPath"/>.</summary>.
+    public Func<string?>? SafetyAuditContentOverride { get; set; }
+
+    /// <summary>Current real-money session unlock state (which accounts are
+    /// armed, since when, and whether the manual surfaces share the unlock).
+    /// Every posted digest carries it so monitoring can see real trading was
+    /// re-enabled after an app restart — and, just as important, the silence
+    /// after a restart means nothing is armed. Null disables the leg.</summary>
+    public Func<string?>? UnlockStateProvider { get; set; }
+
     private readonly MetricsCollector _metrics;
     private readonly WebhookService _webhook;
     private readonly HttpClient _http = new();
@@ -74,12 +96,14 @@ public sealed class MetricsDigestService : IDisposable
 
     /// <summary>Composes the digest body from the current telemetry snapshot.
     /// Returns null when there is nothing worth posting — no samples at all,
-    /// or no errors and no latency observations.</summary>
+    /// no errors, no latency observations, and no safety-audit change.</summary>
     public string? ComposeDigest()
     {
         var latency = _metrics.Latency;
         var errors = _metrics.Errors;
-        if (latency.Count == 0 && errors.Count == 0)
+        var audit = ComposeSafetyAuditSection();
+        var unlock = ComposeUnlockSection();
+        if (latency.Count == 0 && errors.Count == 0 && audit is null && unlock is null)
         {
             return null;
         }
@@ -105,11 +129,82 @@ public sealed class MetricsDigestService : IDisposable
             parts.Add($"errors {errors.Count}{suffix}");
         }
 
+        if (audit is not null)
+        {
+            parts.Add(audit);
+        }
+
+        if (unlock is not null)
+        {
+            parts.Add(unlock);
+        }
+
         return string.Join(" | ", parts);
     }
 
+    /// <summary>The real-money unlock arm-state section, or null when no
+    /// provider is wired or nothing is armed. Read-only; re-computed every
+    /// tick so the arm age stays current.</summary>
+    private string? ComposeUnlockSection()
+    {
+        if (UnlockStateProvider is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return UnlockStateProvider();
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"unlock-state digest read failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>The safety-audit section for this tick, or null when the
+    /// audit is unchanged/missing. Composing has a side effect only in
+    /// TryPostDigest, which persists the hash after a successful post —
+    /// this method itself is read-only.</summary>
+    private string? ComposeSafetyAuditSection()
+    {
+        if (SafetyAuditPath is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var markdown = SafetyAuditContentOverride is not null
+                ? SafetyAuditContentOverride()
+                : File.ReadAllText(SafetyAuditPath);
+            var table = SafetyAuditDigest.ExtractCoverageTable(markdown);
+            if (table is null)
+            {
+                // A structurally broken audit must not post a misleading
+                // "rails unchanged" digest — surface it instead.
+                return "⚠ real-money-safety-audit.md is missing its coverage table — " +
+                       "check the audit doc structure";
+            }
+
+            var hash = SafetyAuditDigest.Hash(table);
+            var last = SafetyAuditDigest.ReadStateHash(SafetyAuditStatePath);
+            return last == hash
+                ? null // unchanged since the last post — silence is healthy
+                : $"🛡 safety rails changed (audit hash {last ?? "first"} → {hash}):\n{table}";
+        }
+        catch (IOException ex)
+        {
+            _log?.Invoke($"safety-audit digest read failed: {ex.Message}");
+            return null;
+        }
+    }
+
     /// <summary>One posting tick — webhook first, dispatch best-effort.
-    /// Never throws.</summary>
+    /// Never throws. The safety-audit leg posts (and records its hash) only
+    /// when the coverage table actually changed; a throwing webhook never
+    /// breaks the timer.</summary>
     public void TryPostDigest()
     {
         try
@@ -121,6 +216,29 @@ public sealed class MetricsDigestService : IDisposable
             }
 
             _webhook.PostStatus("📊 Cycle metrics digest", digest);
+
+            // Persist the audit hash only after the post went out (or was
+            // accepted fire-and-forget), so a failed webhook retries the
+            // table on the next tick rather than swallowing the change.
+            if (SafetyAuditPath is not null)
+            {
+                try
+                {
+                    var markdown = SafetyAuditContentOverride is not null
+                        ? SafetyAuditContentOverride()
+                        : File.ReadAllText(SafetyAuditPath);
+                    var table = SafetyAuditDigest.ExtractCoverageTable(markdown);
+                    if (table is not null)
+                    {
+                        SafetyAuditDigest.WriteStateHash(
+                            SafetyAuditStatePath, SafetyAuditDigest.Hash(table));
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _log?.Invoke($"safety-audit state write failed: {ex.Message}");
+                }
+            }
 
             if (!string.IsNullOrEmpty(GitHubToken) && !string.IsNullOrEmpty(GitHubRepo))
             {

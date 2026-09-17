@@ -24,6 +24,36 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw "dotnet CLI not found on PATH. Install the .NET 8 SDK first."
 }
 
+# Release preflight: the real-money gate is the rail between this build and
+# live funds, so a shipped binary must come from a commit whose gate drill
+# passed. Release tags get that proof from the `release-gate` job in
+# gate-drill.yml (CI runs the drill on every v* tag); this script simply
+# refuses to publish from a tag whose drill failed or never ran. Non-release
+# builds (no tag, local iteration) skip the check entirely.
+$tag = git describe --exact-match --tags 2>$null
+$isReleaseTag = $false
+$drillOk = $false
+if ($LASTEXITCODE -eq 0 -and $tag -match '^v') {
+    $isReleaseTag = $true
+    $run = gh run list --workflow gate-drill.yml --branch $tag --limit 5 --json databaseId,conclusion | ConvertFrom-Json
+    $drillOk = @($run | Where-Object { $_.conclusion -eq 'success' }).Count -gt 0
+    if (-not $drillOk) {
+        $msg = @(
+            "",
+            "  RELEASE BLOCKED: no passing real-money gate drill for tag '$tag'.",
+            "",
+            "  Re-run the drill:  gh workflow run gate-drill.yml --ref $tag",
+            "  Watch it:          gh run watch (then re-run this script)",
+            "",
+            "  A release may not ship until the gate lifecycle rehearsal (locked",
+            "  start, unlock, mid-session stop) passes on the tagged commit.",
+            ""
+        ) -join [Environment]::NewLine
+        throw $msg
+    }
+    Write-Host "Gate drill verified green for $tag - release may proceed." -ForegroundColor Green
+}
+
 $args = @(
     "publish", $proj,
     "-c", $Configuration,
@@ -46,10 +76,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed (exit $LASTEXITCODE)"
 }
 
+if ($isReleaseTag) {
+    Write-Host "Shipped from release tag '$tag' - real-money gate drill was green on this commit." -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "Published: $out" -ForegroundColor Green
 if (-not $FrameworkDependent) {
-    Write-Host "Exe: $(Join-Path $out 'Tf.exe')  (self-contained — run on any 64-bit Windows PC)" -ForegroundColor Green
+    Write-Host "Exe: $(Join-Path $out 'Tf.exe')  (self-contained - run on any 64-bit Windows PC)" -ForegroundColor Green
 } else {
     Write-Host "Exe: $(Join-Path $out 'Tf.exe')  (needs the .NET 8 Desktop Runtime installed)" -ForegroundColor Green
 }

@@ -85,6 +85,22 @@ public class MonitoringSettingsTests
     }
 
     [Fact]
+    public void ArmStalenessHours_RoundTripsAndClamps()
+    {
+        var vm = NewSettingsVm();
+
+        vm.Load(new AppSettings { ArmStalenessHours = 8 });
+        Assert.Equal(8, vm.ArmStalenessHours);
+        Assert.Equal(8, vm.BuildSettings().ArmStalenessHours);
+
+        vm.ArmStalenessHours = 0; // explicit disable survives the build
+        Assert.Equal(0, vm.BuildSettings().ArmStalenessHours);
+
+        vm.ArmStalenessHours = 999; // clamped into 0–72 on build
+        Assert.Equal(72, vm.BuildSettings().ArmStalenessHours);
+    }
+
+    [Fact]
     public async Task TestWebhookCommand_EmptyUrl_ShowsFailureInStatus()
     {
         var vm = NewSettingsVm();

@@ -23,3 +23,6 @@ Desktop.ini
 # Test runners and coverage collection
 TestResults/
 coverage/
+
+# Session logs
+.wraplog.txt
