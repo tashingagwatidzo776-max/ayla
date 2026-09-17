@@ -130,7 +130,9 @@ Rules that keep rollback boring:
   same commit after a re-run; the drill is what must be green, and re-running
   a *skipped/infra-failed* leg is legitimate. Re-running a *failing* drill is
   not (flake fixes go through `main` first — this exact situation happened
-  between `v0.0.1-rc1` and the fix in PR #53).
+  between `v0.0.1-rc1` and the fix in PR #53). The same applies when a tag's
+  *first* drill run fails: delete the tag, fix via `main`, re-tag the fixed
+  commit — never re-run the drill on a red tag to squeeze a binary out.
 
 Tags are not covered by branch protection — anyone with write access can push
 one. The gate, not permissions, is the release invariant: a bad tag still
@@ -211,4 +213,4 @@ non-test changes: `TF_CI_LOCAL_SKIP_BUILD=1` (or
 | Tag | What happened |
 |---|---|
 | `v0.0.1-rc1` | Dry run: first full walk of drill → release-gate → publish-exe; artifact downloaded and verified; tag deleted afterwards. Its first run exposed a flaky gate test (async race), fixed via PR #53 before the real release. |
-| `v0.0.1` | First real release. |
+| `v0.0.1` | First real release. Its first tag run failed the drill on a cross-collection race around the static manual-unlock latch (parallel test classes resetting the shared gate mid-assertion) — tag deleted, fix pinned the three gate classes into one xunit collection, re-tagged on the fixed commit. |

@@ -19,6 +19,7 @@ namespace Tf.App.Tests;
 /// unlock fails closed when omitted (headless tests never arm it).
 /// </summary>
 [Trait("Category", "Unit")]
+[Collection("ManualRealMoneyGate")]
 public class ManualRealMoneyGateTests : IDisposable
 {
     private readonly string _dir;
