@@ -9,8 +9,10 @@ journal + heartbeat logs and produces a markdown report with verdicts, so
 
 Usage:
     python scripts/soak_report.py [--data %APPDATA%/tf/data] [--since YYYY-MM-DD] [--out report.md]
+                                  [--record docs/soak] [--min-entries 10]
 
-Exit codes: 0 = soak clean, 1 = findings that need a look, 2 = usage/IO error.
+Exit codes: 0 = soak clean, 1 = findings that need a look, 3 = NO DATA
+(an empty soak is not evidence), 2 = usage/IO error.
 
 Verdicts (demo-specific):
   - gate refusals: the gate must NEVER refuse on a demo account -- any
@@ -34,6 +36,10 @@ from datetime import datetime, timezone
 
 MAX_RECONNECTS_PER_ACCOUNT = 20
 
+# An empty soak is not evidence: without this floor, a never-run session
+# reports SOAK CLEAN and the drill would happily "pass" on it forever.
+MIN_JOURNAL_ENTRIES = 10
+
 
 def parse_args(argv):
     p = argparse.ArgumentParser(description="Demo soak evidence report")
@@ -41,6 +47,10 @@ def parse_args(argv):
     p.add_argument("--data", default=default_data, help="app data directory")
     p.add_argument("--since", default=None, help="ISO date (YYYY-MM-DD); default: all entries")
     p.add_argument("--out", default=None, help="write the markdown report here")
+    p.add_argument("--record", default=None, metavar="DIR",
+                   help="also save the report as evidence/SOAK-<date>.md (accumulates across runs)")
+    p.add_argument("--min-entries", type=int, default=MIN_JOURNAL_ENTRIES,
+                   help=f"journal entries below this report NO DATA (default {MIN_JOURNAL_ENTRIES})")
     args = p.parse_args(argv)
     if not os.path.isdir(args.data):
         print(f"error: data directory not found: {args.data}", file=sys.stderr)
@@ -69,13 +79,26 @@ def read_jsonl(pattern, since_epoch):
                 yield entry
 
 
-def build_report(data_dir, since_epoch):
+def record_evidence(report, record_dir):
+    """Saves the report under <record_dir>/SOAK-<UTC-date>.md (one file per
+    day, overwritten on re-runs — the accumulation IS the trend). Returns
+    the written path."""
+    os.makedirs(record_dir, exist_ok=True)
+    path = os.path.join(record_dir, f"SOAK-{datetime.now(timezone.utc).date()}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(report)
+    return path
+
+
+def build_report(data_dir, since_epoch, min_entries=MIN_JOURNAL_ENTRIES):
     journal = read_jsonl(os.path.join(data_dir, "journal", "journal_*.jsonl"), since_epoch)
     heartbeats = read_jsonl(os.path.join(data_dir, "heartbeats", "heartbeat_*.jsonl"), since_epoch)
 
     gate_refusals, settlements, governor, arms, errors = [], [], [], [], []
     unparseable = 0
+    journal_count = 0
     for e in journal:
+        journal_count += 1
         if e.get("_unparseable"):
             unparseable += 1
             continue
@@ -168,10 +191,19 @@ def build_report(data_dir, since_epoch):
 
     storm = [n for n, c in reconnects.items() if c > MAX_RECONNECTS_PER_ACCOUNT]
     ok = not gate_refusals and not errors and not storm and unparseable == 0
+    # Findings outrank emptiness: a gate refusal in a tiny journal is a
+    # finding. Only a CLEAN-but-thin soak degrades to NO DATA — an empty
+    # soak must never read as evidence, but it is also not a finding.
+    if ok and journal_count < min_entries:
+        ok = None  # NO DATA
     add("## Verdict")
     add("")
-    if ok:
-        add("SOAK CLEAN - gate silent, telemetry intact, connections stable.")
+    if ok is None:
+        add(f"NO DATA - only {journal_count} journal entries (minimum {min_entries}). An empty soak is not "
+            "evidence: connect the app to a demo account, let it trade a session, then re-run this report.")
+    elif ok:
+        add(f"SOAK CLEAN - gate silent, telemetry intact, connections stable ({journal_count} journal entries, "
+            f"{len(settlements)} settlements).")
     else:
         add("FINDINGS - see the FAIL sections above before trusting real mode.")
     return "\n".join(lines) + "\n", ok
@@ -184,13 +216,19 @@ def main(argv):
     since_epoch = 0
     if args.since:
         since_epoch = datetime.fromisoformat(args.since).replace(tzinfo=timezone.utc).timestamp()
-    report, ok = build_report(args.data, since_epoch)
+    report, ok = build_report(args.data, since_epoch, args.min_entries)
+    if args.record:
+        print(f"evidence recorded: {record_evidence(report, args.record)}")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report)
         print(f"report written: {args.out}")
     else:
         print(report)
+    # 0 = clean, 1 = findings, 3 = NO DATA (an empty soak is not evidence,
+    # but it is also not a finding — the drill freshness check decides).
+    if ok is None:
+        return 3
     return 0 if ok else 1
 
 

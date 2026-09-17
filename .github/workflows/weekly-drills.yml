@@ -167,3 +167,19 @@ jobs:
         FAILING_JOBS: 'weekly drill run (drift alert or staleness rehearsal)'
         GH_RUN_ID: ${{ steps.wait.outputs.run_id }}
       run: bash scripts/drift-alert.sh
+
+  # Soak evidence accumulates in docs/soak/ (SOAK-<date>.md reports the
+  # operator records after demo sessions via --record). This job is the
+  # freshness enforcer: evidence may be ABSENT (nobody has soaked yet —
+  # informational), but never STALE — demo evidence older than two weeks
+  # means the soak habit quietly died, and a stale-clean or finding-ridden
+  # newest report fails loudly. A failed scheduled run here is picked up by
+  # the schedule watchdog like any other drill.
+  soak-freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Verify the demo soak evidence is recent
+      run: python scripts/check_soak_freshness.py --max-age 14
