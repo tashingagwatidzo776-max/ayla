@@ -109,12 +109,40 @@ jobs:
           echo "replaced existing asset $AID"
         done
         # gh release upload resolves by tag and cannot see drafts, so POST
-        # the asset directly to the release's upload_url.
-        curl -sS -X POST \
-          -H "Authorization: Bearer $GH_TOKEN" \
-          -H "Content-Type: application/octet-stream" \
-          --data-binary @dist/Tf.exe \
-          "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.upload_url' | sed 's/{.*}//')?name=Tf.exe"
+        # the asset directly to the release's upload_url. --fail-with-body
+        # is mandatory: without it a server-side upload error ("Error
+        # creating asset temp dir", seen live on the v0.0.3 dispatch)
+        # prints an error body but exits 0 — a silent missing asset.
+        UPLOAD_URL="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.upload_url' | sed 's/{.*}//')?name=Tf.exe"
+        EXPECTED=$(stat -c%s dist/Tf.exe)
+        ok=0
+        for attempt in 1 2 3; do
+          if curl --fail-with-body -sS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @dist/Tf.exe \
+              "$UPLOAD_URL"; then
+            ok=1
+            break
+          fi
+          echo "upload attempt $attempt failed — retrying in 30s (transient asset-service errors have been seen live)"
+          # drop a half-written asset before retrying, or the next POST 422s
+          for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.assets[] | select(.name == "Tf.exe") | .id'); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$AID" || true
+          done
+          sleep 30
+        done
+        if [ "$ok" != "1" ]; then
+          echo "::error::asset upload failed after 3 attempts"
+          exit 1
+        fi
+        # The upload is only real when the asset exists at the exact size
+        # the runner sent — verify before declaring success.
+        ACTUAL=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '[.assets[] | select(.name == "Tf.exe")][0].size // 0')
+        if [ "$ACTUAL" != "$EXPECTED" ]; then
+          echo "::error::uploaded asset is $ACTUAL bytes, expected $EXPECTED — upload did not land"
+          exit 1
+        fi
         echo "### Release state after attach" >> "$GITHUB_STEP_SUMMARY"
         echo '```json' >> "$GITHUB_STEP_SUMMARY"
         gh api "repos/$GITHUB_REPOSITORY/releases/$RID" \
