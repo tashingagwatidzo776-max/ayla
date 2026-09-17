@@ -18,12 +18,22 @@
 
 set -u
 
-# Only gate pushes that advance a branch on a remote. Tag pushes re-run the
-# real gate in CI (drill -> release-gate), which no local loop can replicate.
+# Only gate pushes that ADVANCE a branch on a remote. Tag pushes re-run the
+# real gate in CI (drill -> release-gate), which no local loop can replicate;
+# branch deletions push nothing to verify. (Deleting a branch used to trigger
+# the full local CI run here — minutes of pointless checking per cleanup.)
 if [ "$#" -ge 1 ] && [ -f "$1" ]; then
-    if ! grep -Eq '^refs/heads/' "$1"; then
-        exit 0
-    fi
+    gate_needed=0
+    while read -r _old new ref; do
+        case "$ref" in
+            refs/heads/*)
+                case "$new" in
+                    0*) ;; # all-zero OID = deletion, nothing to gate
+                    *) gate_needed=1 ;;
+                esac ;;
+        esac
+    done < "$1"
+    [ "$gate_needed" -eq 1 ] || exit 0
 fi
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
