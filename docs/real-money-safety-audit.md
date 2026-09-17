@@ -65,16 +65,18 @@ GrowthRunner → AutonomousScheduler → TradingBrain → DerivClient`
 | Real-money gate | ✅ Evaluated before the connectivity check: demo passes; real needs the session unlock; unverified (never authorized) fails closed. A blocked state also relabels the button ("🔒 Real account locked"). |
 | Session unlock | ✅ Shared `ManualRealMoneyGate` unlock, armed by the Growth tab's in-tab unlock panel. |
 | Kill switch | ✅ Engaged kill switch refuses the trade outright. |
-| Risk engine | Partial by design — one manual trade bypasses stake-ladder checks (the user picks the stake from settings), but the gate + kill switch + demo-mode default cover the real-money surface. |
+| Risk engine | ✅ The manual stake is bounded by the user's `ManualMaxStake` ceiling (Settings tab), enforced before any proposal is requested; a blocked real-money state also relabels the trade button. |
 
 ## Residual risks (accepted, documented)
 
 - **Settings still decide `IsDemo` per account.** The gate cross-checks the
   config against the API verdict, so a wrong config is refused loudly rather
   than silently traded — but the fix is manual (edit the account's flag).
-- **The manual trade's stake is not bounded by the risk engine.** Accepted:
-  it is an explicitly human action on a demo-gated path; the growth engines
-  (the autonomous paths) get the full ladder.
+- **The manual trade's stake is not bounded by the risk engine.** Closed by
+  the `ManualMaxStake` ceiling (Settings tab): the Trades tab refuses any
+  stake above it before requesting a proposal, so a mistyped stake cannot
+  reach a real account. 0/blank disables the extra limit — accepted again
+  only if the user explicitly turns it off.
 - **Locked-real-account visibility at startup.** Closed by the Growth tab's
   locked-account banners: session unlocks die with the process, so app start
   re-locks real accounts — the banners list them (with the API verification

@@ -88,6 +88,18 @@ public sealed partial class TradesViewModel : ObservableObject
     {
         var settings = _settings();
 
+        // Manual stake ceiling: the typed Stake is otherwise unbounded, and
+        // this is the one trade path that bypasses the risk engine's stake
+        // checks (the brain and growth paths are bounded by MaxStake and the
+        // session plan ladder). A mistyped stake must not reach a real
+        // account — refuse loudly instead of silently clamping.
+        if (settings.ManualMaxStake > 0 && settings.Stake > settings.ManualMaxStake)
+        {
+            StatusMessage = $"Stake {settings.Stake:0.##} {settings.Currency} exceeds the manual max " +
+                $"of {settings.ManualMaxStake:0.##} — lower the stake in Settings (Stake field) to trade.";
+            return;
+        }
+
         // Real-money gate: a real account needs the session unlock. The
         // API-verified flag comes from the client's own authorize/balance —
         // unverified fails closed (never treated as real).

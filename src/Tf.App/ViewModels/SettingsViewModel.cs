@@ -80,6 +80,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int armStalenessHours = 4;
 
+    /// <summary>Hard ceiling on the manual trade surfaces' stake (null/
+    /// empty box = no extra limit). Editable alongside Stake; negatives are
+    /// dropped on build.</summary>
+    [ObservableProperty]
+    private decimal? manualMaxStake;
+
     [ObservableProperty]
     private int logLevel = 1;
 
@@ -133,6 +139,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Currency = settings.Currency;
         DurationMinutes = settings.DurationMinutes;
         Stake = settings.Stake;
+        ManualMaxStake = settings.ManualMaxStake > 0 ? settings.ManualMaxStake : null;
         AutonomyEnabled = settings.AutonomyEnabled;
         DecisionIntervalMinutes = settings.DecisionIntervalMinutes;
         LlmBaseUrl = settings.LlmBaseUrl;
@@ -162,6 +169,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Currency = string.IsNullOrWhiteSpace(Currency) ? AppSettings.DefaultCurrency : Currency.Trim(),
         DurationMinutes = Math.Max(1, DurationMinutes),
         Stake = Math.Max(0.01m, Stake),
+        ManualMaxStake = Math.Max(0m, ManualMaxStake ?? 0m),
         AutonomyEnabled = AutonomyEnabled,
         DecisionIntervalMinutes = Math.Max(1, DecisionIntervalMinutes),
         LlmBaseUrl = string.IsNullOrWhiteSpace(LlmBaseUrl) ? AppSettings.DefaultLlmBaseUrl : LlmBaseUrl.Trim(),
