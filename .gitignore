@@ -26,3 +26,4 @@ coverage/
 
 # Session logs
 .wraplog.txt
+__pycache__/
