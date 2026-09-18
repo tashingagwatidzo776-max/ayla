@@ -134,6 +134,28 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         }
     }
 
+    /// <summary>Re-points the app's primary client (Dashboard, Trades and
+    /// Brain surfaces) at this account: persists the account's connection
+    /// data into settings (token encrypted as usual) and re-wires the
+    /// primary DerivClient to this account's transport and id. The caller
+    /// re-authenticates; real accounts stay locked behind the session
+    /// unlock exactly as before — this switch only chooses WHICH account
+    /// the manual surfaces address, never whether real money flows.</summary>
+    public void ApplyToPrimarySettings(AppSettings settings)
+    {
+        settings.ApiToken = Config.ApiToken;
+        settings.IsDemo = Config.IsDemo;
+        settings.PrimaryNewPlatform = Config.NewPlatform;
+        settings.PrimaryDerivAppId = Config.DerivAppId;
+        settings.PrimaryDerivAccountId = Config.DerivAccountId;
+        if (!string.IsNullOrWhiteSpace(Config.DerivAppId))
+        {
+            // The classic AppId stays a market-data fallback; for a PAT
+            // primary the new-platform App ID is the one that matters.
+            settings.AppId = Config.DerivAppId;
+        }
+    }
+
     public async Task ConnectAsync()
     {
         if (IsConnected || IsBusy)
@@ -185,6 +207,9 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
 
                 _client.NewPlatformAccountId = match.AccountId;
                 NewPlatformVerifiedVirtual = match.IsDemoAccount;
+                // The OTP socket carries no is_virtual: patch every balance
+                // parse with the discovery verdict instead.
+                _client.IsVirtualOverride = match.IsDemoAccount;
             }
 
             await _client.ConnectAsync(Config.ApiToken);
@@ -253,6 +278,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         ApiVerifiedVirtual = null;
         VerifiedText = "unverified";
         NewPlatformVerifiedVirtual = null;
+        _client.IsVirtualOverride = null;
         _consecutiveFailures = 0;
         IsDegraded = false;
         CircuitStatus = "";

@@ -88,6 +88,13 @@ public sealed class DerivClient : IAsyncDisposable
     /// <summary>Symbol currently subscribed (null when not subscribed).</summary>
     public string? SubscribedSymbol { get; private set; }
 
+    /// <summary>Overrides the demo/real verdict used for balances on this
+    /// session. Non-null patches every parsed balance: the new platform's
+    /// OTP socket carries no is_virtual flag, so the caller that verified
+    /// the account via discovery sets this to the discovery verdict.
+    /// Null (default) keeps the payload's own flag (missing → virtual).</summary>
+    public bool? IsVirtualOverride { get; set; }
+
     /// <summary>Account login id once authorized (null otherwise).</summary>
     public string? LoginId { get; private set; }
 
@@ -209,7 +216,7 @@ public sealed class DerivClient : IAsyncDisposable
         var response = await SendAsync(new { authorize = apiToken }, ct).ConfigureAwait(false);
 
         var balance = response.RootElement.GetProperty("authorize");
-        var result = ParseBalance(balance);
+        var result = ParseBalance(balance, IsVirtualOverride);
         LoginId = result.LoginId;
         Balance = result;
         _authorizedToken = apiToken;
@@ -287,7 +294,7 @@ public sealed class DerivClient : IAsyncDisposable
     public async Task<AccountBalance> GetBalanceAsync(CancellationToken ct = default)
     {
         var response = await SendAsync(new { balance = 1 }, ct).ConfigureAwait(false);
-        var result = ParseBalance(response.RootElement.GetProperty("balance"));
+        var result = ParseBalance(response.RootElement.GetProperty("balance"), IsVirtualOverride);
         Balance = result;
         BalanceUpdated?.Invoke(result);
         return result;
@@ -669,7 +676,7 @@ public sealed class DerivClient : IAsyncDisposable
         _ => ContractStatus.Unknown
     };
 
-    private static AccountBalance ParseBalance(JsonElement balance)
+    private static AccountBalance ParseBalance(JsonElement balance, bool? isVirtualOverride)
     {
         var value = balance.TryGetProperty("balance", out var b) ? b.GetDecimal() : 0m;
         var currency = balance.TryGetProperty("currency", out var c) ? c.GetString() ?? "USD" : "USD";
@@ -678,7 +685,11 @@ public sealed class DerivClient : IAsyncDisposable
         // (an unverified account must never be treated as real). On the new
         // platform the flag lives on the discovery record instead: callers
         // that know the account's type patch it via IsVirtualOverride.
-        var isVirtual = AccountBalance.ParseIsVirtual(balance);
+        // Deriv's own demo/real flag — missing/malformed parses as virtual
+        // (an unverified account must never be treated as real). On the new
+        // platform the flag lives on the discovery record instead: callers
+        // that know the account's type patch it via IsVirtualOverride.
+        var isVirtual = isVirtualOverride ?? AccountBalance.ParseIsVirtual(balance);
         return new AccountBalance(value, currency, loginId, isVirtual);
     }
 

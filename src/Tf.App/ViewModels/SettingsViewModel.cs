@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Tf.App.Infrastructure;
+using Tf.App.Services;
 using Tf.Core.Models;
 using Tf.Deriv;
 
@@ -20,6 +21,18 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool isDemo = true;
+
+    // Primary-client new-platform identity (set by the Accounts tab's
+    // "Set as primary" switch; not user-edited here). Round-tripped through
+    // Load/BuildSettings so a later Settings save cannot wipe the switch.
+    [ObservableProperty]
+    private bool primaryNewPlatform;
+
+    [ObservableProperty]
+    private string primaryDerivAppId = "";
+
+    [ObservableProperty]
+    private string primaryDerivAccountId = "";
 
     [ObservableProperty]
     private string symbol = AppSettings.DefaultSymbol;
@@ -135,6 +148,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         ApiToken = settings.ApiToken;
         AppId = settings.AppId;
         IsDemo = settings.IsDemo;
+        PrimaryNewPlatform = settings.PrimaryNewPlatform;
+        PrimaryDerivAppId = settings.PrimaryDerivAppId;
+        PrimaryDerivAccountId = settings.PrimaryDerivAccountId;
         Symbol = settings.Symbol;
         Currency = settings.Currency;
         DurationMinutes = settings.DurationMinutes;
@@ -165,6 +181,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         ApiToken = ApiToken.Trim(),
         AppId = string.IsNullOrWhiteSpace(AppId) ? AppSettings.DefaultAppId : AppId.Trim(),
         IsDemo = IsDemo,
+        PrimaryNewPlatform = PrimaryNewPlatform,
+        PrimaryDerivAppId = PrimaryDerivAppId,
+        PrimaryDerivAccountId = PrimaryDerivAccountId,
         Symbol = string.IsNullOrWhiteSpace(Symbol) ? AppSettings.DefaultSymbol : Symbol.Trim(),
         Currency = string.IsNullOrWhiteSpace(Currency) ? AppSettings.DefaultCurrency : Currency.Trim(),
         DurationMinutes = Math.Max(1, DurationMinutes),
@@ -192,6 +211,71 @@ public sealed partial class SettingsViewModel : ObservableObject
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         LogLevel = LogLevel
     };
+
+    /// <summary>Re-points the primary client (Dashboard, Trades and Brain
+    /// surfaces) at a hub account: verifies the account's type via the new
+    /// platform's discovery (mandatory — the OTP socket carries no
+    /// is_virtual, and an unverified verdict must never reach the gate),
+    /// re-wires the primary DerivClient to the account's transport, and
+    /// only then persists. The real-money gate is untouched — a real
+    /// account still refuses every real trade until the session unlock is
+    /// armed, on every surface.</summary>
+    [RelayCommand]
+    private async Task SetPrimaryAsync(AccountConnection? account)
+    {
+        if (account is null || IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var settings = BuildSettings();
+            account.ApplyToPrimarySettings(settings);
+
+            await _client.DisconnectAsync();
+            _client.IsVirtualOverride = null;
+
+            // Discovery IS the demo/real verification for a PAT primary.
+            // It must succeed before anything is persisted or connected:
+            // without it the gate would see an unverified account.
+            await PrimaryClientWiring.ApplyAsync(_client, settings);
+
+            await _client.ConnectAsync(
+                string.IsNullOrEmpty(settings.ApiToken) ? null : settings.ApiToken);
+            try
+            {
+                await _client.SubscribeTicksAsync(settings.Symbol);
+            }
+            catch
+            {
+                // Tick subscription is best-effort on switch; history and
+                // balance still confirm the account.
+            }
+
+            // Everything succeeded — persist and sync the editor.
+            _settingsService.Save(settings);
+            ApiToken = settings.ApiToken;
+            IsDemo = settings.IsDemo;
+            AppId = settings.AppId;
+            PrimaryNewPlatform = settings.PrimaryNewPlatform;
+            PrimaryDerivAppId = settings.PrimaryDerivAppId;
+            PrimaryDerivAccountId = settings.PrimaryDerivAccountId;
+
+            StatusMessage =
+                $"Primary account switched to {account.DisplayName}. " +
+                "Real accounts still require the session unlock before any real trade.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Switch failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
 
     [RelayCommand]
     private async Task SaveAsync()

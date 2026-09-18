@@ -49,6 +49,13 @@ GrowthRunner → AutonomousScheduler → TradingBrain → DerivClient`
 `BrainViewModel.RunCycle / StartAutonomy → TradingBrain → DerivClient`
 (trading only when autonomy is enabled; otherwise decisions are advice only)
 
+The Accounts tab's "Set as primary" switch re-points this path (and the
+Trades/Dashboard surfaces) at a hub account, persisting its connection
+data into settings. The switch never touches the gate: which account the
+manual surfaces address changes, whether real money can flow does not —
+the gate re-evaluates per decision on whatever account is primary, and a
+real primary stays `BlockedLocked` until the session unlock is armed.
+
 | Rail | Coverage |
 |---|---|
 | Real-money gate | ✅ Evaluated before every manual cycle and before autonomy starts (`ManualRealMoneyGate`, which wraps the shared gate and the session unlock). The verdict also flows into `BuildRiskContext`, so even a mid-cycle refusal blocks the trade at the risk engine. |
