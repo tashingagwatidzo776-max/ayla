@@ -31,25 +31,30 @@ public partial class App : System.Windows.Application
             var wizard = new FirstRunWizard();
             wizard.ShowDialog();
 
-            if (wizard.Completed)
+            // Both outcomes persist the completion flag: a save marks
+            // "configured", a skip marks "skipped". The wizard must not
+            // re-appear on every launch just because setup was deferred —
+            // the Settings tab is the place to finish it.
+            if (wizard.Completed || wizard.Skipped)
             {
-                // Persist the wizard choices.
                 var dir = Path.GetDirectoryName(firstRunMarker)!;
                 Directory.CreateDirectory(dir);
-                File.WriteAllText(firstRunMarker, wizard.ApiToken.Length > 0 ? "configured" : "skipped");
+                File.WriteAllText(firstRunMarker, wizard.Completed ? "configured" : "skipped");
+            }
 
-                // Apply wizard settings immediately.
-                var wizardSettings = new AppSettings
-                {
-                    ApiToken = wizard.ApiToken,
-                    Symbol = wizard.Symbol,
-                    AutonomyEnabled = wizard.AutonomyEnabled,
-                    RespectMarketHours = wizard.RespectMarketHours,
-                    IsDemo = true
-                };
-
+            if (wizard.Completed)
+            {
+                // Merge the wizard choices into whatever settings already
+                // exist (overwriting only the five wizard fields) instead of
+                // replacing them — a pre-existing webhook, manual stake cap
+                // or staleness alert survives first-run completion. The
+                // token floor was already enforced by the wizard's Save.
+                var choices = new FirstRunChoices(
+                    wizard.ApiToken, wizard.Symbol, wizard.BrainKey,
+                    wizard.Budget, wizard.AutonomyEnabled, wizard.RespectMarketHours);
                 var settingsService = new SettingsService();
-                settingsService.Save(wizardSettings);
+                settingsService.Save(
+                    FirstRunWizardLogic.ApplyChoices(settingsService.Load(), choices));
             }
         }
 

@@ -87,6 +87,15 @@ GrowthRunner → AutonomousScheduler → TradingBrain → DerivClient`
   re-locks real accounts — the banners list them (with the API verification
   state) and carry an unlock affordance instead of leaving the state to be
   discovered on the next start click.
+- **The first-run wizard replaced settings wholesale.** Closed by the
+  wizard's merge semantics: a completed wizard overwrites exactly its five
+  fields (token, symbol, brain, budget, autonomy/market-hours) into the
+  existing settings and forces `IsDemo` — a pre-configured webhook,
+  `ManualMaxStake`, staleness alert or risk cap survives first-run
+  completion instead of being silently discarded. The wizard's Save also
+  enforces the token floor (an empty token can no longer "complete" setup
+  into a configured-but-token-less app), and both save and skip persist the
+  completion flag so the wizard cannot trap a user in a launch loop.
 
 ## Where the alerts go
 
@@ -151,6 +160,7 @@ here.
 | `GrowthViewModelRestartTests` (Tf.App) | The Growth tab's unlock panel arming every listed account at once. |
 | `GrowthViewModelReadinessTests` (Tf.App) | The go-live readiness panel's five checks: locked unlock / unverified account / disabled manual cap / absent governor cap / missing webhook each flip exactly the right leg red. |
 | `ManualMaxStakeTests` (Tf.App) | The manual stake cap on the Trades tab path. |
+| `FirstRunWizardLogicTests` (Tf.App) | The first-run wizard's merge-into-settings rule (only the five wizard fields are written, `IsDemo` forced) and the token floor that keeps setup from completing token-less. |
 | `MetricsDigestServiceTests` (Tf.App) | The digest's arm-state leg and rail table. |
 | `RealMoneyGateHubTests` (Tf.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
 | `RealMoneyGateMidSessionTests` (Tf.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
