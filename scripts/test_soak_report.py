@@ -160,6 +160,55 @@ def test_record_flag_writes_dated_evidence():
         files = list(Path(tmp).glob("SOAK-*.md"))
         assert len(files) == 1, files
         assert files[0].read_text(encoding="utf-8").startswith("# Demo soak report")
+        # the summary line is embedded for machine consumption
+        assert "SOAK-SUMMARY: entries=12 settlements=12 refusals=0 verdict=CLEAN" in \
+            files[0].read_text(encoding="utf-8")
+
+
+def test_record_regenerates_trend_table():
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "README.md").write_text("# Demo soak evidence\n\nbody\n", encoding="utf-8")
+        out, rc = run_report(settlements_above_floor(), [], extra_args=["--record", tmp])
+        assert rc == 0, out
+        readme = Path(tmp, "README.md").read_text(encoding="utf-8")
+        assert "<!-- soak-trend:start -->" in readme and "<!-- soak-trend:end -->" in readme
+        assert "| Date | Entries | Settlements | Refusals | Verdict |" in readme
+        date = sorted(p.name for p in Path(tmp).glob("SOAK-*.md"))[0][len("SOAK-"):-len(".md")]
+        assert f"| {date} | 12 | 12 | 0 | CLEAN |" in readme
+        # the original body survives outside the markers
+        assert "body" in readme
+
+
+def test_trend_table_orders_newest_first_and_reads_summaries():
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "README.md").write_text("x", encoding="utf-8")
+        rec = lambda: run_report(settlements_above_floor(), [], extra_args=["--record", tmp])
+        rec()  # records SOAK-<today>.md using the machine clock
+        today_name = sorted(p.name for p in Path(tmp).glob("SOAK-*.md"))[0]
+        today_date = today_name[len("SOAK-"):-len(".md")]
+        older = Path(tmp, "SOAK-2026-09-10.md")
+        # a legacy report: prose verdict only, no summary line
+        older.write_text("# Demo soak report\n\n## Verdict\n\nFINDINGS - something\n", encoding="utf-8")
+        rec()
+        readme = Path(tmp, "README.md").read_text(encoding="utf-8")
+        block = readme.split("<!-- soak-trend:start -->")[1].split("<!-- soak-trend:end -->")[0]
+        assert block.index(today_date) < block.index("2026-09-10"), block
+        assert f"| {today_date} | 12 | 12 | 0 | CLEAN |" in block
+        assert "| 2026-09-10 | ? | ? | ? | FINDINGS |" in block
+
+
+def test_trend_table_is_idempotent_and_survives_no_readme():
+    with tempfile.TemporaryDirectory() as tmp:
+        # no README: recording works, no trend update attempted
+        out, rc = run_report(settlements_above_floor(), [], extra_args=["--record", tmp])
+        assert rc == 0, out
+        assert not Path(tmp, "README.md").exists()
+        # with a README, re-runs do not duplicate the block
+        Path(tmp, "README.md").write_text("r\n", encoding="utf-8")
+        run_report(settlements_above_floor(), [], extra_args=["--record", tmp])
+        run_report(settlements_above_floor(), [], extra_args=["--record", tmp])
+        readme = Path(tmp, "README.md").read_text(encoding="utf-8")
+        assert readme.count("<!-- soak-trend:start -->") == 1
 
 
 def test_min_entries_flag_lowers_the_floor():
