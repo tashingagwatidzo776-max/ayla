@@ -42,6 +42,17 @@ public sealed partial class AccountsViewModel : ObservableObject
     [ObservableProperty]
     private string newEnsembleConfig = "";
 
+    /// <summary>When true, the token is a new-platform Personal Access
+    /// Token (developers.deriv.com PAT app): connects through the OTP flow
+    /// with the PAT app's registered id instead of the classic authorize.</summary>
+    [ObservableProperty]
+    private bool newIsPat;
+
+    /// <summary>The PAT app's registered Deriv application id (required
+    /// for PAT auth — the Deriv-App-ID header; NOT the token itself).</summary>
+    [ObservableProperty]
+    private string newDerivAppId = "";
+
     [ObservableProperty]
     private bool isBusy;
 
@@ -71,6 +82,12 @@ public sealed partial class AccountsViewModel : ObservableObject
             return;
         }
 
+        if (NewIsPat && string.IsNullOrWhiteSpace(NewDerivAppId))
+        {
+            StatusMessage = "A PAT needs its app's registered Deriv App ID (developers.deriv.com dashboard, not the token).";
+            return;
+        }
+
         var baseSettings = _settings();
         var config = new AccountConfig
         {
@@ -82,7 +99,10 @@ public sealed partial class AccountsViewModel : ObservableObject
             DurationMinutes = Math.Max(1, NewDurationMinutes),
             StartBudget = Math.Max(0.50m, NewBudget),
             BrainKey = string.IsNullOrWhiteSpace(NewBrainKey) ? "Growth" : NewBrainKey.Trim(),
-            EnsembleConfig = NewEnsembleConfig.Trim()
+            EnsembleConfig = NewEnsembleConfig.Trim(),
+            NewPlatform = NewIsPat,
+            DerivAppId = NewDerivAppId.Trim(),
+            DerivAccountId = ""
         };
 
         try
@@ -91,6 +111,8 @@ public sealed partial class AccountsViewModel : ObservableObject
             StatusMessage = $"Added {connection.DisplayName} ({config.Symbol}). Press Connect on its row (or Connect all).";
             NewToken = "";
             NewLabel = "";
+            NewIsPat = false;
+            NewDerivAppId = "";
         }
         catch (InvalidOperationException ex)
         {

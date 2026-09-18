@@ -16,7 +16,7 @@ job) fails when a call-site file has no coverage entry here.
 |---|---|---|---|
 | Master kill switch | Dashboard latch, read via `_dashboard.IsKillSwitchEngaged` / hub kill-switch factories | Global engagement halts everything | Fail closed when latched |
 | Portfolio drawdown governor | `MultiAccountHub` settlement handler + journal-restored latch | Combined daily net across all growth accounts breaches the plan's cap → stops every runner, latches until manual re-arm | Fail closed (latch survives restarts) |
-| Real-money gate | `Tf.Core.Models.RealMoneyGate.Evaluate` | Config says real **and** Deriv's own `is_virtual` confirms real **and** the per-session unlock (typed `TRADE REAL MONEY` phrase) is armed. Any mismatch/unknown refuses with a specific reason | Fail closed — unverified counts as demo, never as real |
+| Real-money gate | `Tf.Core.Models.RealMoneyGate.Evaluate` | Config says real **and** Deriv's own verification confirms real **and** the per-session unlock (typed `TRADE REAL MONEY` phrase) is armed. Any mismatch/unknown refuses with a specific reason. The API verdict accepts both platforms: classic `is_virtual` and new-platform discovery `account_type` (DOT/ROT prefix checked as a cross-signal) | Fail closed — unverified counts as demo, never as real |
 | Risk engine | `Tf.Core.Brain.RiskEngine.Evaluate` | Per-decision: kill switch, real-money verdict, confidence floor, stake bounds, concurrency limit, daily loss cap, post-loss cooldown | Rejects with a reason |
 
 The real-money gate is enforced at four depths: engine **start**
@@ -162,6 +162,7 @@ here.
 | `ManualMaxStakeTests` (Tf.App) | The manual stake cap on the Trades tab path. |
 | `FirstRunWizardLogicTests` (Tf.App) | The first-run wizard's merge-into-settings rule (only the five wizard fields are written, `IsDemo` forced) and the token floor that keeps setup from completing token-less. |
 | `MetricsDigestServiceTests` (Tf.App) | The digest's arm-state leg and rail table. |
+| `NewPlatformDerivClientTests` (Tf.Core) | The new-platform (PAT) transport under the same trade paths: OTP connect with no classic authorize, a fresh OTP minted on every reconnect, the `underlying_symbol` rename, and the discovery `account_type` verdict flowing into the same verified-virtual seam the gate reads. |
 | `RealMoneyGateHubTests` (Tf.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
 | `RealMoneyGateMidSessionTests` (Tf.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
 | `JournalFormatterTests` (Tf.App) | The Journal tab's dedicated unlock-arm/stale formatting and category filter. |
