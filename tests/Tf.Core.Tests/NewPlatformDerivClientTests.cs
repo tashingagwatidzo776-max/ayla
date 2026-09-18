@@ -28,6 +28,40 @@ public class NewPlatformDerivClientTests
         $@"{{""msg_type"":""{msgType}"",""req_id"":{req.GetProperty("req_id").GetInt32()},""{msgType}"":{body}}}";
 
     [Fact]
+    public async Task ListAccountsAsync_ParsesStringBalance_LiveShape()
+    {
+        // Live-verified 2026-09-18: discovery returns balance as a STRING
+        // ("9814.97"). GetDecimal() on it throws, which failed every hub
+        // Connect with 'requires an element of type Number'. The parser must
+        // accept both shapes.
+        const string liveBody = @"{""data"":[{""account_id"":""DOT1"",""account_type"":""demo"",""balance"":""9814.97"",""currency"":""USD"",""status"":""active""}]}";
+        var http = new HttpClient(new FakeHttpHandler(liveBody));
+        var auth = new NewPlatformAuth("test-app-id", "http://localhost:1", http);
+
+        var accounts = await auth.ListAccountsAsync("pat-token");
+
+        var account = Assert.Single(accounts);
+        Assert.Equal("DOT1", account.AccountId);
+        Assert.Equal(9814.97m, account.Balance);
+        Assert.True(account.IsDemoAccount);
+    }
+
+    private sealed class FakeHttpHandler : HttpMessageHandler
+    {
+        private readonly string _body;
+        public FakeHttpHandler(string body) => _body = body;
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var resp = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_body, Encoding.UTF8, "application/json")
+            };
+            return Task.FromResult(resp);
+        }
+    }
+
+    [Fact]
     public async Task ConnectOtp_SkipsAuthorize_SeedsBalance_AndWorks()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
