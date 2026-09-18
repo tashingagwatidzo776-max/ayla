@@ -16,8 +16,9 @@ when the app "has no API token" even though you pasted one once.
 On the first launch the app shows **"Welcome to Tf — First Run Setup"**
 before the main window. Five fields:
 
-1. **API Token (demo)** — paste the token. Save is accepted when the field
-   has at least 8 non-blank characters.
+1. **API Token (demo)** — paste the token. Save is **refused** when the
+   field has fewer than 8 non-blank characters (an inline error appears and
+   the wizard stays open) — setup can no longer complete token-less.
 2. **Symbol** — default `frxEURUSD`.
 3. **Trading Brain** — the recommended default is *Growth — deterministic
    $5 challenge*; the others (Trend Following, Breakout, Mean Reversion)
@@ -26,11 +27,18 @@ before the main window. Five fields:
 5. **Autonomy** — leave **unchecked** for a first session: the brain then
    proposes instead of trading. The market-hours checkbox can stay on.
 
-Click **Save & Connect** (not *Skip for now* — see pitfalls below). This
-persists the token (DPAPI-encrypted in app data), writes the
-`wizard_done.flag` marker, and opens the main window on the Dashboard.
-Add your account in the **Accounts** tab if the wizard token did not
-already cover it, then let it run a session. After the session:
+Click **Save & Connect** to finish setup now. This persists the token
+(DPAPI-encrypted in app data), writes the `wizard_done.flag` marker, and
+opens the main window on the Dashboard. *Skip for now* is a legitimate
+defer: it writes the flag marked `skipped` so the wizard does not reappear
+every launch, and you finish the token on the **Settings** tab — but a
+first session needs the token, so saving here is the fast path.
+
+Either way the wizard **merges** into whatever settings already exist: only
+its five fields are overwritten, and `IsDemo` is forced true — a
+pre-configured webhook, manual stake cap or staleness alert survives
+completion. Add your account in the **Accounts** tab if the wizard token
+did not already cover it, then let it run a session. After the session:
 
 ```bash
 python scripts/soak_report.py --record docs/soak
@@ -52,21 +60,22 @@ cat  "$APPDATA/tf/data/settings.json"   # an ApiToken key present?
 ```
 
 - No flag **and** no `ApiToken` in the JSON → the wizard never completed.
-  Delete `settings.json` (optional; the wizard overwrites it on save) and
+  Delete `settings.json` (optional; the wizard merges into it on save) and
   relaunch `Tf.exe` to get the wizard again.
 - Flag present but token missing → set the token on the **Settings** tab
   and save; it is the same storage the wizard writes.
 
 ## Pitfalls
 
-- **"Skip for now" is not a save.** It closes the wizard without writing
-  the flag or the token — the wizard reappears on every launch until a
-  real save happens (or the flag is written by hand; avoid that, it can
-  strand you token-less with no wizard).
-- **The wizard save replaces settings wholesale** (it constructs a fresh
-  settings object with only the five wizard fields). Anything configured
-  *before* completing the wizard — webhook, governor cap, arm-staleness —
-  should be re-checked on the Settings tab afterwards.
+- **"Skip for now" defers, it does not configure.** Since the skip
+  writes the completion flag, the wizard will not come back on its own —
+  finish the token on the **Settings** tab. A skipped machine still
+  refuses to trade (every path needs the token) but looks unconfigured
+  rather than broken.
+- **Save refuses an empty or too-short token** with an inline error and
+  the wizard stays open — the configured-but-token-less state (the
+  "no token since Sep 12" failure mode) can no longer be produced by the
+  wizard itself.
 - **A paste that doesn't trade is usually scopes, not the token.** The
   token needs `read` + `trade` + `trading information`; an
   insufficiently-scoped token authenticates but cannot place anything.
