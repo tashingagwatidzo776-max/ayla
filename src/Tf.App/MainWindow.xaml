@@ -465,6 +465,21 @@
                                                 </Button.Style>
                                             </Button>
                                             <Button Margin="0,0,6,0" Padding="12,3"
+                                                    Command="{Binding DataContext.SettingsVm.SetPrimaryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                        <Setter Property="Content" Value="Set as primary" />
+                                                        <Setter Property="ToolTip" Value="Point the Dashboard, Trades and Brain surfaces at this account. Real accounts stay locked behind the session unlock." />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                                                <Setter Property="Content" Value="…" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Margin="0,0,6,0" Padding="12,3"
                                                     Command="{Binding DataContext.AccountsVm.TogglePauseCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}">
                                                 <Button.Style>

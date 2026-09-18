@@ -1,4 +1,5 @@
 using Tf.App.Infrastructure;
+using Tf.App.Services;
 using Tf.Core;
 using Tf.Core.Models;
 using Tf.Deriv;
@@ -62,6 +63,20 @@ public sealed class MainViewModel
 
         if (string.IsNullOrEmpty(settings.AppId))
         {
+            return;
+        }
+
+        // A "Set as primary" switch (Accounts tab) may have pointed the
+        // primary client at a new-platform PAT: re-apply that wiring on
+        // every startup, with discovery re-verified. Classic primaries are
+        // untouched by this (no-op wiring).
+        try
+        {
+            await PrimaryClientWiring.ApplyAsync(_client, settings);
+        }
+        catch (Exception ex)
+        {
+            SettingsVm.StatusMessage = $"Primary account wiring failed: {ex.Message}";
             return;
         }
 

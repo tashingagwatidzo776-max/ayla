@@ -148,14 +148,29 @@ public class NewPlatformDerivClientTests
         // URL was single-use) rather than replaying it.
         server.KillSocket();
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
-        while (client.Status != ConnectionStatus.Connected && DateTime.UtcNow < deadline)
+        // Wait on the observable fact (a second OTP minted = the ladder
+        // reconnected), not on Status transitions, which race the socket
+        // teardown on slow runners.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (Volatile.Read(ref otpCount) < 2 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100, cts.Token);
+        }
+        Assert.True(Volatile.Read(ref otpCount) >= 2, "reconnect did not mint a second OTP in time");
+
+        var connectedDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (client.Status != ConnectionStatus.Connected && DateTime.UtcNow < connectedDeadline)
         {
             await Task.Delay(100, cts.Token);
         }
 
         Assert.Equal(ConnectionStatus.Connected, client.Status);
-        Assert.Equal(2, otpCount); // a fresh OTP was minted for the reconnect
+
+        var tickDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!server.Received.Any(m => m.Contains("\"ticks\"")) && DateTime.UtcNow < tickDeadline)
+        {
+            await Task.Delay(100, cts.Token);
+        }
         Assert.Contains(server.Received, m => m.Contains("\"ticks\"")); // resubscribed
     }
 

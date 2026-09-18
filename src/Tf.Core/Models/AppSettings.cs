@@ -18,6 +18,25 @@ public sealed class AppSettings
     /// <summary>Deriv application id (works without a token for market data).</summary>
     public string AppId { get; set; } = DefaultAppId;
 
+    /// <summary>True when the primary client (Dashboard/Trades/Brain
+    /// surfaces) connects as a new-platform PAT: its token lives in
+    /// ApiToken encrypted as usual, but authentication goes through the
+    /// OTP flow with <see cref="PrimaryDerivAppId"/> and
+    /// <see cref="PrimaryDerivAccountId"/> instead of the classic
+    /// authorize call. Set by the Accounts tab's "Set as primary" switch.</summary>
+    public bool PrimaryNewPlatform { get; set; }
+
+    /// <summary>The PAT app's registered Deriv application id for the
+    /// primary client (the Deriv-App-ID header). Only read when
+    /// <see cref="PrimaryNewPlatform"/> is set; empty falls back to
+    /// <see cref="AppId"/>.</summary>
+    public string PrimaryDerivAppId { get; set; } = "";
+
+    /// <summary>The new-platform account id the primary client opens its
+    /// OTP socket for (e.g. DOT92951338 for demo, ROT… for real). Only
+    /// read when <see cref="PrimaryNewPlatform"/> is set.</summary>
+    public string PrimaryDerivAccountId { get; set; } = "";
+
     public bool IsDemo { get; set; } = true;
 
     /// <summary>Market symbol, e.g. frxEURUSD.</summary>
