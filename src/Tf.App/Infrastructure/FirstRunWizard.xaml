@@ -26,8 +26,10 @@
         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <TextBlock Text="API Token (demo)" Foreground="#FF9AA3B2" Margin="0,0,0,4" />
-                <PasswordBox x:Name="TokenBox" Margin="0,0,0,12"
+                <PasswordBox x:Name="TokenBox" Margin="0,0,0,4"
                              infra:PasswordBoxHelper.BoundPassword="{Binding ApiToken, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock x:Name="TokenError" Text="" Foreground="#FFFF6B6B" FontSize="12"
+                           TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed" />
 
                 <TextBlock Text="Symbol" Foreground="#FF9AA3B2" Margin="0,0,0,4" />
                 <TextBox x:Name="SymbolBox" Text="frxEURUSD" Margin="0,0,0,12" />
