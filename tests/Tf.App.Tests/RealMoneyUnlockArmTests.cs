@@ -170,7 +170,12 @@ public class RealMoneyUnlockArmTests : IDisposable
     public async Task UnlockRealMoney_AnnouncesOnTheWebhook()
     {
         var (listener, port) = TestHttpListenerFactory.CreateOnFreeLoopbackPort();
+        // The listener thread and the test thread meet here; the List is
+        // written on one thread and polled on another, so the count must be
+        // a volatile interlocked counter (a plain List read raced on slow
+        // CI runners).
         var bodies = new List<string>();
+        var bodyCount = 0;
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         _ = Task.Run(async () =>
         {
@@ -181,7 +186,8 @@ public class RealMoneyUnlockArmTests : IDisposable
                 catch { return; }
 
                 using var reader = new StreamReader(ctx.Request.InputStream);
-                bodies.Add(reader.ReadToEnd());
+                lock (bodies) { bodies.Add(reader.ReadToEnd()); }
+                Interlocked.Increment(ref bodyCount);
                 ctx.Response.StatusCode = 204;
                 ctx.Response.Close();
             }
@@ -204,13 +210,15 @@ public class RealMoneyUnlockArmTests : IDisposable
 
             hub.UnlockRealMoney(real.Config.Id);
 
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (bodies.Count == 0 && DateTime.UtcNow < deadline)
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (Volatile.Read(ref bodyCount) == 0 && DateTime.UtcNow < deadline)
             {
                 await Task.Delay(25);
             }
 
-            var body = Assert.Single(bodies);
+            List<string> snapshot;
+            lock (bodies) { snapshot = new List<string>(bodies); }
+            var body = Assert.Single(snapshot);
             using var doc = JsonDocument.Parse(body);
             var embed = doc.RootElement.GetProperty("embeds")[0];
             Assert.Contains("unlock armed", embed.GetProperty("title").GetString());
