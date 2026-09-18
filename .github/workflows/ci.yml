@@ -494,6 +494,11 @@ jobs:
       run: python3 scripts/check_safety_audit.py
     - name: Check rail-test trait coverage (gate drill selects by trait)
       run: python3 scripts/check_rail_traits.py
+    # A {StaticResource Key} that no scanned file declares cannot fail the
+    # C# build — it throws XamlParseException on first window load, i.e. on
+    # the user's machine (PR #77 shipped exactly that). Guard it here.
+    - name: Check XAML StaticResource references resolve
+      run: python3 scripts/check_xaml_resources.py
 
   # On PRs: diff the safety-audit coverage table against main so rail
   # changes are visible in-thread before merge — the same update-in-place
