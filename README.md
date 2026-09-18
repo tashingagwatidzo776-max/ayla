@@ -162,6 +162,11 @@ python scripts/soak_report.py --since 2026-09-17 --record docs/soak
 git add docs/soak && git commit -m "soak evidence"
 ```
 
+First launch (or the app looks configured but has no token)?
+[`docs/first-session.md`](docs/first-session.md) walks the first-run wizard
+field by field, explains the `wizard_done.flag` gate, and lists the
+ pitfalls ("Skip for now" saves nothing; the wizard save replaces settings).
+
 ## Configuration
 
 All settings are stored under `%APPDATA%\tf\data\`:
