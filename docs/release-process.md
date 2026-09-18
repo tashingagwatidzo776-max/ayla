@@ -244,8 +244,8 @@ iteration on non-test changes: `TF_CI_LOCAL_SKIP_BUILD=1` (or
 
 | Tag | What happened |
 |---|---|
+| `v0.0.4` | First-run wizard fixes shipped: settings merge (no more clobber), token floor enforced, skip writes the flag (#72); `publish_exe.ps1` now cleans its output dir first (#73). Chain green first-run on `73180fc`; the hardened attach succeeded on the **first** dispatch — no retries needed, first release where nothing went sideways. |
 | `v0.0.3` | Shipped the go-live readiness panel. Chain green first-run on `5e7f375`; the release asset attached server-side on the second dispatch — the first failed with GitHub's `Error creating asset temp dir` and **the workflow reported success anyway** (curl without `--fail`), which became PR #69: `--fail-with-body`, 3 retries, and a stored-size verification. Soak evidence now accumulates in `docs/soak/` and the weekly drill enforces its freshness (#68). |
-|---|---|
 | `v0.0.1-rc1` | Dry run: first full walk of drill → release-gate → publish-exe; artifact downloaded and verified; tag deleted afterwards. Its first run exposed a flaky gate test (async race), fixed via PR #53 before the real release. |
 | `v0.0.1` | First real release. Its first tag run failed the drill on a cross-collection race around the static manual-unlock latch (parallel test classes resetting the shared gate mid-assertion) — tag deleted, fix pinned the three gate classes into one xunit collection, re-tagged on the fixed commit. |
 | `v0.0.2` | First fully green first-run chain (drill → gate → publish on `c7df244`, all three jobs). The manual asset attach was blocked by a provider-side blob-host throttle (~11 KB/s single-stream); shipped via the new `publish-release.yml` path (Actions → Actions). The local download still completed by assembling 8 parallel ranged streams — recorded here because the artifact endpoint under-reported its size to the HEAD probe (use the API's `size_in_bytes`). |
