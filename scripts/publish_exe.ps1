@@ -60,6 +60,15 @@ $stamp = if ($isReleaseTag) { "$tag+$((git rev-parse HEAD).Trim())" }
          else { (git describe --tags --long --always --dirty 2>$null) }
 if ($stamp) { Write-Host "Stamping version: $stamp" }
 
+# Clean the output dir first: dotnet publish merges into whatever is
+# already there, so a previous (possibly stale or failed) publish's files
+# would survive into this run's output. A published exe must contain only
+# this run's bytes.
+if (Test-Path $out) {
+    Remove-Item -Recurse -Force $out
+    Write-Host "Cleaned stale publish output: $out"
+}
+
 $args = @(
     "publish", $proj,
     "-c", $Configuration,
