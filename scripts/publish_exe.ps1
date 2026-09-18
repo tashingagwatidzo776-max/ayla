@@ -30,7 +30,14 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 # gate-drill.yml (CI runs the drill on every v* tag); this script simply
 # refuses to publish from a tag whose drill failed or never ran. Non-release
 # builds (no tag, local iteration) skip the check entirely.
-$tag = git describe --exact-match --tags 2>$null
+$stderrFile = Join-Path $env:TEMP "tf-publish-describe-stderr.txt"
+# PS 5.1 wraps native stderr in error records under EAP=Stop (fatal even when
+# redirected), so relax EAP for these probes and decide on $LASTEXITCODE.
+$eapSaved = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$tag = git describe --exact-match --tags 2> $stderrFile
+if ($LASTEXITCODE -ne 0) { $tag = $null }
+$ErrorActionPreference = $eapSaved
 $isReleaseTag = $false
 $drillOk = $false
 if ($LASTEXITCODE -eq 0 -and $tag -match '^v') {
@@ -57,7 +64,13 @@ if ($LASTEXITCODE -eq 0 -and $tag -match '^v') {
 # Stamp the binary's identity (window title + About box): the release tag
 # when publishing from one, else the git describe of the current commit.
 $stamp = if ($isReleaseTag) { "$tag+$((git rev-parse HEAD).Trim())" }
-         else { (git describe --tags --long --always --dirty 2>$null) }
+         else {
+             $eapSaved = $ErrorActionPreference
+             $ErrorActionPreference = "Continue"
+             $describeLong = git describe --tags --long --always --dirty 2> $stderrFile
+             if ($LASTEXITCODE -ne 0) { $describeLong = $null }
+             $ErrorActionPreference = $eapSaved
+         }
 if ($stamp) { Write-Host "Stamping version: $stamp" }
 
 # Clean the output dir first: dotnet publish merges into whatever is

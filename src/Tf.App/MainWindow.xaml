@@ -398,8 +398,17 @@
                                     <CheckBox Content="PAT (new platform)" IsChecked="{Binding AccountsVm.NewIsPat}"
                                               ToolTip="Tick when the token was created on developers.deriv.com as a Personal Access Token. Classic tokens from app.deriv.com keep this unticked." />
                                 </StackPanel>
-                                <StackPanel Width="220" Margin="0,0,12,0"
-                                            Visibility="{Binding AccountsVm.NewIsPat, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel Width="220" Margin="0,0,12,0">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding AccountsVm.NewIsPat}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
                                     <TextBlock Text="PAT App ID (from your app registration)" Style="{StaticResource FieldLabel}" />
                                     <TextBox Text="{Binding AccountsVm.NewDerivAppId, UpdateSourceTrigger=PropertyChanged}"
                                              ToolTip="The Deriv application id shown on your developers.deriv.com app registration — required for PAT auth, not the token itself." />
