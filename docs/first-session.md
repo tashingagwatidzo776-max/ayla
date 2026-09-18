@@ -17,8 +17,11 @@ when the app "has no API token" even though you pasted one once.
      the dashboard offers). Copy it immediately — it cannot be viewed again.
   A PAT created on a **virtual/demo** account only touches the virtual
   balance; the app cross-checks what the API says against what it is told.
-  (Tokens created under the older app.deriv.com flow keep working on the
-  classic WebSocket endpoint the app uses.)
+  The app connects to both platforms: PATs authenticate through the new
+  platform (bearer + App ID -> one-time OTP WebSocket URL), and legacy
+  app.deriv.com tokens keep working on the classic WebSocket. If a fresh
+  PAT fails to authorize, check the **App ID** in Settings — PATs only pair
+  with the App ID of their own PAT-type app registration.
 - [ ] Know your symbol (default `frxEURUSD`).
 
 ## The wizard (first launch only)

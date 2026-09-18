@@ -76,6 +76,12 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     [ObservableProperty]
     private string verifiedText = "unverified";
 
+    /// <summary>New-platform accounts: the demo/real verdict taken from the
+    /// discovery record at connect time (the OTP socket carries no
+    /// is_virtual). Null on the classic platform or before discovery.</summary>
+    [ObservableProperty]
+    private bool? newPlatformVerifiedVirtual;
+
     /// <summary>Human-readable circuit breaker status.</summary>
     [ObservableProperty]
     private string circuitStatus = "";
@@ -83,7 +89,20 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     public AccountConnection(AccountConfig config, TickHistoryCache? tickCache = null, HeartbeatLog? heartbeat = null)
     {
         Config = config;
-        _client = new DerivClient { AppId = AppSettings.DefaultAppId };
+        _client = config.NewPlatform
+            ? new DerivClient
+            {
+                AppId = string.IsNullOrWhiteSpace(config.DerivAppId)
+                    ? AppSettings.DefaultAppId
+                    : config.DerivAppId.Trim(),
+                NewPlatform = new NewPlatformAuth(
+                    string.IsNullOrWhiteSpace(config.DerivAppId)
+                        ? AppSettings.DefaultAppId
+                        : config.DerivAppId.Trim()),
+                NewPlatformToken = config.ApiToken,
+                NewPlatformAccountId = config.DerivAccountId
+            }
+            : new DerivClient { AppId = AppSettings.DefaultAppId };
         _tickCache = tickCache;
         _heartbeat = heartbeat;
         BalanceText = config.IsDemo ? "demo" : "REAL";
@@ -146,6 +165,28 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         StatusText = "Connecting…";
         try
         {
+            // New platform: discovery is the demo/real verification — the
+            // account list names the account's type authoritatively. Patch
+            // it BEFORE connecting so the real-money gate never sees an
+            // unverified account, and keep the id current.
+            if (_client.NewPlatform is not null && _client.NewPlatformToken is not null)
+            {
+                var accounts = await _client.NewPlatform.ListAccountsAsync(_client.NewPlatformToken)
+                    .ConfigureAwait(true);
+                var match = accounts.FirstOrDefault(a =>
+                    a.AccountId == _client.NewPlatformAccountId)
+                    ?? accounts.FirstOrDefault(a => a.IsDemoAccount)
+                    ?? accounts.FirstOrDefault();
+                if (match is null)
+                {
+                    throw new InvalidOperationException(
+                        "The new platform listed no accounts for this token.");
+                }
+
+                _client.NewPlatformAccountId = match.AccountId;
+                NewPlatformVerifiedVirtual = match.IsDemoAccount;
+            }
+
             await _client.ConnectAsync(Config.ApiToken);
 
             // Backfill the signal window fast, then keep it live.
@@ -211,6 +252,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         BalanceText = Config.IsDemo ? "demo" : "REAL";
         ApiVerifiedVirtual = null;
         VerifiedText = "unverified";
+        NewPlatformVerifiedVirtual = null;
         _consecutiveFailures = 0;
         IsDegraded = false;
         CircuitStatus = "";
@@ -254,6 +296,15 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         BalanceText = $"{balance.Balance:0.##} {balance.Currency}";
         ApiVerifiedVirtual = balance.IsVirtual;
         VerifiedText = balance.IsVirtual ? "demo (API)" : "REAL (API)";
+        // New platform: the authorize-less OTP socket carries no is_virtual,
+        // so the authoritative verdict comes from the discovery record taken
+        // at connect time. Unknown still parses as virtual (fail closed) and
+        // the discovery patch below corrects it when the type is known.
+        if (NewPlatformVerifiedVirtual is not null)
+        {
+            ApiVerifiedVirtual = NewPlatformVerifiedVirtual;
+            VerifiedText = NewPlatformVerifiedVirtual.Value ? "demo (new platform)" : "REAL (new platform)";
+        }
         if (!string.IsNullOrEmpty(balance.LoginId))
         {
             LoginIdText = balance.LoginId;

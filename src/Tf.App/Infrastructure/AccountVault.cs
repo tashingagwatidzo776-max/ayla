@@ -22,6 +22,22 @@ public sealed class AccountConfig
     /// When this is "Ensemble", <see cref="EnsembleConfig"/> decides the voters.</summary>
     public string BrainKey { get; set; } = "Growth";
 
+    /// <summary>True when <see cref="ApiToken"/> is a new-platform Personal
+    /// Access Token (developers.deriv.com PAT app): connects through the
+    /// OTP WebSocket flow instead of the classic authorize call. False
+    /// (default) keeps the classic v3 endpoint.</summary>
+    public bool NewPlatform { get; set; }
+
+    /// <summary>The PAT app's registered Deriv application id — required
+    /// for new-platform auth (the Deriv-App-ID header). Only read when
+    /// <see cref="NewPlatform"/> is set.</summary>
+    public string DerivAppId { get; set; } = "";
+
+    /// <summary>The new-platform account id to open the OTP socket for
+    /// (e.g. DOT92951338). Optional: on connect, the account list is used
+    /// to find the demo account when this is empty.</summary>
+    public string DerivAccountId { get; set; } = "";
+
     /// <summary>Ensemble configuration: brain keys with optional weights
     /// ("Growth:1.5 TrendFollowing Breakout:0.5"), parsed by
     /// <see cref="Tf.Core.Brain.EnsemblePlanParser"/>. Only read when

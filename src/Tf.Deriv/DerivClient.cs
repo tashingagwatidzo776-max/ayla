@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -61,8 +62,28 @@ public sealed class DerivClient : IAsyncDisposable
     /// </summary>
     public TimeSpan SettlementPollInterval { get; set; } = TimeSpan.FromSeconds(2);
 
-    /// <summary>Application id used in the handshake (public market data needs no token).</summary>
+    /// <summary>Application id used in the handshake (public market data needs no token).
+    /// On the new platform this must be the PAT app's own registered id.</summary>
     public string AppId { get; set; } = AppSettings.DefaultAppId;
+
+    /// <summary>When non-null, connects through Deriv's new platform: the
+    /// client exchanges the bearer token for a one-time authenticated
+    /// WebSocket URL (OTP) instead of using the classic authorize call.
+    /// Configure <see cref="NewPlatformToken"/> alongside it.</summary>
+    public NewPlatformAuth? NewPlatform { get; set; }
+
+    /// <summary>The bearer (PAT) token used for new-platform OTP exchange.
+    /// Ignored when <see cref="NewPlatform"/> is null.</summary>
+    public string? NewPlatformToken { get; set; }
+
+    /// <summary>The new-platform account the OTP socket is opened for
+    /// (e.g. DOT... for demo). Required in new-platform mode.</summary>
+    public string? NewPlatformAccountId { get; set; }
+
+    /// <summary>Overrides the OTP WebSocket URL handed back by the new
+    /// platform. Test seam only: set by fake-server tests to skip the REST
+    /// leg. When null, the URL comes from <see cref="NewPlatform"/>.</summary>
+    public Func<CancellationToken, Task<string>>? NewPlatformUrlOverride { get; set; }
 
     /// <summary>Symbol currently subscribed (null when not subscribed).</summary>
     public string? SubscribedSymbol { get; private set; }
@@ -106,6 +127,15 @@ public sealed class DerivClient : IAsyncDisposable
         SetStatus(ConnectionStatus.Connecting);
         _connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _cts = new CancellationTokenSource();
+
+        if (NewPlatform is not null)
+        {
+            // New platform: the OTP URL arrives pre-authorized for the
+            // account, so no classic authorize call follows.
+            await ConnectOtpAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
         var socket = new ClientWebSocket();
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
 
@@ -124,6 +154,52 @@ public sealed class DerivClient : IAsyncDisposable
         if (apiToken is not null)
         {
             await AuthorizeAsync(apiToken, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Connects through the new platform: exchanges the bearer
+    /// token for a one-time OTP WebSocket URL and connects to it. The
+    /// socket is pre-authorized — the server rejects a classic authorize —
+    /// so this path never sends one.</summary>
+    private async Task ConnectOtpAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(NewPlatformToken) || string.IsNullOrEmpty(NewPlatformAccountId))
+        {
+            throw new InvalidOperationException(
+                "New-platform mode requires both the PAT token and the account id.");
+        }
+
+        var socket = new ClientWebSocket();
+        socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+
+        var url = NewPlatformUrlOverride is not null
+            ? await NewPlatformUrlOverride(ct).ConfigureAwait(false)
+            : await NewPlatform!.GetOtpWebSocketUrlAsync(NewPlatformToken, NewPlatformAccountId, ct)
+                .ConfigureAwait(false);
+        await socket.ConnectAsync(new Uri(url), ct).ConfigureAwait(false);
+
+        lock (_sync)
+        {
+            _socket = socket;
+        }
+
+        _reconnectAttempt = 0;
+        SetStatus(ConnectionStatus.Connected);
+        _receiveTask = Task.Run(() => ReceiveLoopAsync(_cts!.Token));
+
+        // The OTP URL is minted for one specific account, so the session's
+        // identity is known without any authorize exchange.
+        LoginId = NewPlatformAccountId;
+
+        // Seed the balance the authorize path would have provided.
+        try
+        {
+            await GetBalanceAsync(ct).ConfigureAwait(false);
+        }
+        catch (DerivApiException)
+        {
+            // A failed balance probe must not break the (already authorized)
+            // connection; the balance subscription refreshes it.
         }
     }
 
@@ -278,17 +354,33 @@ public sealed class DerivClient : IAsyncDisposable
         int durationMinutes, CancellationToken ct = default)
     {
         EnsureConnected();
-        using var response = await SendAsync(new
-        {
-            proposal = 1,
-            amount,
-            basis = "stake",
-            contract_type = direction.ToContractType(),
-            currency,
-            duration = durationMinutes,
-            duration_unit = "m",
-            symbol
-        }, ct).ConfigureAwait(false);
+        // New platform renames this field (verified live: "symbol" is
+        // rejected with InputValidationFailed); classic keeps "symbol".
+        var payload = NewPlatform is null
+            ? (object)new
+            {
+                proposal = 1,
+                amount,
+                basis = "stake",
+                contract_type = direction.ToContractType(),
+                currency,
+                duration = durationMinutes,
+                duration_unit = "m",
+                symbol
+            }
+            : new
+            {
+                proposal = 1,
+                amount,
+                basis = "stake",
+                contract_type = direction.ToContractType(),
+                currency,
+                duration = durationMinutes,
+                duration_unit = "m",
+                underlying_symbol = symbol
+            };
+
+        using var response = await SendAsync(payload, ct).ConfigureAwait(false);
 
         var p = response.RootElement.GetProperty("proposal");
         var id = p.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
@@ -583,7 +675,9 @@ public sealed class DerivClient : IAsyncDisposable
         var currency = balance.TryGetProperty("currency", out var c) ? c.GetString() ?? "USD" : "USD";
         var loginId = balance.TryGetProperty("loginid", out var l) ? l.GetString() ?? "" : "";
         // Deriv's own demo/real flag — missing/malformed parses as virtual
-        // (an unverified account must never be treated as real).
+        // (an unverified account must never be treated as real). On the new
+        // platform the flag lives on the discovery record instead: callers
+        // that know the account's type patch it via IsVirtualOverride.
         var isVirtual = AccountBalance.ParseIsVirtual(balance);
         return new AccountBalance(value, currency, loginId, isVirtual);
     }
@@ -633,6 +727,26 @@ public sealed class DerivClient : IAsyncDisposable
 
     private async Task ConnectCoreAsync(CancellationToken ct)
     {
+        // New platform reconnects mint a fresh OTP: the old socket's URL was
+        // single-use and is long expired. Same pre-authorized semantics —
+        // no classic authorize afterwards.
+        if (NewPlatform is not null)
+        {
+            SetStatus(ConnectionStatus.Connecting);
+            await ConnectOtpAsync(ct).ConfigureAwait(false);
+
+            string[] subs;
+            lock (_sync)
+            {
+                subs = _subscriptions.ToArray();
+            }
+            foreach (var symbol in subs)
+            {
+                await SendAsync(new { ticks = symbol, subscribe = 1 }, ct).ConfigureAwait(false);
+            }
+            return;
+        }
+
         // Refresh the socket handle (the old one is dead).
         var socket = new ClientWebSocket();
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);

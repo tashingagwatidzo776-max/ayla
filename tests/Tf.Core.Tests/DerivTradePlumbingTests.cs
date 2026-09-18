@@ -173,13 +173,14 @@ public class DerivTradePlumbingTests
     /// Tiny in-process Deriv API stand-in: accepts one WebSocket connection,
     /// records every request, and answers from a responder function.
     /// </summary>
-    private sealed class FakeDerivServer : IAsyncDisposable
+    internal sealed class FakeDerivServer : IAsyncDisposable
     {
         private readonly HttpListener _listener;
         private readonly Func<JsonElement, string> _responder;
         private readonly List<string> _received = new();
         private readonly object _sync = new();
         private Task? _runTask;
+        private WebSocket? _currentSocket;
 
         public FakeDerivServer(Func<JsonElement, string> responder)
         {
@@ -196,6 +197,15 @@ public class DerivTradePlumbingTests
             get { lock (_sync) { return _received.ToArray(); } }
         }
 
+        /// <summary>Force-aborts the current socket (server side) to simulate
+        /// a dropped connection; the fake accepts the next connection after.
+        /// Lets tests exercise the client's reconnect ladder.</summary>
+        public void KillSocket()
+        {
+            var ws = _currentSocket;
+            try { ws?.Abort(); } catch { /* best effort */ }
+        }
+
         public Task RunAsync(CancellationToken ct = default)
         {
             _runTask ??= Task.Run(() => RunCoreAsync(ct), CancellationToken.None);
@@ -204,46 +214,66 @@ public class DerivTradePlumbingTests
 
         private async Task RunCoreAsync(CancellationToken ct)
         {
-            var context = await _listener.GetContextAsync().WaitAsync(ct);
-            var ws = await context.AcceptWebSocketAsync(null).WaitAsync(ct);
             var buffer = new byte[65536];
 
-            try
+            // Accept connections in a loop: reconnect tests drop the socket
+            // and expect a fresh accept on the same listener.
+            while (!ct.IsCancellationRequested)
             {
-                while (!ct.IsCancellationRequested)
+                HttpListenerWebSocketContext ws;
+                try
                 {
-                    var result = await ws.WebSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        break;
-                    }
+                    var context = await _listener.GetContextAsync().WaitAsync(ct);
+                    ws = await context.AcceptWebSocketAsync(null).WaitAsync(ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception)
+                {
+                    break;
+                }
 
-                    var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    lock (_sync)
-                    {
-                        _received.Add(json);
-                    }
+                _currentSocket = ws.WebSocket;
 
-                    using var doc = JsonDocument.Parse(json);
-                    var response = _responder(doc.RootElement);
-                    if (!string.IsNullOrEmpty(response))
+                try
+                {
+                    while (!ct.IsCancellationRequested)
                     {
-                        var bytes = Encoding.UTF8.GetBytes(response);
-                        await ws.WebSocket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+                        var result = await ws.WebSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                        if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            break;
+                        }
+
+                        var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                        lock (_sync)
+                        {
+                            _received.Add(json);
+                        }
+
+                        using var doc = JsonDocument.Parse(json);
+                        var response = _responder(doc.RootElement);
+                        if (!string.IsNullOrEmpty(response))
+                        {
+                            var bytes = Encoding.UTF8.GetBytes(response);
+                            await ws.WebSocket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+                        }
                     }
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                // test finished
-            }
-            catch (WebSocketException)
-            {
-                // client went away
-            }
-            finally
-            {
-                try { ws.WebSocket.Dispose(); } catch { /* best effort */ }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (WebSocketException)
+                {
+                    // socket went away — accept the next connection
+                }
+                finally
+                {
+                    try { ws.WebSocket.Dispose(); } catch { /* best effort */ }
+                }
             }
         }
 
