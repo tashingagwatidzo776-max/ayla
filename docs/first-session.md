@@ -6,9 +6,19 @@ when the app "has no API token" even though you pasted one once.
 ## Before you launch
 
 - [ ] `Tf.exe` downloaded from a release tag (self-contained — no install step).
-- [ ] A Deriv **demo** API token ready: Deriv → Settings → API token, scopes
-  `read`, `trade`, `trading information`. Demo tokens come from a **virtual**
-  account; the app cross-checks what the API says against what it is told.
+- [ ] A Deriv **demo** API token ready. Deriv now issues tokens as
+  **Personal Access Tokens (PATs)** from the developer dashboard:
+  1. Log in at **developers.deriv.com**.
+  2. Register an application (Dashboard → register app) and choose the
+     **PAT** type — that is the desktop/manual-token-entry model. This
+     generates a new App ID; legacy App IDs do not work with the new APIs.
+  3. In the Dashboard's **API tokens** section, create a PAT and select the
+     trading scopes (e.g. `trade`, plus the read/trading-information scopes
+     the dashboard offers). Copy it immediately — it cannot be viewed again.
+  A PAT created on a **virtual/demo** account only touches the virtual
+  balance; the app cross-checks what the API says against what it is told.
+  (Tokens created under the older app.deriv.com flow keep working on the
+  classic WebSocket endpoint the app uses.)
 - [ ] Know your symbol (default `frxEURUSD`).
 
 ## The wizard (first launch only)
