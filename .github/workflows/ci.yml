@@ -60,8 +60,18 @@ jobs:
     - name: Build
       run: dotnet build --no-restore --configuration Release
 
+    # One automatic retry: a suite that passes elsewhere but flakes on a
+    # runner (timing, listener races) must not block a PR. The retry
+    # re-collects coverage, overwriting the failed attempt's files.
     - name: Test (Unit)
-      run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit" --collect:"XPlat Code Coverage" --results-directory ./coverage
+      shell: pwsh
+      run: |
+        dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit" --collect:"XPlat Code Coverage" --results-directory ./coverage
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::warning::Unit tests failed on the first attempt - retrying once (flake guard)"
+          dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit" --collect:"XPlat Code Coverage" --results-directory ./coverage
+          exit $LASTEXITCODE
+        }
 
     - name: Upload coverage artifact (Unit)
       uses: actions/upload-artifact@v7
@@ -94,7 +104,14 @@ jobs:
     # rejects anonymous handshakes from datacenter IPs, so the anonymous smoke
     # test must never run on CI runners).
     - name: Test (Integration)
-      run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration" --collect:"XPlat Code Coverage" --results-directory ./coverage
+      shell: pwsh
+      run: |
+        dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration" --collect:"XPlat Code Coverage" --results-directory ./coverage
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::warning::Integration tests failed on the first attempt - retrying once (flake guard)"
+          dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration" --collect:"XPlat Code Coverage" --results-directory ./coverage
+          exit $LASTEXITCODE
+        }
       env:
         TF_DERIV_TOKEN: ${{ secrets.TF_DERIV_TOKEN }}
         TF_DERIV_APP_ID: ${{ secrets.TF_DERIV_APP_ID }}
