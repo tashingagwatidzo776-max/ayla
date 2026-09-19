@@ -32,5 +32,5 @@ do not edit rows by hand.
 
 | Date | Entries | Settlements | Refusals | Verdict |
 |------|--------:|------------:|---------:|---------|
-| — | — | — | — | no evidence recorded yet |
+| 2026-09-19 | 73 | 0 | 0 | CLEAN |
 <!-- soak-trend:end -->

@@ -342,6 +342,7 @@
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />   <!-- add-account card -->
+                        <RowDefinition Height="Auto" />   <!-- PAT split band -->
                         <RowDefinition Height="Auto" />   <!-- accounts header -->
                         <RowDefinition Height="220" />    <!-- accounts grid -->
                         <RowDefinition Height="Auto" />   <!-- go-live readiness panel -->
@@ -433,9 +434,47 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- ── PAT split guided flow (hidden when every account has its own token) -->
+                    <Border Grid.Row="1" Grid.ColumnSpan="2" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,10,0,0"
+                            Background="#14FF9800">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding AccountsVm.HasSharedToken}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <TextBlock Text="SPLIT SHARED TOKEN — one token per account stops the reconnect churn"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="{Binding AccountsVm.SharedTokens}" Margin="0,4,0,0"
+                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                            <TextBlock Text="1. Create a fresh token in Deriv (app.deriv.com → Settings → API token) for the account below.  2. Paste it and Verify.  3. Apply — the account keeps its id and history."
+                                       Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <Button Content="Detect shared tokens" Style="{StaticResource GhostButton}"
+                                        Command="{Binding AccountsVm.DetectSharedTokensCommand}" />
+                                <TextBlock Text="{Binding AccountsVm.SplitAccountLabel}" Margin="10,0,0,0" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBox Text="{Binding AccountsVm.SplitNewToken, UpdateSourceTrigger=PropertyChanged}" Width="280"
+                                         Margin="10,0,0,0" ToolTip="The fresh per-account token you created in Deriv" />
+                                <Button Content="Verify" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding AccountsVm.VerifySplitTokenCommand}" />
+                                <Button Content="Apply" Margin="8,0,0,0"
+                                        Command="{Binding AccountsVm.ApplySplitTokenCommand}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding AccountsVm.SplitVerifyResult}" Margin="0,6,0,0"
+                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
                     <!-- ── Connected accounts grid ──────────────────── -->
-                    <TextBlock Grid.Row="1" Text="CONNECTED ACCOUNTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding AccountsVm.Accounts}" AutoGenerateColumns="False"
+                    <TextBlock Grid.Row="2" Text="CONNECTED ACCOUNTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <DataGrid Grid.Row="3" ItemsSource="{Binding AccountsVm.Accounts}" AutoGenerateColumns="False"
                               HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True" Margin="0,0,0,10">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Account" Width="140" Binding="{Binding DisplayName}" />
@@ -529,7 +568,7 @@
                     </DataGrid>
 
                     <!-- ── Go-live readiness (real trading) ────────── -->
-                    <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,10">
+                    <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,0,0,10">
                         <StackPanel>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="GO-LIVE READINESS" Style="{StaticResource SectionTitle}" />
@@ -565,7 +604,7 @@
                     </Border>
 
                     <!-- ── Growth plan card ──────────────────────────── -->
-                    <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,0,0,10">
+                    <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0,0,0,10">
                         <StackPanel>
                             <TextBlock Text="GROWTH ENGINES — the second brain ($5 challenge)" Style="{StaticResource SectionTitle}" />
                             <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
@@ -634,7 +673,7 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- ── Growth runners grid ───────────────────────── -->                     <TextBlock Grid.Row="5" Text="RUNNERS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />                     <DataGrid Grid.Row="6" ItemsSource="{Binding GrowthVm.Rows}" AutoGenerateColumns="False"
+                    <!-- ── Growth runners grid ───────────────────────── -->                     <TextBlock Grid.Row="6" Text="RUNNERS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />                     <DataGrid Grid.Row="7" ItemsSource="{Binding GrowthVm.Rows}" AutoGenerateColumns="False"
                               HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Account" Width="130" Binding="{Binding DisplayName}" />
@@ -680,7 +719,7 @@
                         </DataGrid.Columns>
                     </DataGrid>
 
-                    <!-- ── Locked real-money banners (session unlock not armed) ── -->                     <ItemsControl Grid.Row="7" ItemsSource="{Binding GrowthVm.LockedRealAccountBanners}" Margin="0,0,0,4">
+                    <!-- ── Locked real-money banners (session unlock not armed) ── -->                     <ItemsControl Grid.Row="8" ItemsSource="{Binding GrowthVm.LockedRealAccountBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
@@ -697,7 +736,7 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- ── In-tab real-money unlock panel ────────── -->                     <Border Grid.Row="8" Margin="0,0,0,4" CornerRadius="4" Padding="12,10"
+                    <!-- ── In-tab real-money unlock panel ────────── -->                     <Border Grid.Row="9" Margin="0,0,0,4" CornerRadius="4" Padding="12,10"
                             Background="#22FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -742,7 +781,7 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- ── Stale-unlock banners (armed past the staleness threshold) ── -->                     <ItemsControl Grid.Row="9" ItemsSource="{Binding GrowthVm.StaleUnlockBanners}" Margin="0,0,0,4">
+                    <!-- ── Stale-unlock banners (armed past the staleness threshold) ── -->                     <ItemsControl Grid.Row="10" ItemsSource="{Binding GrowthVm.StaleUnlockBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
@@ -755,7 +794,7 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->                     <ItemsControl Grid.Row="10" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
+                    <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->                     <ItemsControl Grid.Row="11" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
@@ -774,7 +813,7 @@
                     </ItemsControl>
 
                     <!-- ── Portfolio governor latch banner ────────── -->
-                    <Border Grid.Row="11" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="12" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -794,7 +833,7 @@
                     </Border>
 
                     <!-- ── Portfolio governor warning banner ──────── -->
-                    <Border Grid.Row="12" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="13" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -814,8 +853,8 @@
                     </Border>
 
                     <!-- ── Activity log ──────────────────────────────── -->
-                    <TextBlock Grid.Row="13" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="14" Style="{StaticResource Card}" Padding="10">
+                    <TextBlock Grid.Row="14" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="15" Style="{StaticResource Card}" Padding="10">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <ItemsControl ItemsSource="{Binding GrowthVm.ActivityLog}">
                                 <ItemsControl.ItemTemplate>
@@ -829,8 +868,8 @@
                     </Border>
 
                     <!-- ── Intraday P&amp;L curve (per account, cumulative) ───── -->
-                    <TextBlock Grid.Row="15" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="16" Style="{StaticResource Card}" Padding="6">
+                    <TextBlock Grid.Row="16" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="17" Style="{StaticResource Card}" Padding="6">
                         <controls:PnlCurveControl x:Name="PnlCurve" />
                     </Border>
                 </Grid>
@@ -1426,4 +1465,4 @@
             </TabItem>
         </TabControl>
     </DockPanel>
-</Window>
+</Window>

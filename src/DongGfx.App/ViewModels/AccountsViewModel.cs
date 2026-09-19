@@ -13,11 +13,15 @@ namespace DongGfx.App.ViewModels;
 /// <summary>
 /// Multi-account management: paste one Deriv API token per account row,
 /// connect all simultaneously (one WebSocket per account), and remove them.
+/// Also hosts the PAT-split guided flow: when two accounts share one token,
+/// it walks the user through creating a per-account token and re-imports the
+/// account in place (same id — history preserved).
 /// </summary>
 public sealed partial class AccountsViewModel : ObservableObject
 {
     private readonly MultiAccountHub _hub;
     private readonly Func<AppSettings> _settings;
+    private readonly PatSplitWizard _patSplit;
 
     [ObservableProperty]
     private string newToken = "";
@@ -68,6 +72,21 @@ public sealed partial class AccountsViewModel : ObservableObject
     {
         _hub = hub;
         _settings = settings;
+        _patSplit = new PatSplitWizard(hub, VerifyTokenViaDiscovery);
+    }
+
+    /// <summary>Non-disruptive token verification: Deriv's discovery endpoint
+    /// over plain HTTPS — the live WebSocket sessions are never touched. Uses
+    /// the primary client's PAT app id when configured (the token was created
+    /// under that app), else the classic default.</summary>
+    private async Task<IReadOnlyList<NewPlatformAccount>> VerifyTokenViaDiscovery(string token)
+    {
+        var settings = _settings();
+        var appId = settings.PrimaryNewPlatform && settings.PrimaryDerivAppId.Length > 0
+            ? settings.PrimaryDerivAppId
+            : settings.AppId;
+        var auth = new NewPlatformAuth(appId);
+        return await auth.ListAccountsAsync(token).ConfigureAwait(false);
     }
 
     public string DemoNotice =>
@@ -247,6 +266,120 @@ public sealed partial class AccountsViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"Export failed: {ex.Message}";
+        }
+    }
+
+    // ── PAT split guided flow ──────────────────────────────────────────
+    // Two accounts on one token churn each other's sessions (the measured
+    // reconnect-storm root cause). This flow walks the user through minting
+    // one token per account and re-imports them in place.
+
+    /// <summary>Token groups shared by more than one account row, refreshed
+    /// by <see cref="DetectSharedTokens"/>.</summary>
+    public ObservableCollection<string> SharedTokens { get; } = new();
+
+    /// <summary>The shared token currently being split.</summary>
+    [ObservableProperty]
+    private string splitTargetToken = "";
+
+    /// <summary>The account (by label) the pending token will be applied to.</summary>
+    [ObservableProperty]
+    private string splitAccountLabel = "";
+
+    /// <summary>The new per-account token the user pasted for the pending split.</summary>
+    [ObservableProperty]
+    private string splitNewToken = "";
+
+    /// <summary>The discovery verdict for the pending token — shown to the
+    /// user so they can confirm the token opens the right account before it
+    /// replaces the shared one.</summary>
+    [ObservableProperty]
+    private string splitVerifyResult = "";
+
+    [ObservableProperty]
+    private bool hasSharedToken;
+
+    [RelayCommand]
+    private void DetectSharedTokens()
+    {
+        var groups = _patSplit.DetectSharedTokens();
+        SharedTokens.Clear();
+        foreach (var g in groups)
+        {
+            SharedTokens.Add($"{g.Labels.Count} accounts share one token: {string.Join(", ", g.Labels)}");
+        }
+        HasSharedToken = groups.Count > 0;
+        if (groups.Count > 0)
+        {
+            SplitTargetToken = groups[0].Token;
+            SplitAccountLabel = groups[0].Labels[0];
+            StatusMessage = $"Shared token detected — create a fresh token in Deriv for '{SplitAccountLabel}', paste it below, then Verify.";
+        }
+        else
+        {
+            SplitTargetToken = "";
+            SplitAccountLabel = "";
+            StatusMessage = "No shared tokens — every account already has its own token. 🎉";
+        }
+    }
+
+    [RelayCommand]
+    private async Task VerifySplitTokenAsync()
+    {
+        if (IsBusy || string.IsNullOrWhiteSpace(SplitNewToken))
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var accounts = await _patSplit.VerifyNewTokenAsync(SplitNewToken.Trim());
+            var summary = string.Join(", ", accounts.Select(a =>
+                $"{a.AccountId} ({(a.IsDemoAccount ? "demo" : "REAL")}, {a.Balance:0.00} {a.Currency})"));
+            SplitVerifyResult = $"Token verified — opens: {summary}";
+            StatusMessage = "Token verified. Check the account above is the right one, then Apply.";
+        }
+        catch (Exception ex)
+        {
+            SplitVerifyResult = "";
+            StatusMessage = $"Token rejected: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void ApplySplitToken()
+    {
+        if (string.IsNullOrWhiteSpace(SplitNewToken))
+        {
+            StatusMessage = "Verify a token first — nothing to apply.";
+            return;
+        }
+
+        try
+        {
+            // The pending token was verified for the first account of the
+            // group (SplitAccountLabel); find it by label + shared token.
+            var target = Accounts.FirstOrDefault(a =>
+                a.Config.Label == SplitAccountLabel &&
+                a.Config.ApiToken == SplitTargetToken)
+                ?? throw new InvalidOperationException(
+                    $"No account '{SplitAccountLabel}' on the shared token — re-run Detect.");
+
+            _patSplit.ApplyToken(target.Config.Id, SplitNewToken);
+            StatusMessage = $"'{SplitAccountLabel}' now has its own token (id preserved). " +
+                "Press Connect on its row to use it — no re-import needed.";
+            SplitNewToken = "";
+            SplitVerifyResult = "";
+            DetectSharedTokens();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Split failed: {ex.Message}";
         }
     }
 
