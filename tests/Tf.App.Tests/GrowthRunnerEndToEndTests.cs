@@ -874,7 +874,7 @@ public class GrowthRunnerEndToEndTests
                 proposalRequests++;
                 proposalRequestsSeen.Enqueue(clock.CurrentMs());
                 if (proposalRequests <= failedProposals)
-                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"synthetic proposal failure\"}}}}";
+                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"BrokerUnavailable\",\"message\":\"synthetic proposal failure\"}}}}";
 
                 var id = $"PROP-ERR-{proposalRequests}";
                 proposalStakeById[id] = req.GetProperty("amount").GetDecimal();
@@ -1077,7 +1077,7 @@ public class GrowthRunnerEndToEndTests
             {
                 proposalRequests++;
                 if (proposalRequests == 1)
-                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"telemetry drill failure\"}}}}";
+                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"BrokerUnavailable\",\"message\":\"telemetry drill failure\"}}}}";
                 return $"{{\"msg_type\":\"proposal\",\"req_id\":{reqId},\"proposal\":{{\"id\":\"PROP-TELEMETRY-1\",\"spot\":1.17000,\"longcode\":\"Rise contract\",\"payout\":1.90}}}}";
             }
 

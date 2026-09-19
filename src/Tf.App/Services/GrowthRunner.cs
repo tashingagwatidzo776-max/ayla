@@ -211,7 +211,16 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             () => Connection.Ticks, risk, lessons, OnCycle,
             TimeSpan.FromSeconds(plan.FailureBackoffSeconds), timeProvider: _timeProvider,
             onCycleLatencyMs: ms => Metrics.RecordLatency(ms, Connection.DisplayName, _timeProvider.GetUtcNow()),
-            onCycleError: exType => Metrics.RecordError(Connection.DisplayName, _timeProvider.GetUtcNow()));
+            onCycleError: exType => Metrics.RecordError(Connection.DisplayName, _timeProvider.GetUtcNow()),
+            marketClosedProbe: ex => MarketClosedNotice.ParseReopenUtc(ex.Message, _timeProvider.GetUtcNow()),
+            onMarketClosed: reopen =>
+            {
+                // Expected weekend/holiday state, not a failure: show it as
+                // such and keep the engine armed for the automatic resume.
+                SessionStateText = $"market closed — resumes {reopen.ToLocalTime():HH:mm}";
+                LastActivity = $"{DateTime.Now:HH:mm:ss} Market closed — engine idles until {reopen.ToLocalTime():HH:mm}, then resumes automatically";
+                RaiseState();
+            });
 
         IsRunning = true;
         RaiseState();

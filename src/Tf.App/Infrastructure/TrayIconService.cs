@@ -19,13 +19,18 @@ public sealed class TrayIconService : IDisposable
         _window = window;
 
         _icon = new System.Windows.Forms.NotifyIcon();
-        _icon.Text = "Tf — Deriv Trader";
+        _icon.Text = "DON G FX — Deriv Trader";
         _icon.Visible = false;
 
-        // Use the app's embedded icon if available; fall back to a default.
+        // Prefer the brand icon (packed as a WPF resource so it survives
+        // single-file publish); fall back to a default glyph.
         try
         {
-            _icon.Icon = SystemIcons.Application;
+            var sri = System.Windows.Application.GetResourceStream(
+                new Uri("pack://application:,,,/assets/logo.ico"));
+            _icon.Icon = sri is not null
+                ? new System.Drawing.Icon(sri.Stream)
+                : SystemIcons.Application;
         }
         catch
         {
@@ -82,7 +87,7 @@ public sealed class TrayIconService : IDisposable
         _icon.Visible = true;
         _icon.ShowBalloonTip(
             2000,
-            "Tf — Deriv Trader",
+            "DON G FX — Deriv Trader",
             "Running in background. Double-click tray icon to restore.",
             System.Windows.Forms.ToolTipIcon.Info);
     }

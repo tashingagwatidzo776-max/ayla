@@ -31,6 +31,19 @@ public sealed class DerivClient : IAsyncDisposable
     private int _nextReqId = 1;
     private bool _disposed;
     private int _reconnectAttempt;
+
+    // When the current/last live socket reached Connected. Used to detect
+    // rapid-death cycles: a connection that lives only seconds before the
+    // next drop means the endpoint is REFUSING sessions (invalid/expired
+    // OTP, session churn, rate limiting) — backing off harder there stops a
+    // 2s-per-attempt reconnect storm that would otherwise never end.
+    private DateTimeOffset _connectedAtUtc = DateTimeOffset.MinValue;
+    private int _rapidDropStreak;
+    private bool _backoffGuidanceShown;
+
+    // Serializes OTP mints: two concurrent mint requests for one token can
+    // race and one of the two single-use URLs is then wasted mid-handshake.
+    private readonly SemaphoreSlim _otpMintGate = new(1, 1);
     private string? _authorizedToken;
 
     // Set by an explicit DisconnectAsync: the caller asked the session to end,
@@ -116,13 +129,17 @@ public sealed class DerivClient : IAsyncDisposable
         ThrowIfDisposed();
         lock (_sync)
         {
-            if (Status is ConnectionStatus.Connected or ConnectionStatus.Connecting)
+            if (Status is ConnectionStatus.Connected or ConnectionStatus.Connecting
+                or ConnectionStatus.Reconnecting)
             {
-                if (apiToken is not null && LoginId is null)
+                if (Status == ConnectionStatus.Connected && apiToken is not null && LoginId is null)
                 {
                     // Already connected but not authorized: authorize now.
                     _ = AuthorizeAsync(apiToken, ct);
                 }
+                // Reconnecting counts as in-flight: the pending reconnect
+                // already owns the socket. A second concurrent connect here
+                // would race it into two parallel sockets on one session.
                 return;
             }
         }
@@ -179,10 +196,19 @@ public sealed class DerivClient : IAsyncDisposable
         var socket = new ClientWebSocket();
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
 
-        var url = NewPlatformUrlOverride is not null
-            ? await NewPlatformUrlOverride(ct).ConfigureAwait(false)
-            : await NewPlatform!.GetOtpWebSocketUrlAsync(NewPlatformToken, NewPlatformAccountId, ct)
-                .ConfigureAwait(false);
+        string url;
+        await _otpMintGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            url = NewPlatformUrlOverride is not null
+                ? await NewPlatformUrlOverride(ct).ConfigureAwait(false)
+                : await NewPlatform!.GetOtpWebSocketUrlAsync(NewPlatformToken, NewPlatformAccountId, ct)
+                    .ConfigureAwait(false);
+        }
+        finally
+        {
+            _otpMintGate.Release();
+        }
         await socket.ConnectAsync(new Uri(url), ct).ConfigureAwait(false);
 
         lock (_sync)
@@ -695,6 +721,10 @@ public sealed class DerivClient : IAsyncDisposable
 
     private void SetStatus(ConnectionStatus status)
     {
+        if (status == ConnectionStatus.Connected)
+        {
+            _connectedAtUtc = DateTimeOffset.UtcNow;
+        }
         Status = status;
         StatusChanged?.Invoke(status);
     }
@@ -707,9 +737,32 @@ public sealed class DerivClient : IAsyncDisposable
         }
 
         var attempt = Interlocked.Increment(ref _reconnectAttempt);
-        var delay = TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, Math.Min(attempt, 5))));
+
+        // Rapid-death escalation: a socket that lived less than ~15s before
+        // dropping again is being refused, not flaky — double the delay for
+        // each consecutive short-lived connection (up to a 5-minute ceiling)
+        // so a rejected session cannot loop as a storm. Stable connections
+        // reset the streak. Jitter (±20%) desynchronizes parallel clients.
+        var lifetime = (DateTimeOffset.UtcNow - _connectedAtUtc).TotalSeconds;
+        _rapidDropStreak = lifetime < 15 ? _rapidDropStreak + 1 : 0;
+
+        var delaySeconds = Math.Min(30, Math.Pow(2, Math.Min(attempt, 5)));
+        if (_rapidDropStreak >= 2)
+        {
+            delaySeconds = Math.Min(300, delaySeconds * Math.Pow(2, Math.Min(_rapidDropStreak, 4)));
+        }
+        delaySeconds *= 0.8 + Random.Shared.NextDouble() * 0.4;
+        var delay = TimeSpan.FromSeconds(delaySeconds);
+
         SetStatus(ConnectionStatus.Reconnecting);
         ErrorReceived?.Invoke($"Connection lost — reconnecting in {delay.TotalSeconds:0}s (attempt {attempt})");
+        if (_rapidDropStreak >= 3 && !_backoffGuidanceShown)
+        {
+            _backoffGuidanceShown = true;
+            ErrorReceived?.Invoke(
+                "The connection keeps dropping immediately. If this repeats, give each account its own " +
+                "API token (sessions sharing one token can invalidate each other) and check the network.");
+        }
 
         var ct = _connectCts?.Token ?? CancellationToken.None;
         _ = Task.Run(async () =>

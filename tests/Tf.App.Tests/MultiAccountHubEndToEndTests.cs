@@ -684,7 +684,7 @@ public class MultiAccountHubEndToEndTests
             {
                 proposalRequests++;
                 if (failAllProposals || proposalRequests <= failFirstProposals)
-                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"synthetic proposal failure\"}}}}";
+                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"BrokerUnavailable\",\"message\":\"synthetic proposal failure\"}}}}";
 
                 var id = $"PROP-AR-{proposalRequests}";
                 proposalStakeById[id] = req.GetProperty("amount").GetDecimal();
@@ -1156,7 +1156,7 @@ public class MultiAccountHubEndToEndTests
             {
                 proposalRequests++;
                 if (failAllProposals)
-                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"synthetic proposal failure\"}}}}";
+                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"BrokerUnavailable\",\"message\":\"synthetic proposal failure\"}}}}";
 
                 var id = $"PROP-HOOK-{proposalRequests}";
                 proposalStakeById[id] = req.GetProperty("amount").GetDecimal();
@@ -1361,7 +1361,7 @@ public class MultiAccountHubEndToEndTests
             {
                 proposalRequests++;
                 if (proposalRequests <= 3)
-                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"MarketIsClosed\",\"message\":\"synthetic proposal failure\"}}}}";
+                    return $"{{\"msg_type\":\"error\",\"req_id\":{reqId},\"error\":{{\"code\":\"BrokerUnavailable\",\"message\":\"synthetic proposal failure\"}}}}";
 
                 var id = $"PROP-DEF-{proposalRequests}";
                 proposalStakeById[id] = req.GetProperty("amount").GetDecimal();

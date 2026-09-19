@@ -30,6 +30,11 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private int _consecutiveFailures;
     private DateTimeOffset _circuitOpenUntil = DateTimeOffset.MinValue;
 
+    // True while a ConnectAsync body (discovery → socket → history →
+    // subscribe) is running for this account; guards against storm-driven
+    // re-entry so the post-connect work never runs twice in parallel.
+    private bool _connectInFlight;
+
     /// <summary>Raised whenever connection state or balance changes materially.</summary>
     public event Action<AccountConnection>? StateChanged;
 
@@ -182,6 +187,16 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
             CircuitStatus = "";
         }
 
+        // Reconnect storms often re-enter here (UI retries, hub auto-connect,
+        // the client's own reconnect completion). The client tolerates it, but
+        // the post-connect work below (discovery, history backfill, subscribe)
+        // must not run twice in parallel for one account.
+        if (_connectInFlight)
+        {
+            return;
+        }
+        _connectInFlight = true;
+
         IsBusy = true;
         LastError = "";
         StatusText = "Connecting…";
@@ -266,6 +281,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         finally
         {
             IsBusy = false;
+            _connectInFlight = false;
         }
     }
 
