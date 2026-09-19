@@ -10,6 +10,11 @@ namespace Tf.App.Infrastructure;
 /// </summary>
 public static class VersionInfo
 {
+    /// <summary>The product's display name (rebrand, formerly "Tf").</summary>
+    public const string ProductName = "DON G FX";
+
+    /// <summary>The full branding title used on the window and About box.</summary>
+    public const string FullTitle = "DON G FX — Deriv Binary-Options Trader";
     private static readonly string Full = Assembly.GetExecutingAssembly()
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
         ?.InformationalVersion ?? "dev";

@@ -1,5 +1,6 @@
 using Tf.Core.Brain;
 using Tf.Core.Models;
+using Tf.Deriv;
 
 namespace Tf.Core.Tests;
 
@@ -342,5 +343,55 @@ public class AutonomousSchedulerTests
         Assert.Equal(3, scheduler.ConsecutiveFailures);
         Assert.Equal(3, attempts);
         Assert.Equal(new long[] { 0, 5_000, 10_000 }, attemptMs);
+    }
+
+    // ─── Market-closed is an expected state, not a failure ─────────
+
+    [Fact]
+    public async Task MarketClosed_IdlesUntilReopen_WithoutCountingFailures()
+    {
+        var cycles = 0;
+        DateTimeOffset? announcedReopen = null;
+        var clock = new TestVirtualClock();
+
+        // Every proposal is rejected with Deriv's weekend answer: the market
+        // is closed and will reopen at a stated time. The stated instant is
+        // far beyond the virtual clock, so the 30-minute clamp decides the
+        // idle — Deriv's own timestamp must never be trusted for days.
+        var deriv = new TradingBrain.DerivAbstraction
+        {
+            GetProposal = (_, _, _, _, _, _) =>
+                throw new DerivApiException("MarketIsClosed",
+                    "This market is presently closed. Market will open at 2026-09-21 00:00:00."),
+            Buy = (_, _, _) => Task.FromResult(new BuyResult("C", 1m, 100m, "")),
+            WaitForSettlement = (_, _, _) =>
+                Task.FromResult(new ContractInfo("C", ContractStatus.Open, 0, 0, 0, 0, 0, 0, "USD", false))
+        };
+
+        var scheduler = new AutonomousScheduler(
+            BuildBrain("{\"direction\":\"Rise\",\"confidence\":0.9,\"stake\":1,\"reasoning\":\"t\"}", deriv),
+            IntervalSettings,
+            () => Enumerable.Range(0, 30).Select(MakeTick).ToArray(),
+            () => Risk(killSwitch: false),
+            () => Array.Empty<string>(),
+            _ => cycles++,
+            timeProvider: clock,
+            marketClosedProbe: ex => MarketClosedNotice.ParseReopenUtc(ex.Message, clock.GetUtcNow()),
+            onMarketClosed: reopen => announcedReopen = reopen);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = scheduler.StartAsync(cts.Token);
+
+        // The rejection surfaces, the probe recognizes it, and the engine
+        // announces an idle-until-reopen — without a single failure counted.
+        await WaitUntilAsync(() => announcedReopen is not null);
+        scheduler.Stop();
+        await run;
+
+        Assert.NotNull(announcedReopen);
+        Assert.Equal(0, scheduler.ConsecutiveFailures);
+        Assert.True((announcedReopen!.Value - clock.GetUtcNow()) <= TimeSpan.FromMinutes(30),
+            $"reopen idle must be clamped, was {announcedReopen - clock.GetUtcNow()}");
+        Assert.Equal(0, cycles); // no cycle completed; the engine idled instead
     }
 }

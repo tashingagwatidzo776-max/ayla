@@ -223,7 +223,12 @@ public sealed partial class BrainViewModel : ObservableObject
         _scheduler = new AutonomousScheduler(
             _brain, _settings, _tickWindow, _riskContext, _recentLessons, OnScheduledCycle,
             onCycleLatencyMs: ms => _metrics.RecordLatency(ms, "LlmTab", DateTimeOffset.UtcNow),
-            onCycleError: exType => _metrics.RecordError("LlmTab", DateTimeOffset.UtcNow));
+            onCycleError: exType => _metrics.RecordError("LlmTab", DateTimeOffset.UtcNow),
+            marketClosedProbe: ex => MarketClosedNotice.ParseReopenUtc(ex.Message, DateTimeOffset.UtcNow),
+            onMarketClosed: reopen =>
+            {
+                StatusText = $"Market closed — idling until {reopen.ToLocalTime():HH:mm}, then resumes automatically";
+            });
         IsAutonomyRunning = true;
         StatusText = "Autonomy running — waiting for the first decision…";
 

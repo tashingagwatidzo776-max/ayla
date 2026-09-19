@@ -23,6 +23,13 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     private readonly Action<double>? _onCycleLatencyMs;
     private readonly Action<string>? _onCycleError;
 
+    // Recognizes "market is closed" rejections (returns the clamped reopen
+    // instant) and reports them. Market-closed is an expected weekend/holiday
+    // state — the engine idles until reopen instead of accumulating failures
+    // toward a stop-and-restart storm.
+    private readonly Func<Exception, DateTimeOffset?>? _marketClosedProbe;
+    private readonly Action<DateTimeOffset>? _onMarketClosed;
+
     private CancellationTokenSource? _cts;
     private DateTimeOffset _nextAllowedDecision;
 
@@ -37,12 +44,16 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         int maxConsecutiveFailures = 3,
         TimeProvider? timeProvider = null,
         Action<double>? onCycleLatencyMs = null,
-        Action<string>? onCycleError = null)
+        Action<string>? onCycleError = null,
+        Func<Exception, DateTimeOffset?>? marketClosedProbe = null,
+        Action<DateTimeOffset>? onMarketClosed = null)
     {
         _failureBackoff = failureBackoff ?? TimeSpan.FromSeconds(5);
         _maxConsecutiveFailures = Math.Max(1, maxConsecutiveFailures);
         _onCycleLatencyMs = onCycleLatencyMs;
         _onCycleError = onCycleError;
+        _marketClosedProbe = marketClosedProbe;
+        _onMarketClosed = onMarketClosed;
         _brain = brain;
         _settings = settings;
         _tickWindow = tickWindow ?? throw new ArgumentNullException(nameof(tickWindow));
@@ -207,6 +218,21 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                 // Telemetry first: the failure path also surfaces cycle latency
                 // (attempt → failure) and the exception type for error counts.
                 _onCycleLatencyMs?.Invoke(_timeProvider.GetElapsedTime(cycleStart).TotalMilliseconds);
+
+                // Market-closed is an expected state, not a failure: idle
+                // until the (clamped) reopen instant instead of burning the
+                // failure budget toward an engine stop that auto-restart
+                // would only repeat. Checked before the error telemetry so
+                // weekends don't show up as error storms in metrics.
+                var reopen = _marketClosedProbe?.Invoke(ex);
+                if (reopen is not null)
+                {
+                    ConsecutiveFailures = 0;
+                    _nextAllowedDecision = reopen.Value;
+                    _onMarketClosed?.Invoke(reopen.Value);
+                    continue;
+                }
+
                 _onCycleError?.Invoke(ex.GetType().Name);
 
                 // Back off after a failed cycle (default 5s, configurable via

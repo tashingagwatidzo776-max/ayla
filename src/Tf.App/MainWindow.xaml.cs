@@ -43,13 +43,13 @@ public partial class MainWindow : Window
     private void OnAbout(object sender, RoutedEventArgs e)
     {
         System.Windows.MessageBox.Show(this,
-            "Tf — Deriv Binary-Options Trader\n" +
+            $"{VersionInfo.FullTitle}\n" +
             $"Version: {VersionInfo.FullVersion}\n\n" +
             "Demo by default. Real trading requires the API-verified\n" +
             "real-money unlock at every trade path\n" +
             "(docs/real-money-safety-audit.md).\n\n" +
             "Educational software — never trade money you cannot afford to lose.",
-            "About Tf", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+            $"About {VersionInfo.ProductName}", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
     }
 
     protected override void OnClosed(EventArgs e)

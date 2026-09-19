@@ -1,6 +1,8 @@
-# Tf — Deriv Binary-Options Trader
+# DON G FX — Deriv Binary-Options Trader
 
-A WPF desktop application for automated binary-options trading on the [Deriv](https://deriv.com) platform. Features multiple AI-powered brain engines, a deterministic growth engine, multi-account support, and comprehensive risk management.
+<p align="center"><img src="src/Tf.App/assets/logo.png" alt="DON G FX" width="180"/></p>
+
+**DON G FX** (formerly "Tf" — the `Tf.*` assemblies and `Tf.exe` binary keep the legacy name) — a WPF desktop application for automated binary-options trading on the [Deriv](https://deriv.com) platform. Features multiple AI-powered brain engines, a deterministic growth engine, multi-account support, and comprehensive risk management. *Trade | Analyze | Profit.*
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![.NET](https://img.shields.io/badge/.NET-8.0-windows-purple)
@@ -236,6 +238,21 @@ tf/
 - Check your API token is valid (Settings → Account)
 - Ensure you have internet connectivity
 - Try a different App ID if the default is rate-limited
+
+### The account keeps reconnecting / connection churn
+- **Give each account its own API token.** On the new platform, sessions
+  minted from one shared token can invalidate each other — the app now backs
+  off harder when it detects rapid-fire drops, but one token per account
+  removes the cause. Create a second PAT on Deriv and import the second
+  account with it.
+- The client escalates its backoff when connections die within seconds
+  (rapid-drop detection up to a 5-minute ceiling) — brief churn that then
+  settles is normal after a network blip.
+
+### "Market is presently closed"
+- Expected on weekends/holidays: the growth engine now idles and shows
+  "market closed — resumes HH:mm" instead of counting failures, and resumes
+  trading automatically when Deriv reopens.
 
 ### "No market data"
 - Connect to a Deriv account first (Settings → Connect)
