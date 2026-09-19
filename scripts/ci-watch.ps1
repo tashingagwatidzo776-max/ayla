@@ -118,7 +118,7 @@ function Invoke-Gate {
 
 if (-not $NoInitialBuild) {
     Write-Host '[ci-watch] initial build (skip with -NoInitialBuild)...' -ForegroundColor DarkCyan
-    dotnet build (Join-Path $root 'Tf.sln') --nologo -v q
+    dotnet build (Join-Path $root 'DongGfx.sln') --nologo -v q
     if ($LASTEXITCODE -ne 0) { Write-Host '[ci-watch] initial build failed; watcher still armed' -ForegroundColor Yellow }
 }
 

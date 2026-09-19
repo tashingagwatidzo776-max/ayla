@@ -16,8 +16,8 @@ job) fails when a call-site file has no coverage entry here.
 |---|---|---|---|
 | Master kill switch | Dashboard latch, read via `_dashboard.IsKillSwitchEngaged` / hub kill-switch factories | Global engagement halts everything | Fail closed when latched |
 | Portfolio drawdown governor | `MultiAccountHub` settlement handler + journal-restored latch | Combined daily net across all growth accounts breaches the plan's cap → stops every runner, latches until manual re-arm | Fail closed (latch survives restarts) |
-| Real-money gate | `Tf.Core.Models.RealMoneyGate.Evaluate` | Config says real **and** Deriv's own verification confirms real **and** the per-session unlock (typed `TRADE REAL MONEY` phrase) is armed. Any mismatch/unknown refuses with a specific reason. The API verdict accepts both platforms: classic `is_virtual` and new-platform discovery `account_type` (DOT/ROT prefix checked as a cross-signal) | Fail closed — unverified counts as demo, never as real |
-| Risk engine | `Tf.Core.Brain.RiskEngine.Evaluate` | Per-decision: kill switch, real-money verdict, confidence floor, stake bounds, concurrency limit, daily loss cap, post-loss cooldown | Rejects with a reason |
+| Real-money gate | `DongGfx.Core.Models.RealMoneyGate.Evaluate` | Config says real **and** Deriv's own verification confirms real **and** the per-session unlock (typed `TRADE REAL MONEY` phrase) is armed. Any mismatch/unknown refuses with a specific reason. The API verdict accepts both platforms: classic `is_virtual` and new-platform discovery `account_type` (DOT/ROT prefix checked as a cross-signal) | Fail closed — unverified counts as demo, never as real |
+| Risk engine | `DongGfx.Core.Brain.RiskEngine.Evaluate` | Per-decision: kill switch, real-money verdict, confidence floor, stake bounds, concurrency limit, daily loss cap, post-loss cooldown | Rejects with a reason |
 
 The real-money gate is enforced at four depths: engine **start**
 (`MultiAccountHub.StartGrowthCore`, every start path including the automatic
@@ -158,18 +158,18 @@ here.
 
 | Test class | What it exercises |
 |---|---|
-| `RealMoneyGateTests` (Tf.Core) | The gate's decision matrix: demo passthrough; locked, unverified, and config-mismatch refusals; fail-closed on unknown verification. |
-| `RiskEngineRealMoneyTests` (Tf.Core) | The risk engine rejecting a decision when the gate refuses. |
-| `AccountBalanceIsVirtualTests` (Tf.Core) | Deriv's `is_virtual` verification feeding the gate. |
-| `JournalLoggingSurfaceTests` (Tf.Core) | The journal surface the gate writes through, including `REAL_MONEY_UNLOCK_ARMED` entries. |
-| `ManualRealMoneyGateTests` (Tf.App) | The manual-surface unlock latch and its refusal matrix (Trades/Brain paths). |
-| `RealMoneyUnlockArmTests` (Tf.App) | Unlock-panel arming: journal arm entries, activity logging, staleness. |
-| `GrowthViewModelRestartTests` (Tf.App) | The Growth tab's unlock panel arming every listed account at once. |
-| `GrowthViewModelReadinessTests` (Tf.App) | The go-live readiness panel's five checks: locked unlock / unverified account / disabled manual cap / absent governor cap / missing webhook each flip exactly the right leg red. |
-| `ManualMaxStakeTests` (Tf.App) | The manual stake cap on the Trades tab path. |
-| `FirstRunWizardLogicTests` (Tf.App) | The first-run wizard's merge-into-settings rule (only the five wizard fields are written, `IsDemo` forced) and the token floor that keeps setup from completing token-less. |
-| `MetricsDigestServiceTests` (Tf.App) | The digest's arm-state leg and rail table. |
-| `NewPlatformDerivClientTests` (Tf.Core) | The new-platform (PAT) transport under the same trade paths: OTP connect with no classic authorize, a fresh OTP minted on every reconnect, the `underlying_symbol` rename, and the discovery `account_type` verdict flowing into the same verified-virtual seam the gate reads. |
-| `RealMoneyGateHubTests` (Tf.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
-| `RealMoneyGateMidSessionTests` (Tf.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
-| `JournalFormatterTests` (Tf.App) | The Journal tab's dedicated unlock-arm/stale formatting and category filter. |
+| `RealMoneyGateTests` (DongGfx.Core) | The gate's decision matrix: demo passthrough; locked, unverified, and config-mismatch refusals; fail-closed on unknown verification. |
+| `RiskEngineRealMoneyTests` (DongGfx.Core) | The risk engine rejecting a decision when the gate refuses. |
+| `AccountBalanceIsVirtualTests` (DongGfx.Core) | Deriv's `is_virtual` verification feeding the gate. |
+| `JournalLoggingSurfaceTests` (DongGfx.Core) | The journal surface the gate writes through, including `REAL_MONEY_UNLOCK_ARMED` entries. |
+| `ManualRealMoneyGateTests` (DongGfx.App) | The manual-surface unlock latch and its refusal matrix (Trades/Brain paths). |
+| `RealMoneyUnlockArmTests` (DongGfx.App) | Unlock-panel arming: journal arm entries, activity logging, staleness. |
+| `GrowthViewModelRestartTests` (DongGfx.App) | The Growth tab's unlock panel arming every listed account at once. |
+| `GrowthViewModelReadinessTests` (DongGfx.App) | The go-live readiness panel's five checks: locked unlock / unverified account / disabled manual cap / absent governor cap / missing webhook each flip exactly the right leg red. |
+| `ManualMaxStakeTests` (DongGfx.App) | The manual stake cap on the Trades tab path. |
+| `FirstRunWizardLogicTests` (DongGfx.App) | The first-run wizard's merge-into-settings rule (only the five wizard fields are written, `IsDemo` forced) and the token floor that keeps setup from completing token-less. |
+| `MetricsDigestServiceTests` (DongGfx.App) | The digest's arm-state leg and rail table. |
+| `NewPlatformDerivClientTests` (DongGfx.Core) | The new-platform (PAT) transport under the same trade paths: OTP connect with no classic authorize, a fresh OTP minted on every reconnect, the `underlying_symbol` rename, and the discovery `account_type` verdict flowing into the same verified-virtual seam the gate reads. |
+| `RealMoneyGateHubTests` (DongGfx.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
+| `RealMoneyGateMidSessionTests` (DongGfx.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
+| `JournalFormatterTests` (DongGfx.App) | The Journal tab's dedicated unlock-arm/stale formatting and category filter. |

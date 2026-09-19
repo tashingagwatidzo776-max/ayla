@@ -19,7 +19,7 @@ release-gate .......... hard stop: fails unless gate-drill was green on this exa
         │
         ▼
 publish-exe ........... dotnet publish (self-contained win-x64 single file)
-        │               → artifact Tf-<tag>-win-x64 on the run
+        │               → artifact DongGfx-<tag>-win-x64 on the run
         ▼
 gh release create ..... human step: release notes + the downloaded artifact
 ```
@@ -47,19 +47,19 @@ Then:
 $EDITOR release-notes-vX.Y.Z.md
 
 # 2. Tag (annotated) and push — the push is the trigger.
-git tag -a vX.Y.Z -m "Tf vX.Y.Z"
+git tag -a vX.Y.Z -m "DongGfx vX.Y.Z"
 git push origin vX.Y.Z
 
 # 3. Watch the chain (three jobs, in order: gate-drill → release-gate → publish-exe).
 gh run watch $(gh run list --workflow gate-drill.yml --branch vX.Y.Z --limit 1 --json databaseId --jq '.[0].databaseId')
 
 # 4. Download and verify the artifact.
-gh run download <run-id> --name Tf-vX.Y.Z-win-x64 -D dist/vX.Y.Z
+gh run download <run-id> --name DongGfx-vX.Y.Z-win-x64 -D dist/vX.Y.Z
 # Sanity: PE32+ console/GUI x86-64, ~70 MB self-contained, launches to the UI.
 
 # 5. Create the release — draft first (notes only), then attach the asset.
-gh release create vX.Y.Z --draft --title "Tf vX.Y.Z" --notes-file release-notes-vX.Y.Z.md
-gh release upload vX.Y.Z dist/vX.Y.Z/Tf.exe
+gh release create vX.Y.Z --draft --title "DongGfx vX.Y.Z" --notes-file release-notes-vX.Y.Z.md
+gh release upload vX.Y.Z dist/vX.Y.Z/DongGfx.exe
 # ...verify the draft renders correctly, then:
 gh release edit vX.Y.Z --draft=false
 ```
@@ -244,7 +244,7 @@ iteration on non-test changes: `TF_CI_LOCAL_SKIP_BUILD=1` (or
 
 | Tag | What happened |
 |---|---|
-| `v0.0.7` | The DON G FX rebrand (#84): every user-facing surface renamed with the logo as window/exe/tray icon — assemblies and `Tf.exe` deliberately unchanged so scripts and CI carry zero risk. Also killed the reconnect storm (718/day → jittered escalating backoff with rapid-drop detection, single-flight OTP mint, connect dedupe) and made `MarketIsClosed` an expected idle state instead of a stop/auto-restart chain. Chain green first-run on `5e63519`; asset attached and stamp-verified on the first dispatch. |
+| `v0.0.7` | The DON G FX rebrand (#84): every user-facing surface renamed with the logo as window/exe/tray icon — assemblies and `DongGfx.exe` deliberately unchanged so scripts and CI carry zero risk. Also killed the reconnect storm (718/day → jittered escalating backoff with rapid-drop detection, single-flight OTP mint, connect dedupe) and made `MarketIsClosed` an expected idle state instead of a stop/auto-restart chain. Chain green first-run on `5e63519`; asset attached and stamp-verified on the first dispatch. |
 | `v0.0.6` | Shipped the three live-connection fixes from the first demo session (#81): discovery balance parsed as string-or-number (the live API returns strings — every connect died in the circuit breaker), locked banners rebuilding on account state changes (verification flips the banner live), and the unlock-panel button binding (the banner's Unlock click was a silent no-op). CI test jobs retry once on flakes (#82); first soak evidence recorded (`SOAK-2026-09-19.md`, SOAK CLEAN). Merging needed a brief protection lift via the API (the review requirement re-enabled after #80; capture → delete → merge → restore, verified). Chain green first-run on `db2c03e`; asset attached and stamp verified on the first dispatch. |
 | `v0.0.5` | Shipped new-platform (PAT) connection mode (#76), the set-as-primary account switch with the `IsVirtualOverride` gate seam, and the XAML StaticResource CI guard (#78, superseding #77 — whose flaky unit test would have blocked the merge). Chain green first-run on `e068912`; asset attached server-side on the first dispatch, stamp verified in-run. Live end-to-end evidence in the notes: demo $9,816.85 and real $0.00 both streamed from authenticated OTP sockets. |
 | `v0.0.4` | First-run wizard fixes shipped: settings merge (no more clobber), token floor enforced, skip writes the flag (#72); `publish_exe.ps1` now cleans its output dir first (#73). Chain green first-run on `73180fc`; the hardened attach succeeded on the **first** dispatch — no retries needed, first release where nothing went sideways. |

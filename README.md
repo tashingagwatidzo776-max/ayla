@@ -1,8 +1,8 @@
 # DON G FX — Deriv Binary-Options Trader
 
-<p align="center"><img src="src/Tf.App/assets/logo.png" alt="DON G FX" width="180"/></p>
+<p align="center"><img src="src/DongGfx.App/assets/logo.png" alt="DON G FX" width="180"/></p>
 
-**DON G FX** (formerly "Tf" — the `Tf.*` assemblies and `Tf.exe` binary keep the legacy name) — a WPF desktop application for automated binary-options trading on the [Deriv](https://deriv.com) platform. Features multiple AI-powered brain engines, a deterministic growth engine, multi-account support, and comprehensive risk management. *Trade | Analyze | Profit.*
+**DON G FX** (FORMERLY_PLACEHOLDER("DongGfx" — the `DongGfx.*` assemblies and `DongGfx.exe` binary keep the legacy name) — a WPF desktop application for automated binary-options trading on the [Deriv](https://deriv.com) platform. Features multiple AI-powered brain engines, a deterministic growth engine, multi-account support, and comprehensive risk management. *Trade | Analyze | Profit.*
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![.NET](https://img.shields.io/badge/.NET-8.0-windows-purple)
@@ -126,7 +126,7 @@ cd tf
 dotnet build
 
 # Run
-dotnet run --project src/Tf.App
+dotnet run --project src/DongGfx.App
 ```
 
 ### First Run
@@ -213,11 +213,11 @@ All settings are stored under `%APPDATA%\tf\data\`:
 ```
 tf/
 ├── src/
-│   ├── Tf.Core/           # Core library (brains, indicators, models)
-│   ├── Tf.Deriv/          # Deriv WebSocket API client
-│   └── Tf.App/            # WPF desktop application
+│   ├── DongGfx.Core/           # Core library (brains, indicators, models)
+│   ├── DongGfx.Deriv/          # Deriv WebSocket API client
+│   └── DongGfx.App/            # WPF desktop application
 ├── tests/
-│   └── Tf.Core.Tests/     # Unit tests (xUnit)
+│   └── DongGfx.Core.Tests/     # Unit tests (xUnit)
 ├── scripts/               # PowerShell utility scripts
 └── .github/workflows/     # CI/CD
 ```

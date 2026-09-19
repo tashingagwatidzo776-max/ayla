@@ -63,8 +63,8 @@ jobs:
         TAG: ${{ inputs.tag }}
       run: |
         set -euo pipefail
-        gh run download "$RUN_ID" --name "Tf-$TAG-win-x64" --dir dist
-        test -f dist/Tf.exe || { echo "::error::dist/Tf.exe missing from the artifact"; exit 1; }
+        gh run download "$RUN_ID" --name "DongGfx-$TAG-win-x64" --dir dist
+        test -f dist/DongGfx.exe || { echo "::error::dist/DongGfx.exe missing from the artifact"; exit 1; }
         ls -la dist/
 
     - name: Verify the binary's version stamp matches the release tag
@@ -73,12 +73,12 @@ jobs:
       run: |
         set -euo pipefail
         # The stamp is UTF-16 in the PE (window title / About identity):
-        if ! strings -e l dist/Tf.exe | grep -qF "$TAG+"; then
-          echo "::error::Tf.exe does not carry the $TAG+ version stamp"
+        if ! strings -e l dist/DongGfx.exe | grep -qF "$TAG+"; then
+          echo "::error::DongGfx.exe does not carry the $TAG+ version stamp"
           exit 1
         fi
         echo "stamp verified: $TAG+…"
-        sha256sum dist/Tf.exe | tee sha256.txt
+        sha256sum dist/DongGfx.exe | tee sha256.txt
         echo "### 📦 Release asset for \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
         echo '```' >> "$GITHUB_STEP_SUMMARY"
         cat sha256.txt >> "$GITHUB_STEP_SUMMARY"
@@ -102,9 +102,9 @@ jobs:
           exit 1
         fi
         echo "release id: $RID"
-        # Idempotency: drop a previous Tf.exe asset first so the POST below
+        # Idempotency: drop a previous DongGfx.exe asset first so the POST below
         # is a replace, not a 422 duplicate-name error (this is --clobber).
-        for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.assets[] | select(.name == "Tf.exe") | .id'); do
+        for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.assets[] | select(.name == "DongGfx.exe") | .id'); do
           gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$AID"
           echo "replaced existing asset $AID"
         done
@@ -113,21 +113,21 @@ jobs:
         # is mandatory: without it a server-side upload error ("Error
         # creating asset temp dir", seen live on the v0.0.3 dispatch)
         # prints an error body but exits 0 — a silent missing asset.
-        UPLOAD_URL="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.upload_url' | sed 's/{.*}//')?name=Tf.exe"
-        EXPECTED=$(stat -c%s dist/Tf.exe)
+        UPLOAD_URL="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.upload_url' | sed 's/{.*}//')?name=DongGfx.exe"
+        EXPECTED=$(stat -c%s dist/DongGfx.exe)
         ok=0
         for attempt in 1 2 3; do
           if curl --fail-with-body -sS -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/octet-stream" \
-              --data-binary @dist/Tf.exe \
+              --data-binary @dist/DongGfx.exe \
               "$UPLOAD_URL"; then
             ok=1
             break
           fi
           echo "upload attempt $attempt failed — retrying in 30s (transient asset-service errors have been seen live)"
           # drop a half-written asset before retrying, or the next POST 422s
-          for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.assets[] | select(.name == "Tf.exe") | .id'); do
+          for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.assets[] | select(.name == "DongGfx.exe") | .id'); do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$AID" || true
           done
           sleep 30
@@ -138,7 +138,7 @@ jobs:
         fi
         # The upload is only real when the asset exists at the exact size
         # the runner sent — verify before declaring success.
-        ACTUAL=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '[.assets[] | select(.name == "Tf.exe")][0].size // 0')
+        ACTUAL=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '[.assets[] | select(.name == "DongGfx.exe")][0].size // 0')
         if [ "$ACTUAL" != "$EXPECTED" ]; then
           echo "::error::uploaded asset is $ACTUAL bytes, expected $EXPECTED — upload did not land"
           exit 1

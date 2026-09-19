@@ -29,17 +29,17 @@ function Invoke-Step {
 }
 
 if (-not $SkipBuild) {
-    Invoke-Step 'build' { dotnet build Tf.sln --nologo -v q }
+    Invoke-Step 'build' { dotnet build DongGfx.sln --nologo -v q }
 }
 else {
     Write-Host 'Skipping build (-SkipBuild)'
 }
 
 Invoke-Step 'unit' {
-    dotnet test tests/Tf.Core.Tests/Tf.Core.Tests.csproj --no-build --nologo -v q
+    dotnet test tests/DongGfx.Core.Tests/DongGfx.Core.Tests.csproj --no-build --nologo -v q
 }
 Invoke-Step 'integration' {
-    dotnet test tests/Tf.App.Tests/Tf.App.Tests.csproj --no-build --nologo -v q
+    dotnet test tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --no-build --nologo -v q
 }
 Invoke-Step 'workflow-lint' {
     python scripts/lint_workflows.py

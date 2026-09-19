@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_DIR = ROOT / "src" / "Tf.App"
+APP_DIR = ROOT / "src" / "DongGfx.App"
 
 # Files whose x:Key declarations are visible to every window/control.
 GLOBAL_FILES = [

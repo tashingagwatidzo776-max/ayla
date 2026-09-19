@@ -1,6 +1,6 @@
 # Publishes the native Windows exe.
 #
-# Default: self-contained single-file "Tf.exe" (win-x64, no .NET needed on
+# Default: self-contained single-file "DongGfx.exe" (win-x64, no .NET needed on
 # the target PC). Pass -FrameworkDependent for a small exe + shared runtime.
 #
 # Usage:
@@ -15,7 +15,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$proj = Join-Path $root "src\Tf.App\Tf.App.csproj"
+$proj = Join-Path $root "src\DongGfx.App\DongGfx.App.csproj"
 $rid = "win-x64"
 $outRoot = Join-Path $root "publish"
 $out = if ($FrameworkDependent) { Join-Path $outRoot "$rid-framework-dependent" } else { Join-Path $outRoot $rid }
@@ -114,7 +114,7 @@ if ($isReleaseTag) {
 Write-Host ""
 Write-Host "Published: $out" -ForegroundColor Green
 if (-not $FrameworkDependent) {
-    Write-Host "Exe: $(Join-Path $out 'Tf.exe')  (self-contained - run on any 64-bit Windows PC)" -ForegroundColor Green
+    Write-Host "Exe: $(Join-Path $out 'DongGfx.exe')  (self-contained - run on any 64-bit Windows PC)" -ForegroundColor Green
 } else {
-    Write-Host "Exe: $(Join-Path $out 'Tf.exe')  (needs the .NET 8 Desktop Runtime installed)" -ForegroundColor Green
+    Write-Host "Exe: $(Join-Path $out 'DongGfx.exe')  (needs the .NET 8 Desktop Runtime installed)" -ForegroundColor Green
 }
