@@ -66,10 +66,30 @@ public class NewPlatformAuth
         var accounts = new List<NewPlatformAccount>();
         foreach (var el in doc.RootElement.GetProperty("data").EnumerateArray())
         {
+            // Live-verified 2026-09-18: the API returns balance as a STRING
+            // ("9814.97"), not a number — GetDecimal on it throws
+            // InvalidOperationException. Read it tolerantly: number or
+            // numeric string both parse; anything else falls back to 0.
+            decimal balance = 0m;
+            if (el.TryGetProperty("balance", out var b))
+            {
+                if (b.ValueKind == JsonValueKind.String
+                    && decimal.TryParse(b.GetString(),
+                        System.Globalization.NumberStyles.Number,
+                        System.Globalization.CultureInfo.InvariantCulture, out var bs))
+                {
+                    balance = bs;
+                }
+                else if (b.ValueKind == JsonValueKind.Number && b.TryGetDecimal(out var bd))
+                {
+                    balance = bd;
+                }
+            }
+
             accounts.Add(new NewPlatformAccount(
                 el.TryGetProperty("account_id", out var id) ? id.GetString() ?? "" : "",
                 el.TryGetProperty("account_type", out var t) ? t.GetString() ?? "" : "",
-                el.TryGetProperty("balance", out var b) && b.TryGetDecimal(out var bd) ? bd : 0m,
+                balance,
                 el.TryGetProperty("currency", out var c) ? c.GetString() ?? "USD" : "USD",
                 el.TryGetProperty("status", out var s) ? s.GetString() ?? "" : ""));
         }

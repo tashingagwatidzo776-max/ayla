@@ -687,7 +687,7 @@
                                             <Run Text="🔒 " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" is a real-money account, " /><Run Text="{Binding VerificationText, Mode=OneWay}" FontStyle="Italic" /><Run Text=" — real trading stays locked until the session unlock is armed (app restarts always re-lock)." />
                                         </TextBlock>
                                         <Button Content="🔓 Unlock…" Margin="10,0,0,0" Padding="12,3"
-                                                Command="{Binding GrowthVm.ShowUnlockPanelCommand}" />
+                                                Command="{Binding DataContext.GrowthVm.ShowUnlockPanelCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

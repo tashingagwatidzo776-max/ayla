@@ -234,6 +234,28 @@ public class RealMoneyUnlockArmTests : IDisposable
     }
 
     [Fact]
+    public void StateChanged_RebuildsLockedBanners_WithFreshVerification()
+    {
+        // A connect lands after construction: discovery flips the account's
+        // ApiVerifiedVirtual from null to a verdict, and the locked banner
+        // must follow without waiting for an account-set change (the banner
+        // previously stayed on 'type unverified' forever).
+        var real = AddReal("FreshReal", verifiedVirtual: null);
+        var vm = new GrowthViewModel(
+            _hub, new GrowthPlanStore(), () => new AppSettings(),
+            new DashboardViewModel(new DerivClient(), _hub), tracker: null);
+        vm.TestRebuildLockedBanners();
+        var banner = vm.LockedRealAccountBanners.Single(b => b.AccountId == real.Config.Id);
+        Assert.Contains("unverified", banner.VerificationText);
+
+        real.ApiVerifiedVirtual = false;
+        real.RaiseStateChangedTest();
+
+        banner = vm.LockedRealAccountBanners.Single(b => b.AccountId == real.Config.Id);
+        Assert.Contains("verified REAL", banner.VerificationText);
+    }
+
+    [Fact]
     public void UnlockPanel_JournalsOneArmEntry_AndLogsActivity()
     {
         AddReal("PanelA", verifiedVirtual: false);

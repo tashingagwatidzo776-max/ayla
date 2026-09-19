@@ -201,6 +201,10 @@ public sealed partial class GrowthViewModel : ObservableObject
         RebuildRows();
 
         _hub.AccountsChanged += OnAccountsChanged;
+        foreach (var account in _hub.Accounts)
+        {
+            account.StateChanged += OnAccountStateChanged;
+        }
         _hub.GrowthActivity += OnGrowthActivity;
         _hub.GrowthActivity += OnPortfolioRefresh;
         _hub.RestartStateChanged += OnRestartStateChanged;
@@ -520,9 +524,28 @@ public sealed partial class GrowthViewModel : ObservableObject
 
     private void OnAccountsChanged()
     {
+        foreach (var account in _hub.Accounts)
+        {
+            account.StateChanged -= OnAccountStateChanged;
+            account.StateChanged += OnAccountStateChanged;
+        }
         OnUiThread(() =>
         {
             RebuildRows();
+            RebuildLockedBanners();
+            RebuildStaleBanners();
+            RebuildReadinessChecks();
+        });
+    }
+
+    /// <summary>An account's connect/balance state moved (e.g. the API
+    /// verification verdict landed after discovery at connect time): the
+    /// locked banners, stale banners and readiness checks all read that
+    /// state, so rebuild them instead of leaving stale text up.</summary>
+    private void OnAccountStateChanged(AccountConnection account)
+    {
+        OnUiThread(() =>
+        {
             RebuildLockedBanners();
             RebuildStaleBanners();
             RebuildReadinessChecks();

@@ -295,6 +295,10 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         RaiseStateChanged();
     }
 
+    /// <summary>Test seam: raises <see cref="StateChanged"/> as if a
+    /// connect/balance event had landed.</summary>
+    internal void RaiseStateChangedTest() => RaiseStateChanged();
+
     private void OnStatusChanged(ConnectionStatus status)
     {
         IsConnected = status is ConnectionStatus.Connected or ConnectionStatus.Reconnecting;
