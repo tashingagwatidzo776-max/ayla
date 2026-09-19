@@ -67,10 +67,10 @@ jobs:
     #         ladder). All against fake brokers — no network, no real
     #         funds, ever.
     - name: Rehearse the gate lifecycle — Core (Category=RealMoney)
-      run: dotnet test tests/Tf.Core.Tests/Tf.Core.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
+      run: dotnet test tests/DongGfx.Core.Tests/DongGfx.Core.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
 
     - name: Rehearse the gate lifecycle — App surfaces + E2E (Category=RealMoney)
-      run: dotnet test tests/Tf.App.Tests/Tf.App.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
+      run: dotnet test tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
 
     # A failing drill files the drift alert; a green one records health the
     # same way the nightly's resolve leg does (keyword-safe note, issue left
@@ -153,7 +153,7 @@ jobs:
       # InformationalVersion carries the release identity into the binary
       # (window title + About box): "vX.Y.Z+<full sha>".
       run: >
-        dotnet publish src/Tf.App/Tf.App.csproj
+        dotnet publish src/DongGfx.App/DongGfx.App.csproj
         -c Release
         -r win-x64
         -o publish/win-x64
@@ -166,8 +166,8 @@ jobs:
     - name: Upload the release artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Tf-${{ github.ref_name }}-win-x64
-        path: publish/win-x64/Tf.exe
+        name: DongGfx-${{ github.ref_name }}-win-x64
+        path: publish/win-x64/DongGfx.exe
         if-no-files-found: error
 
   # On-demand rehearsal of the alert path itself (Actions → Real-money gate

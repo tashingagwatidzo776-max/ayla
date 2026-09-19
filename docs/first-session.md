@@ -1,11 +1,11 @@
 # First session walkthrough
 
-What happens on the first launch of `Tf.exe`, step by step — and what to do
+What happens on the first launch of `DongGfx.exe`, step by step — and what to do
 when the app "has no API token" even though you pasted one once.
 
 ## Before you launch
 
-- [ ] `Tf.exe` downloaded from a release tag (self-contained — no install step).
+- [ ] `DongGfx.exe` downloaded from a release tag (self-contained — no install step).
 - [ ] A Deriv **demo** API token ready. Deriv now issues tokens as
   **Personal Access Tokens (PATs)** from the developer dashboard:
   1. Log in at **developers.deriv.com**.
@@ -26,7 +26,7 @@ when the app "has no API token" even though you pasted one once.
 
 ## The wizard (first launch only)
 
-On the first launch the app shows **"Welcome to Tf — First Run Setup"**
+On the first launch the app shows **"Welcome to DongGfx — First Run Setup"**
 before the main window. Five fields:
 
 1. **API Token (demo)** — paste the token. Save is **refused** when the
@@ -74,7 +74,7 @@ cat  "$APPDATA/tf/data/settings.json"   # an ApiToken key present?
 
 - No flag **and** no `ApiToken` in the JSON → the wizard never completed.
   Delete `settings.json` (optional; the wizard merges into it on save) and
-  relaunch `Tf.exe` to get the wizard again.
+  relaunch `DongGfx.exe` to get the wizard again.
 - Flag present but token missing → set the token on the **Settings** tab
   and save; it is the same storage the wizard writes.
 

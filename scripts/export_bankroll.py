@@ -9,7 +9,7 @@ StartBudget reset), and writes docs/growth-bankroll.csv:
 
 The Pages deploy copies this file into the site and the trend chart plots it
 on the money axis, next to nightly coverage. The app refreshes this file
-automatically on every settled trade (Tf.Core Analytics.BankrollCsvFile),
+automatically on every settled trade (DongGfx.Core Analytics.BankrollCsvFile),
 writing both the app-data copy and this committed one when it runs from a
 checkout — commit the refreshed file so CI can publish it. This script
 remains for backfill and machines without the app:

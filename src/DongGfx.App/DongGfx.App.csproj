@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DongGfx.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="assets\logo.png" />
+    <Resource Include="assets\logo.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DongGfx.Core\DongGfx.Core.csproj" />
+    <ProjectReference Include="..\DongGfx.Deriv\DongGfx.Deriv.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>DongGfx</AssemblyName>
+    <!-- Binary name stays DongGfx for now (scripts/CI reference DongGfx.exe); the
+         product identity is the DON G FX rebrand. -->
+    <ApplicationIcon>assets\logo.ico</ApplicationIcon>
+    <Product>DON G FX — Deriv Binary-Options Trader</Product>
+    <!-- Dev fallback. Publish stamps the real identity: scripts/publish_exe.ps1
+         and the tag workflow pass -p:InformationalVersion="<tag>+<commit>" (CLI
+         properties override the generated one), which the window title and
+         About box read at runtime so shipped binaries identify themselves. -->
+    <Version>0.7.0</Version>
+  </PropertyGroup>
+
+</Project>
