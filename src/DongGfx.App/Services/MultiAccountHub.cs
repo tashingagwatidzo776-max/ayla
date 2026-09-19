@@ -1534,6 +1534,12 @@ public sealed class MultiAccountHub
         }
     }
 
+    /// <summary>Persists the current account list (tokens, labels, settings)
+    /// to the vault. Used by flows that mutate configs in place — e.g. the
+    /// PAT-split wizard re-importing accounts with per-account tokens — so the
+    /// account ids (and their journal/history continuity) are preserved.</summary>
+    public void SaveAccounts() => Save();
+
     private void Save()
     {
         try
