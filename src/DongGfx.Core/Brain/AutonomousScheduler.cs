@@ -42,6 +42,28 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     /// keeps the feed traffic negligible.</summary>
     internal static readonly TimeSpan MarketOpenProbeInterval = TimeSpan.FromMinutes(1);
 
+    /// <summary>UTC instant the market-closed idle was ended by the no-auth
+    /// public-feed probe (null when the idle is still running, ended by the
+    /// quoted reopen, or no probe is wired). Read by the runner to journal
+    /// the wake cause — the evidence that the probe, not the quote, woke
+    /// the engine early.</summary>
+    public DateTimeOffset? WokeByProbeUtc { get; private set; }
+
+    /// <summary>The UTC reopen instant the API quoted when the market-closed
+    /// idle was scheduled (null when idle isn't running). Compared against
+    /// <see cref="WokeByProbeUtc"/> to prove the probe woke the engine early.</summary>
+    public DateTimeOffset? LastReopenQuoteUtc { get; private set; }
+
+    /// <summary>Consumes the probe-wake evidence: returns the wake instant
+    /// (or null) and clears it, so the caller journals the wake cause
+    /// exactly once per market-closed idle.</summary>
+    public DateTimeOffset? ConsumeWakeEvidence()
+    {
+        var at = WokeByProbeUtc;
+        WokeByProbeUtc = null;
+        return at;
+    }
+
     private CancellationTokenSource? _cts;
     private DateTimeOffset _nextAllowedDecision;
 
@@ -166,6 +188,8 @@ public sealed class AutonomousScheduler : IAsyncDisposable
             return;
         }
 
+        WokeByProbeUtc = null;
+
         var nextProbe = _timeProvider.GetUtcNow();
         while (true)
         {
@@ -188,8 +212,10 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                 {
                     if (await _marketOpenProbe(ct))
                     {
-                        // Feed-authoritative open: wake now.
+                        // Feed-authoritative open: wake now and record the
+                        // cause (vs the quoted reopen) for the UI/journal.
                         _nextAllowedDecision = _timeProvider.GetUtcNow();
+                        WokeByProbeUtc = _timeProvider.GetUtcNow();
                         return;
                     }
                 }
@@ -309,6 +335,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                 {
                     ConsecutiveFailures = 0;
                     _nextAllowedDecision = reopen.Value;
+                    LastReopenQuoteUtc = reopen.Value;
                     _onMarketClosed?.Invoke(reopen.Value);
 
                     // Wait out the closed window here (kill-switch aware)
