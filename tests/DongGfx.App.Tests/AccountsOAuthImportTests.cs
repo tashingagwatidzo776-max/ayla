@@ -119,8 +119,12 @@ public sealed class AccountsOAuthImportTests
     [Fact]
     public async Task DiscoveryFailure_SurfacesAsFailedSignIn()
     {
-        var (_, vm) = MakeVm();
+        var (hub, vm) = MakeVm();
         vm.OAuthClientId = "app12345";
+        // The OAuth round-trip itself succeeds; discovery — the next step,
+        // fed by the same bearer — faults. This is the live shape of a token
+        // that authorizes but cannot list accounts.
+        vm.SetOAuthForTests(new FakeOAuth(new OAuthResult("ory_at_x", 3600, null)));
         vm.DiscoveryOverrideForTests = _ =>
             Task.FromException<IReadOnlyList<NewPlatformAccount>>(
                 new DerivApiException("Unauthorized", "rejected"));
