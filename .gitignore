@@ -27,3 +27,7 @@ coverage/
 # Session logs
 .wraplog.txt
 __pycache__/
+
+# Local tool installs and release-verification scratch
+.tools/
+bin-verify/

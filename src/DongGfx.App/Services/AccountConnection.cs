@@ -24,6 +24,13 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private bool _disposed;
     private volatile string _lastState = "Not connected";
 
+    /// <summary>Test seam: the discovery/OTP client used for new-platform
+    /// accounts. Production passes null → a real <see cref="NewPlatformAuth"/>
+    /// is built from the account's registered app id. Tests inject a fake
+    /// (including one that throws <see cref="DerivApiException"/> with
+    /// "Unauthorized" to model an expired/revoked bearer token).</summary>
+    private readonly NewPlatformAuth? _newPlatformOverride;
+
     // ── Circuit breaker ────────────────────────────────────────────
     private const int MaxConsecutiveFailures = 5;
     private const int CircuitOpenMinutes = 10;
@@ -92,8 +99,20 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private string circuitStatus = "";
 
     public AccountConnection(AccountConfig config, TickHistoryCache? tickCache = null, HeartbeatLog? heartbeat = null)
+        : this(config, tickCache, heartbeat, newPlatformAuth: null)
+    {
+    }
+
+    /// <summary>Test constructor: allows injecting the discovery/OTP client
+    /// so auth-failure paths run without any network.</summary>
+    public AccountConnection(
+        AccountConfig config,
+        TickHistoryCache? tickCache,
+        HeartbeatLog? heartbeat,
+        NewPlatformAuth? newPlatformAuth)
     {
         Config = config;
+        _newPlatformOverride = newPlatformAuth;
         _client = config.NewPlatform
             ? new DerivClient
             {
@@ -202,14 +221,15 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         StatusText = "Connecting…";
         try
         {
-            // New platform: discovery is the demo/real verification — the
-            // account list names the account's type authoritatively. Patch
-            // it BEFORE connecting so the real-money gate never sees an
-            // unverified account, and keep the id current.
-            if (_client.NewPlatform is not null && _client.NewPlatformToken is not null)
-            {
-                var accounts = await _client.NewPlatform.ListAccountsAsync(_client.NewPlatformToken)
-                    .ConfigureAwait(true);
+        // New platform: discovery is the demo/real verification — the
+        // account list names the account's type authoritatively. Patch
+        // it BEFORE connecting so the real-money gate never sees an
+        // unverified account, and keep the id current.
+        if (_client.NewPlatform is not null && _client.NewPlatformToken is not null)
+        {
+            var auth = _newPlatformOverride ?? _client.NewPlatform;
+            var accounts = await auth.ListAccountsAsync(_client.NewPlatformToken)
+                .ConfigureAwait(true);
                 var match = accounts.FirstOrDefault(a =>
                     a.AccountId == _client.NewPlatformAccountId)
                     ?? accounts.FirstOrDefault(a => a.IsDemoAccount)
@@ -249,15 +269,33 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
 
             await _client.SubscribeTicksAsync(Config.Symbol);
 
-            // Success — reset circuit breaker.
+            // Success — reset circuit breaker and any stale auth-failure flag.
             _consecutiveFailures = 0;
             IsDegraded = false;
             CircuitStatus = "";
+            AuthFailure = false;
 
             StatusText = string.IsNullOrEmpty(LoginIdText)
                 ? "Connected (not authorized)"
                 : $"Connected · {LoginIdText}";
             RaiseStateChanged();
+        }
+        catch (DerivApiException ex) when (IsTerminalAuthFailure(ex))
+        {
+            // Expired/revoked bearer (e.g. a 1-hour OAuth token, or a PAT
+            // revoked in Deriv): re-connecting CANNOT succeed until the
+            // user supplies a new token, so retrying would just churn the
+            // circuit breaker forever. Surface a specific, actionable state
+            // and stop — the row shows exactly what to do.
+            _consecutiveFailures = 0;
+            IsDegraded = false;
+            CircuitStatus = "";
+            IsBusy = false;
+            LastError = ex.Message;
+            StatusText = "Token expired — sign in again (OAuth) or paste a fresh PAT";
+            AuthFailure = true;
+            RaiseStateChanged();
+            return; // deliberate: no rethrow, no breaker, no auto-retry
         }
         catch (Exception ex)
         {
@@ -285,6 +323,42 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         }
     }
 
+    /// <summary>True after <see cref="ConnectAsync"/> hit a terminal auth
+    /// failure (401-class): the stored token can no longer authenticate and
+    /// re-connecting requires a new token (re-run OAuth sign-in or paste a
+    /// fresh PAT). Cleared on disconnect and on the next successful connect.</summary>
+    public bool AuthFailure
+    {
+        get => authFailure;
+        private set
+        {
+            if (authFailure != value)
+            {
+                authFailure = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasAuthFailure));
+            }
+        }
+    }
+
+    private bool authFailure;
+
+    /// <summary>XAML visibility binding helper for <see cref="AuthFailure"/>.</summary>
+    public bool HasAuthFailure => AuthFailure;
+
+    /// <summary>Classifies a discovery/OTP failure as terminal (token can
+    /// never work again) vs transient (retry makes sense). Internal static
+    /// so tests exercise it directly.</summary>
+    internal static bool IsTerminalAuthFailure(DerivApiException ex)
+    {
+        // Unauthorized = the new platform rejected the bearer outright.
+        // DerivApiException prefixes the Message with "[code] ", so match the
+        // embedded status ("HTTP 401 …") anywhere — it covers OTP and any
+        // other 401 raise site.
+        return ex.Code == "Unauthorized"
+            || ex.Message.Contains("HTTP 401 ", StringComparison.Ordinal);
+    }
+
     public async Task DisconnectAsync()
     {
         await _client.DisconnectAsync();
@@ -294,6 +368,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         ApiVerifiedVirtual = null;
         VerifiedText = "unverified";
         NewPlatformVerifiedVirtual = null;
+        AuthFailure = false;
         _client.IsVirtualOverride = null;
         _consecutiveFailures = 0;
         IsDegraded = false;
