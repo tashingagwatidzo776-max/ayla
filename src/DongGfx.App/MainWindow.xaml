@@ -480,7 +480,7 @@
                         <StackPanel>
                             <TextBlock Text="SIGN IN WITH DERIV (OAUTH 2.0) — no token pasting; browser consent; short-lived session"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <TextBlock Text="Requires a one-time OAuth app registration at developers.deriv.com (OAuth type) — paste its client id here. The sign-in opens your browser, and Deriv's consent page returns a session token that expires in about an hour, so PATs remain the default for long-running sessions."
+                            <TextBlock Text="Requires a one-time OAuth app registration at developers.deriv.com (OAuth type) — paste its client id here, and whitelist the redirect URI below exactly. The sign-in opens your browser, and Deriv's consent page returns a session token that expires in about an hour — but it renews itself from the refresh token, so sessions survive restarts. PATs remain the default."
                                        Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBox Text="{Binding AccountsVm.OAuthClientId, UpdateSourceTrigger=PropertyChanged}" Width="240"
@@ -488,6 +488,8 @@
                                 <Button Content="Sign in with Deriv" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
                                         Command="{Binding AccountsVm.SignInWithDerivCommand}" />
                             </StackPanel>
+                            <TextBlock Text="Redirect URI to whitelist (copy exactly): http://localhost:53175/callback"
+                                       Margin="0,6,0,0" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" FontFamily="Consolas" />
                             <TextBlock Text="{Binding AccountsVm.OAuthStatus}" Margin="0,6,0,0"
                                        Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                         </StackPanel>

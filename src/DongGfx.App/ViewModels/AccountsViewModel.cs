@@ -21,6 +21,7 @@ public sealed partial class AccountsViewModel : ObservableObject
 {
     private readonly MultiAccountHub _hub;
     private readonly Func<AppSettings> _settings;
+    private readonly SettingsService _settingsService;
     private readonly PatSplitWizard _patSplit;
 
     [ObservableProperty]
@@ -68,11 +69,16 @@ public sealed partial class AccountsViewModel : ObservableObject
 
     public IReadOnlyList<string> AvailableBrains { get; } = new BrainRegistry().GetBrainKeys().ToList();
 
-    public AccountsViewModel(MultiAccountHub hub, Func<AppSettings> settings)
+    public AccountsViewModel(MultiAccountHub hub, Func<AppSettings> settings,
+        SettingsService? settingsService = null)
     {
         _hub = hub;
         _settings = settings;
+        _settingsService = settingsService ?? new SettingsService();
         _patSplit = new PatSplitWizard(hub, VerifyTokenViaDiscovery);
+        // Persisted across restarts: the registration is one-time, the id
+        // should not need re-pasting every session.
+        oauthClientId = _settings().OAuthClientId;
     }
 
     /// <summary>Non-disruptive token verification: Deriv's discovery endpoint
@@ -462,12 +468,23 @@ public sealed partial class AccountsViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            var result = await _oauth.SignInAsync(
+            // The registered redirect must match EXACTLY, so real sign-ins use
+        // the fixed registrable loopback port (tests pass their own).
+        var result = await _oauth.SignInAsync(
                 clientId,
+                loopbackPort: OAuthSignIn.DefaultLoopbackPort,
                 onWaiting: msg => OAuthStatus = msg).ConfigureAwait(true);
 
             var mins = Math.Max(1, result.ExpiresInSeconds / 60);
             OAuthStatus = $"Signed in — token received (expires in ~{mins} min).";
+
+            // Keep the registration for next session — one-time setup.
+            var liveSettings = _settings();
+            if (liveSettings.OAuthClientId != clientId)
+            {
+                liveSettings.OAuthClientId = clientId;
+                _settingsService.Save(liveSettings);
+            }
 
             // Same import path as a pasted PAT: discovery verifies, then the
             // account lands as a new-platform row with the OAuth bearer. The

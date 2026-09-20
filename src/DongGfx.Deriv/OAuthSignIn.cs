@@ -241,9 +241,11 @@ public class OAuthSignIn
     // ── Full desktop sign-in ────────────────────────────────────────────
 
     /// <summary>The localhost redirect the app captures. Deriv requires the
-    /// redirect_uri to be registered EXACTLY — expose this to the user so
-    /// they register the right string (docs ask for HTTPS; loopback http is
-    /// the native-app convention and must be validated with Deriv first).</summary>
+    /// redirect_uri to be registered EXACTLY, so a real (non-test) sign-in
+    /// must use this fixed loopback port — the one string to whitelist at
+    /// developers.deriv.com. Tests pass explicit ports instead.</summary>
+    public const int DefaultLoopbackPort = 53175;
+
     public static string BuildLoopbackRedirectUri(int port) => $"http://localhost:{port}/callback";
 
     /// <summary>Picks a free loopback port for the one-shot listener.</summary>

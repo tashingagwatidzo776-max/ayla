@@ -44,7 +44,9 @@ public sealed class AccountConfig
     /// inside the DPAPI-encrypted vault with everything else.</summary>
     public string OAuthRefreshToken { get; set; } = "";    /// <summary>The OAuth client_id the access/refresh token pair was
     /// issued against — required by the refresh grant. Empty for PATs.</summary>
-    public string OAuthClientId { get; set; } = "";    /// <summary>When the current access token expires (UTC), as reported
+    public string OAuthClientId { get; set; } = "";
+
+    /// <summary>When the current access token expires (UTC), as reported
     /// by the token response. Null when unknown (a PAT: never expires on
     /// its own) or not yet renewed. Drives the renew-before-due schedule.</summary>
     public DateTimeOffset? TokenExpiresAtUtc { get; set; }
