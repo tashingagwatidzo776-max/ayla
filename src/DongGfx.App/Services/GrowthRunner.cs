@@ -5,6 +5,7 @@ using DongGfx.Core.Analytics;
 using DongGfx.Core.Brain;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
+using DongGfx.Deriv;
 
 namespace DongGfx.App.Services;
 
@@ -58,6 +59,38 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
     private readonly TimeProvider _timeProvider;
 
     private AutonomousScheduler? _scheduler;
+
+    /// <summary>Lazy no-auth public market-data feed backing the
+    /// market-closed idle probe — created on first idle, never carries a
+    /// token, so it keeps working through access-token expiry and re-auth
+    /// churn on the trading connection.</summary>
+    private PublicMarketDataClient? _publicFeed;
+
+    /// <summary>Test seam: replaces the public-feed open probe so    /// market-open wake behavior runs without a network.</summary>
+    internal Func<string, CancellationToken, Task<bool>>? PublicFeedProbeForTests { get; set; }
+
+    /// <summary>The scheduler's market-open probe: asks the no-auth public
+    /// feed whether the account's symbol is trading again. Any feed error
+    /// means "not confirmed open" (false) — the API-quoted reopen time
+    /// remains the fallback, and the probe can only accelerate, never
+    /// delay, the resume.</summary>
+    private async Task<bool> ProbePublicFeedOpenAsync(CancellationToken ct)
+    {
+        if (PublicFeedProbeForTests is not null)
+        {
+            return await PublicFeedProbeForTests(Connection.Config.Symbol, ct);
+        }
+
+        try
+        {
+            _publicFeed ??= new PublicMarketDataClient();
+            return await _publicFeed.IsSymbolOpenAsync(Connection.Config.Symbol, ct);
+        }
+        catch
+        {
+            return false;
+        }
+    }
     private TradingBrain? _brain;
     private GrowthSessionEngine? _engine;
     private GrowthPlan _plan = GrowthPlan.Default;
@@ -213,6 +246,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
             onCycleLatencyMs: ms => Metrics.RecordLatency(ms, Connection.DisplayName, _timeProvider.GetUtcNow()),
             onCycleError: exType => Metrics.RecordError(Connection.DisplayName, _timeProvider.GetUtcNow()),
             marketClosedProbe: ex => MarketClosedNotice.ParseReopenUtc(ex.Message, _timeProvider.GetUtcNow()),
+            marketOpenProbe: ProbePublicFeedOpenAsync,
             onMarketClosed: reopen =>
             {
                 // Expected weekend/holiday state, not a failure: show it as

@@ -151,6 +151,90 @@ public sealed class OAuthSignInTests
         Assert.Equal("InvalidGrant", ex.Code);
     }
 
+    // ── Refresh grant ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task RefreshAsync_Success_SendsRefreshGrantAndParsesRotation()
+    {
+        var handler = new FakeTokenHandler
+        {
+            Responder = body =>
+            {
+                Assert.NotNull(body);
+                Assert.Contains("grant_type=refresh_token", body);
+                Assert.Contains("client_id=app12345", body);
+                Assert.Contains("refresh_token=ory_rt_old", body);
+                Assert.DoesNotContain("grant_type=authorization_code", body);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"access_token":"ory_at_new","expires_in":3600,"token_type":"Bearer","refresh_token":"ory_rt_rotated"}""",
+                        Encoding.UTF8, "application/json")
+                };
+            }
+        };
+        var oauth = new OAuthSignIn(http: new HttpClient(handler));
+
+        var result = await oauth.RefreshAsync("ory_rt_old", "app12345");
+
+        Assert.Equal("ory_at_new", result.AccessToken);
+        Assert.Equal(3600, result.ExpiresInSeconds);
+        // Rotated refresh token wins — the caller must store this one.
+        Assert.Equal("ory_rt_rotated", result.RefreshToken);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WithoutRotation_KeepsIncomingRefreshToken()
+    {
+        var handler = new FakeTokenHandler
+        {
+            Responder = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"access_token":"ory_at_new","expires_in":1800,"token_type":"Bearer"}""",
+                    Encoding.UTF8, "application/json")
+            }
+        };
+        var oauth = new OAuthSignIn(http: new HttpClient(handler));
+
+        var result = await oauth.RefreshAsync("ory_rt_keep", "app12345");
+
+        Assert.Equal("ory_at_new", result.AccessToken);
+        // The server did not rotate: the incoming token stays valid.
+        Assert.Equal("ory_rt_keep", result.RefreshToken);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_Refused_ThrowsInvalidGrant()
+    {
+        var handler = new FakeTokenHandler
+        {
+            Responder = _ => new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            {
+                Content = new StringContent("""{"error":"invalid_grant"}""")
+            }
+        };
+        var oauth = new OAuthSignIn(http: new HttpClient(handler));
+
+        var ex = await Assert.ThrowsAsync<DerivApiException>(() =>
+            oauth.RefreshAsync("ory_rt_dead", "app12345"));
+
+        Assert.Equal("InvalidGrant", ex.Code);
+    }
+
+    [Theory]
+    [InlineData(null, "app")]
+    [InlineData("", "app")]
+    [InlineData("rt", null)]
+    [InlineData("rt", "")]
+    public async Task RefreshAsync_MissingArguments_Throw(string? refreshToken, string? clientId)
+    {
+        var oauth = new OAuthSignIn(http: new HttpClient(new FakeTokenHandler()));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            oauth.RefreshAsync(refreshToken!, clientId!));
+    }
+
     /// <summary>Fakes the browser: fires the loopback callback with a
     /// query string derived from the authorization URL it was opened with.</summary>
     private sealed class FakeBrowserSignIn : OAuthSignIn

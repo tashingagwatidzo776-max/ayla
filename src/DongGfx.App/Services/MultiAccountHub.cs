@@ -1503,7 +1503,11 @@ public sealed class MultiAccountHub
     }
 
     private AccountConnection CreateConnection(AccountConfig config) =>
-        new(config, _tickCache, _heartbeat);
+        new(config, _tickCache, _heartbeat,
+            newPlatformAuth: null,
+            // OAuth accounts renew their access token in place — the new
+            // token/refresh-token/expiry must persist, not just live in RAM.
+            persist: SaveAccounts);
 
     private void OnConnectionStateChanged(AccountConnection connection)
     {

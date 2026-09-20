@@ -169,6 +169,75 @@ public class OAuthSignIn
         return new OAuthResult(access, expires, refresh);
     }
 
+    // ── Refresh grant ───────────────────────────────────────────────────
+
+    /// <summary>Exchanges a refresh token for a fresh access token
+    /// (grant_type=refresh_token, per RFC 6749 §6). Deriv issues the
+    /// refresh token alongside the access token at sign-in; the access
+    /// token expires (~3600s) but the refresh token lives far longer, so
+    /// long sessions renew instead of re-running the browser consent.
+    ///
+    /// The server MAY rotate the refresh token on every use — when the
+    /// response carries a new one it replaces the old, when it omits one
+    /// the incoming token stays valid (the returned
+    /// <see cref="OAuthResult.RefreshToken"/> is always the one to store).
+    /// A revoked/expired refresh token fails with HTTP 400/401 →
+    /// <see cref="DerivApiException"/> code "InvalidGrant": the only
+    /// remedy is a fresh browser sign-in.</summary>
+    public virtual async Task<OAuthResult> RefreshAsync(
+        string refreshToken,
+        string clientId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            throw new ArgumentException("A refresh token is required.", nameof(refreshToken));
+        }
+
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            throw new ArgumentException("OAuth client_id is required.", nameof(clientId));
+        }
+
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "refresh_token",
+            ["client_id"] = clientId,
+            ["refresh_token"] = refreshToken,
+        });
+
+        using var resp = await _http.PostAsync(AuthBaseUrl + "/oauth2/token", form, ct).ConfigureAwait(false);
+        var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            throw new DerivApiException(
+                (int)resp.StatusCode == 400 || (int)resp.StatusCode == 401
+                    ? "InvalidGrant" : "RefreshFailed",
+                $"OAuth refresh failed: HTTP {(int)resp.StatusCode} — {Trim(body)} " +
+                "(the refresh token was revoked or expired — a fresh browser sign-in is required).");
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        var access = root.TryGetProperty("access_token", out var at) ? at.GetString() : null;
+        if (string.IsNullOrEmpty(access))
+        {
+            throw new DerivApiException("RefreshFailed", "Refresh response carried no access_token.");
+        }
+
+        int expires = root.TryGetProperty("expires_in", out var ei) && ei.TryGetInt32(out var e) ? e : 3600;
+
+        // Rotation-tolerant: keep the incoming refresh token when the server
+        // does not issue a new one.
+        string refresh = root.TryGetProperty("refresh_token", out var rf) &&
+                         !string.IsNullOrEmpty(rf.GetString())
+            ? rf.GetString()!
+            : refreshToken;
+
+        return new OAuthResult(access, expires, refresh);
+    }
+
     // ── Full desktop sign-in ────────────────────────────────────────────
 
     /// <summary>The localhost redirect the app captures. Deriv requires the

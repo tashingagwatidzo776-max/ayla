@@ -10,4 +10,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="DongGfx.Core.Tests" />
+  </ItemGroup>
+
 </Project>
