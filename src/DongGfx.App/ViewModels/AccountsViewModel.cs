@@ -81,6 +81,11 @@ public sealed partial class AccountsViewModel : ObservableObject
     /// under that app), else the classic default.</summary>
     private async Task<IReadOnlyList<NewPlatformAccount>> VerifyTokenViaDiscovery(string token)
     {
+        if (DiscoveryOverrideForTests is not null)
+        {
+            return await DiscoveryOverrideForTests(token).ConfigureAwait(true);
+        }
+
         var settings = _settings();
         var appId = settings.PrimaryNewPlatform && settings.PrimaryDerivAppId.Length > 0
             ? settings.PrimaryDerivAppId
@@ -296,6 +301,43 @@ public sealed partial class AccountsViewModel : ObservableObject
     [ObservableProperty]
     private string splitVerifyResult = "";
 
+    // Hand-rolled observables (not [ObservableProperty]): keeps the OAuth
+    // state independent of source-generator quirks.
+    private string oauthClientId = "";
+
+    /// <summary>The OAuth client_id of the Deriv OAuth-type app registration
+    /// (developers.deriv.com dashboard). Empty until the user registers one
+    /// — PAT remains the default path meanwhile.</summary>
+    public string OAuthClientId
+    {
+        get => oauthClientId;
+        set
+        {
+            if (oauthClientId != value)
+            {
+                oauthClientId = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasOAuthClientId));
+            }
+        }
+    }
+
+    private string oauthStatus = "";
+
+    /// <summary>Live progress text for the browser round-trip.</summary>
+    public string OAuthStatus
+    {
+        get => oauthStatus;
+        set
+        {
+            if (oauthStatus != value)
+            {
+                oauthStatus = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     [ObservableProperty]
     private bool hasSharedToken;
 
@@ -381,6 +423,123 @@ public sealed partial class AccountsViewModel : ObservableObject
         {
             StatusMessage = $"Split failed: {ex.Message}";
         }
+    }
+
+    // ── OAuth 2.0 sign-in (second sign-in path; PAT stays default) ─────
+    // Desktop variant of Deriv's OAuth: browser consent → loopback capture
+    // → token exchange. The resulting short-lived bearer feeds the same
+    // import path as a pasted PAT, so every rail downstream is unchanged.
+
+    private OAuthSignIn _oauth = new();
+
+    /// <summary>Test seam: when set, token verification (discovery) uses this
+    /// delegate instead of the real network client.</summary>
+    internal Func<string, Task<IReadOnlyList<NewPlatformAccount>>>? DiscoveryOverrideForTests { get; set; }
+
+    /// <summary>Test seam: replaces the OAuth flow with a fake (canned
+    /// result) so the VM command runs without a browser.</summary>
+    internal void SetOAuthForTests(OAuthSignIn oauth) => _oauth = oauth;
+
+    /// <summary>True once an OAuth client id is configured — XAML band
+    /// visibility helper.</summary>
+    public bool HasOAuthClientId => OAuthClientId.Trim().Length > 0;
+
+    [RelayCommand]
+    private async Task SignInWithDerivAsync()
+    {
+        var clientId = OAuthClientId.Trim();
+        if (IsBusy)
+        {
+            return;
+        }
+
+        if (clientId.Length == 0)
+        {
+            OAuthStatus = "Register an OAuth-type app at developers.deriv.com first, then paste its client id here.";
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var result = await _oauth.SignInAsync(
+                clientId,
+                onWaiting: msg => OAuthStatus = msg).ConfigureAwait(true);
+
+            var mins = Math.Max(1, result.ExpiresInSeconds / 60);
+            OAuthStatus = $"Signed in — token received (expires in ~{mins} min).";
+
+            // Same import path as a pasted PAT: discovery verifies, then the
+            // account lands as a new-platform row with the OAuth bearer.
+            await ImportTokenAsAccountsAsync(result.AccessToken, "OAuth session").ConfigureAwait(true);
+            OAuthStatus = $"Signed in — imported accounts from the OAuth session. " +
+                $"Note: the token expires in ~{mins} min; " +
+                "re-sign-in is required after that (PATs remain the default for long sessions).";
+        }
+        catch (Exception ex)
+        {
+            OAuthStatus = $"OAuth sign-in failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>Shared by PAT paste and OAuth sign-in: verifies the bearer
+    /// via discovery (plain HTTPS, live sessions untouched) and adds ONE
+    /// account row for the token — the demo account when discovery lists
+    /// several (an OAuth consent covers every account with one bearer, but
+    /// this app's architecture is one token per row: rows sharing a token
+    /// churn each other's sessions — the measured reconnect-storm root
+    /// cause). Additional simultaneous accounts need their own PATs.
+    /// Returns the number added (0 when the token is already imported).</summary>
+    private async Task<int> ImportTokenAsAccountsAsync(string token, string labelPrefix)
+    {
+        var accounts = await VerifyTokenViaDiscovery(token).ConfigureAwait(true);
+        if (accounts.Count == 0)
+        {
+            throw new InvalidOperationException("Deriv listed no accounts for this token.");
+        }
+
+        // Demo preferred, first-listed as fallback — fail closed toward virtual funds.
+        var chosen = accounts.FirstOrDefault(a => a.IsDemoAccount) ?? accounts[0];
+
+        var baseSettings = _settings();
+        var config = new AccountConfig
+        {
+            Label = $"{labelPrefix} · {(chosen.IsDemoAccount ? "demo" : "REAL")}",
+            ApiToken = token,
+            IsDemo = chosen.IsDemoAccount,
+            Symbol = AppSettings.DefaultSymbol,
+            Currency = chosen.Currency,
+            DurationMinutes = 5,
+            StartBudget = 5.00m,
+            BrainKey = "Growth",
+            NewPlatform = true,
+            DerivAppId = baseSettings.PrimaryNewPlatform && baseSettings.PrimaryDerivAppId.Length > 0
+                ? baseSettings.PrimaryDerivAppId
+                : baseSettings.AppId,
+            DerivAccountId = chosen.AccountId
+        };
+
+        var added = 0;
+        try
+        {
+            _hub.AddAccount(config);
+            added = 1;
+        }
+        catch (InvalidOperationException)
+        {
+            // Duplicate token — this token's row already exists.
+        }
+
+        StatusMessage = added > 0
+            ? $"Imported the {chosen.AccountId} {chosen.AccountType} row from the token " +
+              "(one row per token — this app never shares a token across rows). " +
+              "For additional simultaneous accounts, paste a dedicated PAT per account."
+            : "This token's account is already in the list.";
+        return added;
     }
 
     [RelayCommand]

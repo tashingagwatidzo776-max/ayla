@@ -343,6 +343,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />   <!-- add-account card -->
                         <RowDefinition Height="Auto" />   <!-- PAT split band -->
+                        <RowDefinition Height="Auto" />   <!-- OAuth sign-in band -->
                         <RowDefinition Height="Auto" />   <!-- accounts header -->
                         <RowDefinition Height="220" />    <!-- accounts grid -->
                         <RowDefinition Height="Auto" />   <!-- go-live readiness panel -->
@@ -472,9 +473,29 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- ── OAuth 2.0 sign-in (second sign-in path; PAT stays default) -->
+                    <Border Grid.Row="2" Grid.ColumnSpan="2" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,10,0,0"
+                            Background="#142196F3">
+                        <StackPanel>
+                            <TextBlock Text="SIGN IN WITH DERIV (OAUTH 2.0) — no token pasting; browser consent; short-lived session"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Requires a one-time OAuth app registration at developers.deriv.com (OAuth type) — paste its client id here. The sign-in opens your browser, and Deriv's consent page returns a session token that expires in about an hour, so PATs remain the default for long-running sessions."
+                                       Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <TextBox Text="{Binding AccountsVm.OAuthClientId, UpdateSourceTrigger=PropertyChanged}" Width="240"
+                                         ToolTip="The client id from your OAuth-type app registration at developers.deriv.com" />
+                                <Button Content="Sign in with Deriv" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding AccountsVm.SignInWithDerivCommand}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding AccountsVm.OAuthStatus}" Margin="0,6,0,0"
+                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
                     <!-- ── Connected accounts grid ──────────────────── -->
-                    <TextBlock Grid.Row="2" Text="CONNECTED ACCOUNTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
-                    <DataGrid Grid.Row="3" ItemsSource="{Binding AccountsVm.Accounts}" AutoGenerateColumns="False"
+                    <TextBlock Grid.Row="3" Text="CONNECTED ACCOUNTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
+                    <DataGrid Grid.Row="4" ItemsSource="{Binding AccountsVm.Accounts}" AutoGenerateColumns="False"
                               HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True" Margin="0,0,0,10">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Account" Width="140" Binding="{Binding DisplayName}" />
@@ -568,7 +589,7 @@
                     </DataGrid>
 
                     <!-- ── Go-live readiness (real trading) ────────── -->
-                    <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,0,0,10">
+                    <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0,0,0,10">
                         <StackPanel>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="GO-LIVE READINESS" Style="{StaticResource SectionTitle}" />
@@ -604,7 +625,7 @@
                     </Border>
 
                     <!-- ── Growth plan card ──────────────────────────── -->
-                    <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0,0,0,10">
+                    <Border Grid.Row="6" Style="{StaticResource Card}" Margin="0,0,0,10">
                         <StackPanel>
                             <TextBlock Text="GROWTH ENGINES — the second brain ($5 challenge)" Style="{StaticResource SectionTitle}" />
                             <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
@@ -673,7 +694,7 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- ── Growth runners grid ───────────────────────── -->                     <TextBlock Grid.Row="6" Text="RUNNERS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />                     <DataGrid Grid.Row="7" ItemsSource="{Binding GrowthVm.Rows}" AutoGenerateColumns="False"
+                    <!-- ── Growth runners grid ───────────────────────── -->                     <TextBlock Grid.Row="7" Text="RUNNERS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />                     <DataGrid Grid.Row="7" ItemsSource="{Binding GrowthVm.Rows}" AutoGenerateColumns="False"
                               HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Account" Width="130" Binding="{Binding DisplayName}" />
@@ -719,7 +740,7 @@
                         </DataGrid.Columns>
                     </DataGrid>
 
-                    <!-- ── Locked real-money banners (session unlock not armed) ── -->                     <ItemsControl Grid.Row="8" ItemsSource="{Binding GrowthVm.LockedRealAccountBanners}" Margin="0,0,0,4">
+                    <!-- ── Locked real-money banners (session unlock not armed) ── -->                     <ItemsControl Grid.Row="9" ItemsSource="{Binding GrowthVm.LockedRealAccountBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
@@ -736,7 +757,7 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- ── In-tab real-money unlock panel ────────── -->                     <Border Grid.Row="9" Margin="0,0,0,4" CornerRadius="4" Padding="12,10"
+                    <!-- ── In-tab real-money unlock panel ────────── -->                     <Border Grid.Row="10" Margin="0,0,0,4" CornerRadius="4" Padding="12,10"
                             Background="#22FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -781,7 +802,7 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- ── Stale-unlock banners (armed past the staleness threshold) ── -->                     <ItemsControl Grid.Row="10" ItemsSource="{Binding GrowthVm.StaleUnlockBanners}" Margin="0,0,0,4">
+                    <!-- ── Stale-unlock banners (armed past the staleness threshold) ── -->                     <ItemsControl Grid.Row="11" ItemsSource="{Binding GrowthVm.StaleUnlockBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
@@ -794,7 +815,7 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->                     <ItemsControl Grid.Row="11" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
+                    <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->                     <ItemsControl Grid.Row="12" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
@@ -813,7 +834,7 @@
                     </ItemsControl>
 
                     <!-- ── Portfolio governor latch banner ────────── -->
-                    <Border Grid.Row="12" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="13" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -833,7 +854,7 @@
                     </Border>
 
                     <!-- ── Portfolio governor warning banner ──────── -->
-                    <Border Grid.Row="13" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
+                    <Border Grid.Row="14" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
                             Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -853,8 +874,8 @@
                     </Border>
 
                     <!-- ── Activity log ──────────────────────────────── -->
-                    <TextBlock Grid.Row="14" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="15" Style="{StaticResource Card}" Padding="10">
+                    <TextBlock Grid.Row="15" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="16" Style="{StaticResource Card}" Padding="10">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <ItemsControl ItemsSource="{Binding GrowthVm.ActivityLog}">
                                 <ItemsControl.ItemTemplate>
@@ -868,8 +889,8 @@
                     </Border>
 
                     <!-- ── Intraday P&amp;L curve (per account, cumulative) ───── -->
-                    <TextBlock Grid.Row="16" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="17" Style="{StaticResource Card}" Padding="6">
+                    <TextBlock Grid.Row="17" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
+                    <Border Grid.Row="18" Style="{StaticResource Card}" Padding="6">
                         <controls:PnlCurveControl x:Name="PnlCurve" />
                     </Border>
                 </Grid>
