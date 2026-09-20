@@ -61,6 +61,11 @@ public sealed class AppSettings
     /// by the real-money gate and the kill switch regardless.</summary>
     public decimal ManualMaxStake { get; set; } = 10.00m;
 
+    /// <summary>The OAuth client_id of the user's OAuth-type app
+    /// registration at developers.deriv.com, persisted so the Accounts
+    /// tab's sign-in band survives restarts. Empty until they register.</summary>
+    public string OAuthClientId { get; set; } = "";
+
     /// <summary>Master autonomy switch; when off the brain never places trades.</summary>
     public bool AutonomyEnabled { get; set; }
 
