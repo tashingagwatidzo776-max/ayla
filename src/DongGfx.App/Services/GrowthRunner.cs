@@ -441,6 +441,20 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
 
     private void OnCycle(BrainCycleResult result)
     {
+        // First cycle after a market-closed idle: journal the wake cause.
+        // ConsumeWakeEvidence returns the probe wake instant (public feed
+        // ended the idle early) or null (quoted reopen / no probe).
+        if (_scheduler?.ConsumeWakeEvidence() is { } wokeAt)
+        {
+            var quoted = _scheduler.LastReopenQuoteUtc;
+            _journal.LogGrowthState(Connection.Config.Id, "market-open-wake", _engine.Bankroll, 0,
+                $"woke by public-feed probe at {wokeAt:u}" +
+                (quoted is { } q ? $" — quoted reopen was {q:u} ({(long)(q - wokeAt).TotalSeconds:+0;-0;0}s later)" : ""));
+            LastActivity = $"{DateTime.Now:HH:mm:ss} Market open (public feed) — engine woke " +
+                (quoted is { } q2 ? $"{Math.Max(0, (long)(q2 - wokeAt).TotalSeconds)}s before the quoted reopen" : "at the quoted reopen");
+            RaiseState();
+        }
+
         // Skip recording if the account is paused (scheduler still runs to stay warm).
         if (Connection.IsPaused)
         {
