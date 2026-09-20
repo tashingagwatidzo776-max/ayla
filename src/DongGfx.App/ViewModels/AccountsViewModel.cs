@@ -470,11 +470,25 @@ public sealed partial class AccountsViewModel : ObservableObject
             OAuthStatus = $"Signed in — token received (expires in ~{mins} min).";
 
             // Same import path as a pasted PAT: discovery verifies, then the
-            // account lands as a new-platform row with the OAuth bearer.
-            await ImportTokenAsAccountsAsync(result.AccessToken, "OAuth session").ConfigureAwait(true);
-            OAuthStatus = $"Signed in — imported accounts from the OAuth session. " +
-                $"Note: the token expires in ~{mins} min; " +
-                "re-sign-in is required after that (PATs remain the default for long sessions).";
+            // account lands as a new-platform row with the OAuth bearer. The
+            // refresh token (when the server issued one) rides along so the
+            // connection renews the ~1-hour access token itself — no second
+            // browser round-trip when it expires.
+            var added = await ImportTokenAsAccountsAsync(
+                result.AccessToken, "OAuth session",
+                refreshToken: result.RefreshToken,
+                expiresInSeconds: result.ExpiresInSeconds,
+                clientId: clientId).ConfigureAwait(true);
+
+            OAuthStatus = added > 0 && result.RefreshToken is not null
+                ? $"Signed in — imported accounts from the OAuth session. " +
+                  $"The access token expires in ~{mins} min, but it renews itself " +
+                  "from the refresh token before that (PATs remain the default)."
+                : added > 0
+                    ? $"Signed in — imported accounts from the OAuth session. " +
+                      $"No refresh token was issued: the token expires in ~{mins} min, " +
+                      $"then re-sign-in is required (PATs remain the default for long sessions)."
+                    : "Signed in — this token's account is already in the list.";
         }
         catch (Exception ex)
         {
@@ -494,7 +508,12 @@ public sealed partial class AccountsViewModel : ObservableObject
     /// churn each other's sessions — the measured reconnect-storm root
     /// cause). Additional simultaneous accounts need their own PATs.
     /// Returns the number added (0 when the token is already imported).</summary>
-    private async Task<int> ImportTokenAsAccountsAsync(string token, string labelPrefix)
+    private async Task<int> ImportTokenAsAccountsAsync(
+        string token,
+        string labelPrefix,
+        string? refreshToken = null,
+        int expiresInSeconds = 0,
+        string? clientId = null)
     {
         var accounts = await VerifyTokenViaDiscovery(token).ConfigureAwait(true);
         if (accounts.Count == 0)
@@ -520,7 +539,15 @@ public sealed partial class AccountsViewModel : ObservableObject
             DerivAppId = baseSettings.PrimaryNewPlatform && baseSettings.PrimaryDerivAppId.Length > 0
                 ? baseSettings.PrimaryDerivAppId
                 : baseSettings.AppId,
-            DerivAccountId = chosen.AccountId
+            DerivAccountId = chosen.AccountId,
+
+            // OAuth-only: the refresh grant needs the client id + refresh
+            // token + deadline; a PAT import leaves all three empty.
+            OAuthRefreshToken = refreshToken ?? "",
+            OAuthClientId = clientId ?? "",
+            TokenExpiresAtUtc = expiresInSeconds > 0
+                ? DateTimeOffset.UtcNow.AddSeconds(expiresInSeconds)
+                : null
         };
 
         var added = 0;

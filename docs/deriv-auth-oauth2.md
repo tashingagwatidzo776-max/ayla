@@ -22,9 +22,15 @@ sign-in path**; PATs remain the **default** — reasons below, with the numbers.
    `grant_type=authorization_code`, `client_id`, `code`, `code_verifier`,
    `redirect_uri`.
 6. Response: `access_token` (`ory_at_…`), `token_type: Bearer`,
-   `expires_in: 3600`; `refresh_token` is **optional** and must not be assumed.
+   `expires_in: 3600`, and a `refresh_token` — **confirmed present in the
+   exchange response** (the original docs call it optional; the app captures
+   it when issued and tolerates its absence).
 7. Use `Authorization: Bearer …`. Unlike PATs, **no `Deriv-App-ID` header** is
    needed — the OAuth token already identifies the application.
+8. When the access token ages out, POST the same token endpoint with
+   `grant_type=refresh_token`, `client_id`, `refresh_token` — no browser, no
+   consent. Implemented as `OAuthSignIn.RefreshAsync` and wired into the
+   connection path (below).
 
 ## Endpoint reference
 
@@ -35,6 +41,25 @@ sign-in path**; PATs remain the **default** — reasons below, with the numbers.
 | REST API base | `https://api.derivws.com` |
 | OTP (WebSocket bootstrap) | `POST /trading/v1/options/accounts/{accountId}/otp` |
 | Account discovery | `GET /trading/v1/options/accounts` |
+| Refresh grant | `POST /oauth2/token` (`grant_type=refresh_token`) |
+| Public market data (no auth) | `wss://api.derivws.com/trading/v1/options/ws/public` |
+
+## Scope enforcement — per endpoint, at the API
+
+Scopes are enforced **per endpoint** (a call without its scope gets 403, not
+a degraded answer), and **a token cannot gain scopes after issuance** — the
+scope set is fixed at consent time:
+
+| Scope | Gates |
+|---|---|
+| `read` | Account discovery, balances, statement |
+| `trade` | Proposal, buy, sell — anything that can move money |
+| `admin` | Token management, application settings |
+
+Practical consequence: the app's sign-in requests `read trade`, and a token
+minted without `trade` can never trade — it must be re-consented. The probe
+script below is the pre-release check that a token actually clears the
+calls we make.
 
 Registration requirements: an **OAuth-type app** at developers.deriv.com
 (client_id), and **every redirect URL whitelisted exactly** (subdirectories
@@ -43,8 +68,9 @@ included), HTTPS per the docs.
 ## Token lifetimes — the decisive fact
 
 - Access token: **~1 hour** (`expires_in: 3600`).
-- Refresh token: optional in the documented response; no documented silent
-  refresh flow for desktop.
+- Refresh token: **confirmed in the exchange response**; the refresh grant is
+  silent (no browser, no consent) — this removes the hourly-token dealbreaker
+  for desktop sessions.
 - PAT: no expiry (revocable in Deriv settings).
 
 ## In-app support (this repo)
@@ -54,7 +80,22 @@ included), HTTPS per the docs.
   desktop loopback flow: free-port `HttpListener` on `http://localhost:{port}/`
   captures `/callback?code=…&state=…`, state verified, code exchanged
   immediately, listener closed. Browser open is virtual → tests run the whole
-  flow headlessly.
+  flow headlessly. `RefreshAsync` implements the refresh grant (rotation
+  tolerated: an absent refresh token keeps the old one; refusal surfaces as
+  the 401-class signal the connection layer maps to "sign in again").
+- `AccountConnection` **renews automatically before discovery/OTP**: when a
+  refresh-capable account's recorded expiry is past or inside a 2-minute
+  margin, ConnectAsync exchanges the refresh token first, updates the config
+  (token, rotated refresh token, new expiry), repoints the live client, and
+  persists — so a weekend-idle → Monday-open session re-authenticates in
+  place. The residual-skew case (recorded expiry says valid, the API
+  disagrees with a 401) gets one refresh-and-retry before the terminal state.
+- `src/DongGfx.Deriv/PublicMarketDataClient.cs` — the **no-auth public feed**
+  (ticks, active symbols, open/closed status): nothing on it needs a token,
+  so monitoring riding it survives access-token expiry and re-auth churn by
+  construction. The autonomous scheduler's market-closed probe uses it to
+  wake the engine the moment the exchange actually opens, without touching
+  the authenticated session.
 - Accounts tab → "SIGN IN WITH DERIV (OAUTH 2.0)" band: paste the registered
   client id, sign in, and the token lands through the **same import path as a
   PAT** (discovery verifies; one row per token — see below).
@@ -73,8 +114,8 @@ acceptable, **such as in desktop or native environments**."
 
 | Concern | OAuth 2.0 | PAT |
 |---|---|---|
-| Token lifetime | ~1 h; refresh not guaranteed | No expiry |
-| Weekend-idle → Monday-open session | Dies ~39 times over; every resumption needs a browser round-trip | Survives the weekend |
+| Token lifetime | ~1 h access token; **silent refresh confirmed and implemented** | No expiry |
+| Weekend-idle → Monday-open session | **Survives** with the refresh grant (one silent exchange on resume); without it, dies ~39 times over | Survives the weekend |
 | Redirect capture | Needs a pre-registered callback; loopback `http://localhost:{port}` is the native-app convention but Deriv's docs advertise HTTPS only — validate with Deriv before relying on it | Not used |
 | Onboarding other users | Excellent — no token pasting, consent is revocable | Each user mints/pastes a token |
 | Password exposure | Never leaves Deriv | Never involved |
@@ -92,18 +133,25 @@ closure with a 1-hour token (signed in just before the close):
   the reconnect-storm pattern we just eliminated, back in force all weekend.
 - With the 401-terminal classification shipped here: **1 attempt, 2
   transitions, 0 degraded time** — then a terminal, human-actionable state.
-  No churn, but also **no trading Monday morning without a fresh sign-in**.
+  No churn, but also **no trading Monday morning without a fresh sign-in**
+  — which is exactly what the refresh grant removes: a refresh-capable
+  account now renews in place on resume (one silent exchange), so Monday
+  00:00 UTC needs no human. The market-closed probe additionally rides the
+  token-free public feed, so even the monitoring that decides "when to wake"
+  is independent of all session state.## Recommendation (and why PAT stays default)
 
-## Recommendation (and why PAT stays default)
-
-For a single-user desktop tool holding sessions across weekends, the hourly
-token is strictly worse: OAuth would reintroduce session churn during the
-exact window the app trades, unless/until Deriv documents a silent refresh
-flow for desktop. **PATs stay the default.** OAuth remains valuable for
-future multi-user distribution (frictionless, revocable onboarding) and is
-now a supported second path — the sign-in lands the OAuth bearer in the
-ordinary account pipeline, so every downstream safety rail (discovery
-demo/real verdict, real-money gate, governor) applies unchanged.
+The silent refresh grant removes the hourly token's fatal flaw: a weekend-
+idle session now resumes with one in-place exchange instead of a browser
+round-trip, and the market-closed probe rides the token-free public feed so
+monitoring never depends on session state at all. **PATs stay the default**
+on simplicity, not viability: a PAT needs no registered app, no consent
+screen, no refresh-credential revocation handling, and cannot 403 on scope
+misconfiguration — while the OAuth path requires an OAuth-type app
+registration and a `read trade` consent. OAuth is the recommended path the
+moment onboarding other users matters (frictionless, revocable, password
+never leaves Deriv). Either way the sign-in lands the bearer in the ordinary
+account pipeline, so every downstream safety rail (discovery demo/real
+verdict, real-money gate, governor) applies unchanged.
 
 One architectural note discovered while building this: an OAuth consent
 covers **all** of a user's accounts with one bearer, but this app keeps the

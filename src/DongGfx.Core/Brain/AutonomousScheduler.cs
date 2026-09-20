@@ -30,6 +30,18 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     private readonly Func<Exception, DateTimeOffset?>? _marketClosedProbe;
     private readonly Action<DateTimeOffset>? _onMarketClosed;
 
+    /// <summary>Optional no-auth market-open probe consulted during a
+    /// market-closed idle: true = the market is open again, wake the engine
+    /// before the API-quoted reopen time. Backed by the public feed so it
+    /// needs no token and survives re-auth churn. Null = the quoted reopen
+    /// instant is trusted as-is (pre-existing behavior).</summary>
+    private readonly Func<CancellationToken, Task<bool>>? _marketOpenProbe;
+
+    /// <summary>How often the market-open probe may run during one idle.
+    /// The reopen quote is already clamped to ≤30 min, so a probe a minute
+    /// keeps the feed traffic negligible.</summary>
+    internal static readonly TimeSpan MarketOpenProbeInterval = TimeSpan.FromMinutes(1);
+
     private CancellationTokenSource? _cts;
     private DateTimeOffset _nextAllowedDecision;
 
@@ -46,7 +58,8 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         Action<double>? onCycleLatencyMs = null,
         Action<string>? onCycleError = null,
         Func<Exception, DateTimeOffset?>? marketClosedProbe = null,
-        Action<DateTimeOffset>? onMarketClosed = null)
+        Action<DateTimeOffset>? onMarketClosed = null,
+        Func<CancellationToken, Task<bool>>? marketOpenProbe = null)
     {
         _failureBackoff = failureBackoff ?? TimeSpan.FromSeconds(5);
         _maxConsecutiveFailures = Math.Max(1, maxConsecutiveFailures);
@@ -54,6 +67,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
         _onCycleError = onCycleError;
         _marketClosedProbe = marketClosedProbe;
         _onMarketClosed = onMarketClosed;
+        _marketOpenProbe = marketOpenProbe;
         _brain = brain;
         _settings = settings;
         _tickWindow = tickWindow ?? throw new ArgumentNullException(nameof(tickWindow));
@@ -136,6 +150,72 @@ public sealed class AutonomousScheduler : IAsyncDisposable
             state => ((TaskCompletionSource)state!).TrySetResult(), resolved,
             delay, Timeout.InfiniteTimeSpan);
         await resolved.Task.WaitAsync(ct);
+    }
+
+    /// <summary>Waits out a market-closed window, kill-switch aware, and
+    /// — when a market-open probe is wired — consults the no-auth feed at
+    /// <see cref="MarketOpenProbeInterval"/> between kill-switch slices:
+    /// the feed saying "open" ends the idle immediately, even when Deriv's
+    /// quoted reopen clock is skewed. Without a probe this is exactly the
+    /// pre-existing quoted-reopen wait.</summary>
+    private async Task DelayUntilReopenAsync(DateTimeOffset reopen, CancellationToken ct, int generation)
+    {
+        if (_marketOpenProbe is null)
+        {
+            await DelayRespectingSwitchAsync(reopen - _timeProvider.GetUtcNow(), ct, generation);
+            return;
+        }
+
+        var nextProbe = _timeProvider.GetUtcNow();
+        while (true)
+        {
+            if (generation != Volatile.Read(ref _generation)
+                || _riskContext().KillSwitchEngaged)
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow();
+            if (now >= reopen)
+            {
+                return; // quoted reopen due — the loop re-asks the market
+            }
+
+            if (now >= nextProbe)
+            {
+                nextProbe = now + MarketOpenProbeInterval;
+                try
+                {
+                    if (await _marketOpenProbe(ct))
+                    {
+                        // Feed-authoritative open: wake now.
+                        _nextAllowedDecision = _timeProvider.GetUtcNow();
+                        return;
+                    }
+                }
+                catch
+                {
+                    // Feed unreachable is expected sometimes (it is a
+                    // convenience probe) — the quoted reopen still fires.
+                }
+            }
+
+            var remaining = reopen - _timeProvider.GetUtcNow();
+            if (remaining <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            var slice = remaining > SwitchCheckSlice ? SwitchCheckSlice : remaining;
+            try
+            {
+                await DelayAsync(slice, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
     }
 
     /// <summary>
@@ -230,6 +310,13 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                     ConsecutiveFailures = 0;
                     _nextAllowedDecision = reopen.Value;
                     _onMarketClosed?.Invoke(reopen.Value);
+
+                    // Wait out the closed window here (kill-switch aware)
+                    // with the optional open probe between slices: when the
+                    // no-auth feed says the market is live again the engine
+                    // resumes immediately instead of waiting out Deriv's
+                    // possibly-skewed quoted clock.
+                    await DelayUntilReopenAsync(reopen.Value, ct, generation);
                     continue;
                 }
 

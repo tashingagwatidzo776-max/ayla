@@ -31,6 +31,34 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     /// "Unauthorized" to model an expired/revoked bearer token).</summary>
     private readonly NewPlatformAuth? _newPlatformOverride;
 
+    /// <summary>OAuth refresh client — renews the short-lived access token
+    /// of a browser-signed-in session without another consent round-trip.</summary>
+    private readonly OAuthSignIn _oauth;
+
+    /// <summary>Persist callback (the hub's vault save): renewal rewrites
+    /// the config's token/refresh-token/expiry, so the new values must
+    /// survive a restart. Null in tests.</summary>
+    private readonly Action? _persist;
+
+    /// <summary>Test seam: replaces the refresh grant so renewal runs
+    /// without the real token endpoint.</summary>
+    internal Func<string, string, Task<OAuthResult>>? RefreshOverrideForTests { get; set; }
+
+    /// <summary>Access tokens are renewed this long before their recorded
+    /// expiry (or immediately when already past) so discovery/OTP never
+    /// race the deadline.</summary>
+    internal static readonly TimeSpan RenewalMargin = TimeSpan.FromMinutes(2);    /// <summary>True when this account's token is OAuth-derived AND its
+    /// refresh credential is on file — the only configuration that can
+    /// self-renew. A PAT (no refresh token) or an OAuth session that lost
+    /// its refresh token cannot.</summary>
+    public bool CanRenewToken =>
+        Config.NewPlatform &&
+        !string.IsNullOrWhiteSpace(Config.OAuthRefreshToken) &&
+        !string.IsNullOrWhiteSpace(Config.OAuthClientId);    /// <summary>Last successful in-place access-token renewal (UTC), or
+    /// null when none has happened this session. Feeds status lines and
+    /// tests.</summary>
+    public DateTimeOffset? TokenRenewedAtUtc { get; private set; }
+
     // ── Circuit breaker ────────────────────────────────────────────
     private const int MaxConsecutiveFailures = 5;
     private const int CircuitOpenMinutes = 10;
@@ -104,15 +132,21 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     }
 
     /// <summary>Test constructor: allows injecting the discovery/OTP client
-    /// so auth-failure paths run without any network.</summary>
+    /// so auth-failure paths run without any network. <paramref name="oauth"/>
+    /// replaces the refresh client and <paramref name="persist"/> captures
+    /// post-renewal vault writes for assertions.</summary>
     public AccountConnection(
         AccountConfig config,
         TickHistoryCache? tickCache,
         HeartbeatLog? heartbeat,
-        NewPlatformAuth? newPlatformAuth)
+        NewPlatformAuth? newPlatformAuth,
+        OAuthSignIn? oauth = null,
+        Action? persist = null)
     {
         Config = config;
         _newPlatformOverride = newPlatformAuth;
+        _oauth = oauth ?? new OAuthSignIn();
+        _persist = persist;
         _client = config.NewPlatform
             ? new DerivClient
             {
@@ -221,6 +255,20 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         StatusText = "Connecting…";
         try
         {
+        // OAuth accounts: renew a due (or already expired) access token
+        // BEFORE anything calls the API, so a weekend-idle → Monday-open
+        // session re-authenticates via the refresh grant instead of the
+        // browser — and the dead token never reaches discovery to be
+        // rejected (the 401 handler below covers the residual skew case).
+        if (CanRenewToken && TokenIsDue())
+        {
+            StatusText = "Access token expired — renewing…";
+            if (await RenewAccessTokenAsync("token due or expired").ConfigureAwait(true))
+            {
+                StatusText = "Access token renewed — connecting…";
+            }
+        }
+
         // New platform: discovery is the demo/real verification — the
         // account list names the account's type authoritatively. Patch
         // it BEFORE connecting so the real-money gate never sees an
@@ -228,8 +276,26 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         if (_client.NewPlatform is not null && _client.NewPlatformToken is not null)
         {
             var auth = _newPlatformOverride ?? _client.NewPlatform;
-            var accounts = await auth.ListAccountsAsync(_client.NewPlatformToken)
-                .ConfigureAwait(true);
+            IReadOnlyList<NewPlatformAccount> accounts;
+            try
+            {
+                accounts = await auth.ListAccountsAsync(_client.NewPlatformToken)
+                    .ConfigureAwait(true);
+            }
+            catch (DerivApiException ex) when (IsTerminalAuthFailure(ex) && CanRenewToken)
+            {
+                // Residual skew: the recorded expiry says valid but the API
+                // disagrees. One refresh-and-retry before the terminal state.
+                if (!await RenewAccessTokenAsync("discovery rejected the token").ConfigureAwait(true))
+                {
+                    throw;
+                }
+
+                StatusText = "Access token renewed — connecting…";
+                accounts = await auth.ListAccountsAsync(_client.NewPlatformToken)
+                    .ConfigureAwait(true);
+            }
+
                 var match = accounts.FirstOrDefault(a =>
                     a.AccountId == _client.NewPlatformAccountId)
                     ?? accounts.FirstOrDefault(a => a.IsDemoAccount)
@@ -357,6 +423,53 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         // other 401 raise site.
         return ex.Code == "Unauthorized"
             || ex.Message.Contains("HTTP 401 ", StringComparison.Ordinal);
+    }
+
+    // ── OAuth access-token renewal ─────────────────────────────    /// <summary>True when the recorded expiry is missing/unknown or within
+    /// <see cref="RenewalMargin"/> of now (or already past). Unknown expiry
+    /// on a refresh-capable account means "renew now" — safe with a PAT:
+    /// it never reaches here (no refresh token → CanRenewToken false).</summary>
+    private bool TokenIsDue() =>
+        !Config.TokenExpiresAtUtc.HasValue
+        || Config.TokenExpiresAtUtc.Value - DateTimeOffset.UtcNow <= RenewalMargin;
+
+    /// <summary>Exchanges the stored refresh token for a fresh access
+    /// token, updates config + live client in place, and persists. Returns
+    /// false when the grant is refused (revoked/expired refresh token) —
+    /// the caller then falls through to the normal terminal-auth surface
+    /// ("sign in again"), never to a retry loop.</summary>
+    private async Task<bool> RenewAccessTokenAsync(string reason)
+    {
+        if (!CanRenewToken)
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = RefreshOverrideForTests is not null
+                ? await RefreshOverrideForTests(Config.OAuthRefreshToken, Config.OAuthClientId).ConfigureAwait(true)
+                : await _oauth.RefreshAsync(Config.OAuthRefreshToken, Config.OAuthClientId).ConfigureAwait(true);
+
+            Config.ApiToken = result.AccessToken;
+            Config.OAuthRefreshToken = string.IsNullOrWhiteSpace(result.RefreshToken)
+                ? Config.OAuthRefreshToken
+                : result.RefreshToken;
+            Config.TokenExpiresAtUtc = DateTimeOffset.UtcNow
+                .AddSeconds(Math.Max(60, result.ExpiresInSeconds));
+
+            // The live client authenticates with the stored token — repoint it.
+            _client.NewPlatformToken = Config.ApiToken;
+            TokenRenewedAtUtc = DateTimeOffset.UtcNow;
+            _persist?.Invoke();
+            return true;
+        }
+        catch (DerivApiException)
+        {
+            // Refresh refused — the terminal-auth catch in ConnectAsync
+            // surfaces the actionable state when discovery then fails.
+            return false;
+        }
     }
 
     public async Task DisconnectAsync()

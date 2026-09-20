@@ -37,8 +37,18 @@ public sealed class AccountConfig
     /// (e.g. DOT92951338). Optional: on connect, the account list is used
     /// to find the demo account when this is empty.</summary>
     public string DerivAccountId { get; set; } = "";
-
-    /// <summary>Ensemble configuration: brain keys with optional weights
+    // ── OAuth 2.0 (refresh) ─────────────────────────────────────────    /// <summary>OAuth 2.0 refresh token captured at sign-in, when the
+    /// session came from the browser flow (empty for pasted PATs). Lets
+    /// the connection renew the ~1-hour access token automatically before
+    /// discovery/OTP instead of going through the browser again. Stored
+    /// inside the DPAPI-encrypted vault with everything else.</summary>
+    public string OAuthRefreshToken { get; set; } = "";    /// <summary>The OAuth client_id the access/refresh token pair was
+    /// issued against — required by the refresh grant. Empty for PATs.</summary>
+    public string OAuthClientId { get; set; } = "";    /// <summary>When the current access token expires (UTC), as reported
+    /// by the token response. Null when unknown (a PAT: never expires on
+    /// its own) or not yet renewed. Drives the renew-before-due schedule.</summary>
+    public DateTimeOffset? TokenExpiresAtUtc { get; set; }
+    /// <summary>Ensemble configuration: brain keys with optional weights
     /// ("Growth:1.5 TrendFollowing Breakout:0.5"), parsed by
     /// <see cref="DongGfx.Core.Brain.EnsemblePlanParser"/>. Only read when
     /// <see cref="BrainKey"/> is "Ensemble"; empty means all known brains
