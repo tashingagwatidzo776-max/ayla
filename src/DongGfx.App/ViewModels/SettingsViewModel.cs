@@ -99,6 +99,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private decimal? manualMaxStake;
 
+    /// <summary>Maximum volume (lots) for a single MT5 bridge order.
+    /// 0 disables MT5 order placement entirely (fail-closed).</summary>
+    [ObservableProperty]
+    private decimal mt5MaxLots = 1.00m;
+
+    /// <summary>One-click session start: auto-connect demo, arm the brain,
+    /// select R_100, start engines.</summary>
+    [ObservableProperty]
+    private bool startupProfile;
+
     [ObservableProperty]
     private int logLevel = 1;
 
@@ -156,6 +166,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         DurationMinutes = settings.DurationMinutes;
         Stake = settings.Stake;
         ManualMaxStake = settings.ManualMaxStake > 0 ? settings.ManualMaxStake : null;
+        Mt5MaxLots = settings.Mt5MaxLots;
+        StartupProfile = settings.StartupProfile;
         AutonomyEnabled = settings.AutonomyEnabled;
         DecisionIntervalMinutes = settings.DecisionIntervalMinutes;
         LlmBaseUrl = settings.LlmBaseUrl;
@@ -189,6 +201,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         DurationMinutes = Math.Max(1, DurationMinutes),
         Stake = Math.Max(0.01m, Stake),
         ManualMaxStake = Math.Max(0m, ManualMaxStake ?? 0m),
+        Mt5MaxLots = Math.Max(0m, Mt5MaxLots),
+        StartupProfile = StartupProfile,
         AutonomyEnabled = AutonomyEnabled,
         DecisionIntervalMinutes = Math.Max(1, DecisionIntervalMinutes),
         LlmBaseUrl = string.IsNullOrWhiteSpace(LlmBaseUrl) ? AppSettings.DefaultLlmBaseUrl : LlmBaseUrl.Trim(),
