@@ -898,6 +898,185 @@
                 </Grid>
             </TabItem>
 
+            <!-- ════════════════ TERMINAL — our own MT5-style trading desk ════════════════ -->
+            <TabItem Header="Terminal">
+                <Grid Margin="12" DataContext="{Binding TerminalVm}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <!-- account bar -->
+                        <RowDefinition Height="*" />
+                        <!-- main content -->
+                    </Grid.RowDefinitions>
+
+                    <!-- ── Account bar ── -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Padding="10">
+                        <DockPanel>
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                <TextBlock Text="TERMINAL" Style="{StaticResource SectionTitle}"
+                                           VerticalAlignment="Center" Margin="0,0,18,0" />
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                    <TextBlock Text="{Binding AccountText}" FontWeight="SemiBold" />
+                                </Border>
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                    <TextBlock Text="{Binding ConnectionText}" />
+                                </Border>
+                                <Border Style="{StaticResource StatusPill}">
+                                    <TextBlock Text="{Binding BalanceText}" Foreground="{StaticResource AccentBrush}"
+                                               FontWeight="Bold" />
+                                </Border>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                                <!-- ── THE BRAIN SWITCH ── -->
+                                <Button Content="🧠 BRAIN: ON" Command="{Binding TurnBrainOnCommand}"
+                                        Margin="0,0,6,0" />
+                                <Button Content="🧠 BRAIN: OFF" Style="{StaticResource GhostButton}"
+                                        Command="{Binding TurnBrainOffCommand}" Margin="0,0,12,0" />
+                                <Button Content="⏹ EMERGENCY STOP" Style="{StaticResource DangerButton}"
+                                        Command="{Binding EmergencyStopCommand}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- ── Main content: market watch | ticket+positions ── -->
+                    <Grid Grid.Row="1" Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Market watch -->
+                        <Border Grid.Column="0" Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                                    <TextBlock Text="MARKET WATCH" Style="{StaticResource SectionTitle}"
+                                               DockPanel.Dock="Left" VerticalAlignment="Center" />
+                                    <Button Content="⟳" Command="{Binding LoadSymbolsCommand}" DockPanel.Dock="Right"
+                                            HorizontalAlignment="Right" Style="{StaticResource GhostButton}"
+                                            Padding="10,4" />
+                                </DockPanel>
+                                <DataGrid Grid.Row="1"
+                                          ItemsSource="{Binding Symbols}"
+                                          SelectedItem="{Binding SelectedSymbol}"
+                                          AutoGenerateColumns="False" IsReadOnly="True"
+                                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                          HorizontalGridLinesBrush="{StaticResource BorderBrush}"
+                                          Background="Transparent" RowBackground="Transparent"
+                                          BorderThickness="0" FontFamily="Consolas"
+                                          VirtualizingPanel.IsVirtualizing="True">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="110" />
+                                        <DataGridTextColumn Header="Name" Binding="{Binding DisplayName}" Width="*" />
+                                        <DataGridTextColumn Header="Bid" Binding="{Binding Bid, StringFormat=0.#####}" Width="90">
+                                            <DataGridTextColumn.ElementStyle>
+                                                <Style TargetType="DataGridCell">
+                                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                    <Setter Property="HorizontalContentAlignment" Value="Right" />
+                                                </Style>
+                                            </DataGridTextColumn.ElementStyle>
+                                        </DataGridTextColumn>
+                                        <DataGridTextColumn Header="Ask" Binding="{Binding Ask, StringFormat=0.#####}" Width="90">
+                                            <DataGridTextColumn.ElementStyle>
+                                                <Style TargetType="DataGridCell">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                                    <Setter Property="HorizontalContentAlignment" Value="Right" />
+                                                </Style>
+                                            </DataGridTextColumn.ElementStyle>
+                                        </DataGridTextColumn>
+                                        <DataGridTextColumn Header="State" Binding="{Binding OpenText}" Width="70" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </Border>
+
+                        <!-- Ticket + positions -->
+                        <Grid Grid.Column="2">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <!-- Order ticket -->
+                            <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="NEW ORDER" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                                    <TextBlock Text="{Binding SelectedSymbol.DisplayName}" FontWeight="Bold" FontSize="15" />
+                                    <TextBlock Text="{Binding QuoteText}" FontFamily="Consolas" FontSize="22"
+                                               Foreground="{StaticResource AccentBrush}" Margin="0,2,0,8" />
+                                    <UniformGrid Columns="2">
+                                        <RadioButton Content="RISE ▲" GroupName="dir" IsChecked="{Binding IsRise, Mode=TwoWay}"
+                                                     Margin="0,0,6,6" Padding="6,4" Foreground="{StaticResource AccentBrush}" />
+                                        <RadioButton Content="FALL ▼" GroupName="dir" IsChecked="{Binding IsFall, Mode=TwoWay}"
+                                                     Margin="6,0,0,6" Padding="6,4" Foreground="{StaticResource DangerBrush}" />
+                                    </UniformGrid>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Stake" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                                        <TextBox Grid.Column="1" Text="{Binding Stake, TargetNullValue=''}" Margin="4,0"
+                                                 Padding="4,3" />
+                                        <TextBlock Grid.Column="2" Text="Minutes" Style="{StaticResource FieldLabel}"
+                                                   VerticalAlignment="Center" />
+                                        <TextBox Grid.Column="3" Text="{Binding DurationMinutes, TargetNullValue=''}" Margin="4,0"
+                                                 Padding="4,3" />
+                                    </Grid>
+                                    <Button Content="PLACE ORDER" Command="{Binding PlaceOrderCommand}" Margin="0,10,0,4"
+                                            FontWeight="Bold" />
+                                    <TextBlock Text="{Binding TicketStatus}" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0" />
+                                    <TextBlock Text="{Binding BrainStateText}" TextWrapping="Wrap" FontSize="11"
+                                               Foreground="{StaticResource WarningBrush}" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Positions -->
+                            <Border Grid.Row="2" Style="{StaticResource Card}">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <DockPanel Margin="0,0,0,6">
+                                        <TextBlock Text="POSITIONS" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
+                                        <TextBlock Text="{Binding OpenPositionsText}" DockPanel.Dock="Right"
+                                                   HorizontalAlignment="Right"
+                                                   Foreground="{StaticResource TextSecondaryBrush}" />
+                                    </DockPanel>
+                                    <DataGrid Grid.Row="1"
+                                              ItemsSource="{Binding Positions}"
+                                              AutoGenerateColumns="False" IsReadOnly="True"
+                                              HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="{StaticResource BorderBrush}"
+                                              Background="Transparent" RowBackground="Transparent"
+                                              BorderThickness="0" FontFamily="Consolas">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Contract" Binding="{Binding ContractId}" Width="130" />
+                                            <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="90" />
+                                            <DataGridTextColumn Header="Dir" Binding="{Binding DirectionText}" Width="80" />
+                                            <DataGridTextColumn Header="Stake" Binding="{Binding Stake}" Width="60" />
+                                            <DataGridTextColumn Header="Entry" Binding="{Binding EntrySpot, StringFormat=0.#####}" Width="90" />
+                                            <DataGridTextColumn Header="Now" Binding="{Binding CurrentSpot, StringFormat=0.#####}" Width="90" />
+                                            <DataGridTextColumn Header="Δ" Binding="{Binding DeltaText}" Width="80" />
+                                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90" />
+                                            <DataGridTextColumn Header="P/L" Binding="{Binding Profit, StringFormat=+0.##;-0.##;0}" Width="70" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </TabItem>
+
             <TabItem Header="Trades">
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
