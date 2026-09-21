@@ -499,7 +499,7 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
         _journal.LogBrainDecision(
             Connection.Config.Id,
             "Growth",
-            "frxEURUSD",
+            Connection.Config.Symbol,
             decision.Direction.ToString(),
             decision.Stake,
             decision.Confidence,

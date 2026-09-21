@@ -681,21 +681,72 @@ public sealed class DerivClient : IAsyncDisposable
         ErrorReceived?.Invoke($"[{code}] {msg}");
     }
 
-    private static ContractInfo ParseContract(JsonElement c, string fallbackId)
+    // Internal so the Core test assembly (friend) can pin both wire shapes.
+    internal static ContractInfo ParseContract(JsonElement c, string fallbackId)
     {
-        var contractId = c.TryGetProperty("contract_id", out var ci) ? ci.GetString() ?? fallbackId : fallbackId;
-        var status = c.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "";
-        var isSold = c.TryGetProperty("is_sold", out var sold) && sold.GetBoolean();
-        var entrySpot = c.TryGetProperty("entry_spot", out var es) ? es.GetDouble() : 0;
-        var exitSpot = c.TryGetProperty("exit_spot", out var xs) ? xs.GetDouble() : 0;
-        var entryTime = c.TryGetProperty("entry_tick_time", out var et) ? et.GetInt64() : 0;
-        var exitTime = c.TryGetProperty("exit_tick_time", out var xt) ? xt.GetInt64() : 0;
-        var buyPrice = c.TryGetProperty("buy_price", out var bp) ? bp.GetDecimal() : 0m;
-        var profit = c.TryGetProperty("profit", out var pf) ? pf.GetDecimal() : 0m;
+        // Tolerant scalars: the new platform serializes contract fields as
+        // JSON strings ("582.76", "-1.00", "1") and booleans as 0/1
+        // integers, and names times entry_spot_time/exit_spot_time — while
+        // classic v3 uses native JSON numbers/booleans and *_tick_time.
+        var contractId = c.TryGetProperty("contract_id", out var ci)
+            ? (ci.ValueKind == JsonValueKind.Number ? ci.GetRawText() : ci.GetString()) ?? fallbackId
+            : fallbackId;
+        var status = c.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String
+            ? st.GetString() ?? "" : "";
+        var isSold = c.TryGetProperty("is_sold", out var sold) && Truthy(sold);
+        var entrySpot = Prop(c, "entry_spot") is { } es ? Num(es) : 0;
+        var exitSpot = Prop(c, "exit_spot") is { } xs ? Num(xs) : 0;
+        var entryTime = Prop(c, "entry_tick_time", "entry_spot_time") is { } et ? Long(et) : 0;
+        var exitTime = Prop(c, "exit_tick_time", "exit_spot_time", "sell_time") is { } xt ? Long(xt) : 0;
+        var buyPrice = Prop(c, "buy_price") is { } bp ? Dec(bp) : 0m;
+        var profit = Prop(c, "profit") is { } pf ? Dec(pf) : 0m;
         var currency = c.TryGetProperty("currency", out var cu) ? cu.GetString() ?? "USD" : "USD";
         return new ContractInfo(contractId, MapStatus(status), entrySpot, exitSpot,
             entryTime, exitTime, buyPrice, profit, currency, isSold);
     }
+
+    private static JsonElement? Prop(JsonElement e, params string[] names)
+    {
+        foreach (var n in names)
+        {
+            if (e.TryGetProperty(n, out var v))
+            {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    private static double Num(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.Number => e.GetDouble(),
+        JsonValueKind.String => double.TryParse(e.GetString(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0,
+        _ => 0,
+    };
+
+    private static decimal Dec(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.Number => e.GetDecimal(),
+        JsonValueKind.String => decimal.TryParse(e.GetString(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m,
+        _ => 0m,
+    };
+
+    private static long Long(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.Number => e.GetInt64(),
+        JsonValueKind.String => long.TryParse(e.GetString(), out var l) ? l : 0,
+        _ => 0,
+    };
+
+    private static bool Truthy(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.Number => e.GetDouble() != 0,
+        JsonValueKind.String => e.GetString() is "1" or "true" or "True",
+        JsonValueKind.True => true,
+        _ => false,
+    };
 
     private static ContractStatus MapStatus(string status) => status switch
     {
@@ -712,10 +763,6 @@ public sealed class DerivClient : IAsyncDisposable
         var value = balance.TryGetProperty("balance", out var b) ? b.GetDecimal() : 0m;
         var currency = balance.TryGetProperty("currency", out var c) ? c.GetString() ?? "USD" : "USD";
         var loginId = balance.TryGetProperty("loginid", out var l) ? l.GetString() ?? "" : "";
-        // Deriv's own demo/real flag — missing/malformed parses as virtual
-        // (an unverified account must never be treated as real). On the new
-        // platform the flag lives on the discovery record instead: callers
-        // that know the account's type patch it via IsVirtualOverride.
         // Deriv's own demo/real flag — missing/malformed parses as virtual
         // (an unverified account must never be treated as real). On the new
         // platform the flag lives on the discovery record instead: callers

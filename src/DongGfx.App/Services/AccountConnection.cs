@@ -54,10 +54,100 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     public bool CanRenewToken =>
         Config.NewPlatform &&
         !string.IsNullOrWhiteSpace(Config.OAuthRefreshToken) &&
-        !string.IsNullOrWhiteSpace(Config.OAuthClientId);    /// <summary>Last successful in-place access-token renewal (UTC), or
+        !string.IsNullOrWhiteSpace(Config.OAuthClientId);
+
+    /// <summary>Last successful in-place access-token renewal (UTC), or
     /// null when none has happened this session. Feeds status lines and
     /// tests.</summary>
     public DateTimeOffset? TokenRenewedAtUtc { get; private set; }
+
+    // ── Tick-staleness watchdog ────────────────────────────────────
+    // The silent failure mode of Sep 20: the socket reported Connected,
+    // ticks froze, the signal window stayed on backfill data, and cycles
+    // decided on stale prices until failures piled up. This watchdog makes
+    // that state loud instead of invisible.
+    private DateTimeOffset _lastTickUtc = DateTimeOffset.MinValue;
+    private PeriodicTimer? _stalenessTimer;
+    private Task? _stalenessLoop;
+    private bool _stalenessAlerted;
+
+    /// <summary>How long a Connected socket may go without a live tick
+    /// before the feed is declared stalled.</summary>
+    internal static readonly TimeSpan TickStalenessThreshold = TimeSpan.FromMinutes(3);
+
+    /// <summary>Raised once per stalled episode: the socket claims Connected
+    /// but no live tick arrived within <see cref="TickStalenessThreshold"/>.
+    /// Carries the tick age at detection. The hub surfaces this as a toast
+    /// + webhook alert and a journal entry.</summary>
+    public event Action<AccountConnection, TimeSpan>? TickFeedStalled;
+
+    /// <summary>Age of the newest live tick; <see cref="Timeout.InfiniteTimeSpan"/>
+    /// when none has arrived this session.</summary>
+    public TimeSpan TickAge
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _lastTickUtc == DateTimeOffset.MinValue
+                    ? Timeout.InfiniteTimeSpan
+                    : DateTimeOffset.UtcNow - _lastTickUtc;
+            }
+        }
+    }
+
+    /// <summary>Test hook: backdates the newest-tick timestamp so staleness
+    /// verdicts can be asserted without waiting real minutes.</summary>
+    internal DateTimeOffset TestLastTickUtc
+    {
+        set { lock (_sync) { _lastTickUtc = value; } }
+    }
+
+    /// <summary>One watchdog evaluation. Stalled = socket reports Connected
+    /// while the newest live tick is older than the threshold. Raises
+    /// <see cref="TickFeedStalled"/> once per episode; recovery rearms.</summary>
+    internal (bool Connected, TimeSpan TickAge, bool Stalled) EvaluateTickStaleness()
+    {
+        var age = TickAge;
+        var stalled = IsConnected && age > TickStalenessThreshold;
+        if (stalled && !_stalenessAlerted)
+        {
+            _stalenessAlerted = true;
+            TickFeedStalled?.Invoke(this, age);
+        }
+        else if (!stalled)
+        {
+            _stalenessAlerted = false;
+        }
+        return (IsConnected, age, stalled);
+    }
+
+    private void StartStalenessWatch()
+    {
+        if (_stalenessLoop is not null)
+        {
+            return;
+        }
+        _stalenessTimer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        _stalenessLoop = Task.Run(async () =>
+        {
+            try
+            {
+                while (await _stalenessTimer.WaitForNextTickAsync().ConfigureAwait(false))
+                {
+                    if (_disposed)
+                    {
+                        return;
+                    }
+                    EvaluateTickStaleness();
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // shutdown disposed the timer
+            }
+        });
+    }
 
     // ── Circuit breaker ────────────────────────────────────────────
     private const int MaxConsecutiveFailures = 5;
@@ -341,6 +431,10 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
             CircuitStatus = "";
             AuthFailure = false;
 
+            // Fresh session: the staleness clock starts now (a Connected
+            // socket that never delivers a tick is exactly the stall state).
+            StartStalenessWatch();
+
             StatusText = string.IsNullOrEmpty(LoginIdText)
                 ? "Connected (not authorized)"
                 : $"Connected · {LoginIdText}";
@@ -551,6 +645,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     {
         lock (_sync)
         {
+            _lastTickUtc = DateTimeOffset.UtcNow;
             _ticks.Add(tick);
             if (_ticks.Count > 400)
             {
@@ -589,6 +684,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         _client.BalanceUpdated -= OnBalanceUpdated;
         _client.TickReceived -= OnTickReceived;
         _client.ErrorReceived -= OnErrorReceived;
+        _stalenessTimer?.Dispose();
         await _client.DisposeAsync();
     }
 }
