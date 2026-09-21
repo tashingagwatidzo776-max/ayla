@@ -74,6 +74,19 @@ real primary stays `BlockedLocked` until the session unlock is armed.
 | Kill switch | ✅ Engaged kill switch refuses the trade outright. |
 | Risk engine | ✅ The manual stake is bounded by the user's `ManualMaxStake` ceiling (Settings tab), enforced before any proposal is requested; a blocked real-money state also relabels the trade button. |
 
+## Path 4 — Terminal order ticket (Terminal tab)
+
+`TerminalViewModel.PlaceOrder → connected hub row's client → DerivClient` (single manual trade)
+
+| Rail | Coverage |
+|---|---|
+| Real-money gate | ✅ Evaluated before the connectivity check on the SAME state as the hub: the connected row's config flag, its API verification (`ApiVerifiedVirtual`), and the hub's per-account session unlock. The primary-client fallback uses `ManualRealMoneyGate`. Fail-closed on unverified. |
+| Session unlock | ✅ The hub's per-account unlock (armed by the Growth tab's panel); the primary-client fallback uses the shared `ManualRealMoneyGate` unlock. |
+| Kill switch | ✅ Engaged kill switch refuses the trade outright (checked first). |
+| Risk engine | ✅ The stake is bounded by `ManualMaxStake` before any proposal; exceeded stakes are refused with the cap in the message. |
+| Governor | n/a — single manual trades, not a growth plan; same rationale as Path 3. |
+| Attribution | ✅ Settled trades are written to the shared TradeStore tagged `Manual` with the account's id/name, so per-account views and the weekly P&L stay truthful. |
+
 ## Residual risks (accepted, documented)
 
 - **Settings still decide `IsDemo` per account.** The gate cross-checks the
@@ -173,3 +186,4 @@ here.
 | `RealMoneyGateHubTests` (DongGfx.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
 | `RealMoneyGateMidSessionTests` (DongGfx.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
 | `JournalFormatterTests` (DongGfx.App) | The Journal tab's dedicated unlock-arm/stale formatting and category filter. |
+| `TerminalViewModelTests` (DongGfx.App) | The Terminal tab's order ticket: the hub's per-account real-money gate (locked real refused, armed real passes to the connectivity check), the manual stake cap, the kill-switch refusal, and a full proposal → buy → settlement flow into the shared TradeStore with account attribution. |
