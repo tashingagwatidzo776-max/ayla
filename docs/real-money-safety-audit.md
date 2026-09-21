@@ -173,3 +173,4 @@ here.
 | `RealMoneyGateHubTests` (DongGfx.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
 | `RealMoneyGateMidSessionTests` (DongGfx.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
 | `JournalFormatterTests` (DongGfx.App) | The Journal tab's dedicated unlock-arm/stale formatting and category filter. |
+| `TerminalViewModelTests` (DongGfx.App) | The Terminal tab's order ticket: the hub's per-account real-money gate (locked real refused, armed real passes to the connectivity check), the manual stake cap, the kill-switch refusal, and a full proposal → buy → settlement flow into the shared TradeStore with account attribution. |
