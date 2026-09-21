@@ -615,22 +615,26 @@ public sealed class DerivClient : IAsyncDisposable
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        if (root.TryGetProperty("req_id", out var reqIdProp) && reqIdProp.TryGetInt32(out var reqId))
+        // Request/response correlation: only consume a pending call when one
+        // is actually registered for this req_id. Stream frames (ticks,
+        // proposal updates, contract closes) echo the subscribing request's
+        // req_id on this platform — they must FALL THROUGH to the stream
+        // dispatcher, not return here, or every tick after the first is
+        // silently swallowed (the live-tick stall of Sep 20).
+        if (root.TryGetProperty("req_id", out var reqIdProp) && reqIdProp.TryGetInt32(out var reqId)
+            && _pending.TryRemove(reqId, out var tcs))
         {
-            if (_pending.TryRemove(reqId, out var tcs))
-            {
                 if (root.TryGetProperty("error", out var error))
                 {
                     var code = error.TryGetProperty("code", out var c) ? c.GetString() : "Unknown";
-                    var msg = error.TryGetProperty("message", out var m) ? m.GetString() : "Unknown error";
-                    tcs.SetException(new DerivApiException(code ?? "Unknown", msg ?? "Unknown error"));
-                }
-                else
-                {
-                    // doc is disposed when this method returns, so hand the
-                    // caller its own document.
-                    tcs.SetResult(JsonDocument.Parse(json));
-                }
+                var msg = error.TryGetProperty("message", out var m) ? m.GetString() : "Unknown error";
+                tcs.SetException(new DerivApiException(code ?? "Unknown", msg ?? "Unknown error"));
+            }
+            else
+            {
+                // doc is disposed when this method returns, so hand the
+                // caller its own document.
+                tcs.SetResult(JsonDocument.Parse(json));
             }
             return;
         }
@@ -660,13 +664,14 @@ public sealed class DerivClient : IAsyncDisposable
     private void EmitTick(JsonElement tickEl)
     {
         var symbol = tickEl.TryGetProperty("symbol", out var s) ? s.GetString() ?? "" : SubscribedSymbol ?? "";
-        var quote = tickEl.GetProperty("quote").GetDouble();
-        var ask = tickEl.TryGetProperty("ask", out var a) ? a.GetDouble() : quote;
-        var bid = tickEl.TryGetProperty("bid", out var b) ? b.GetDouble() : quote;
+        var ask = tickEl.TryGetProperty("ask", out var a) ? a.GetDouble() : 0;
+        var bid = tickEl.TryGetProperty("bid", out var b) ? b.GetDouble() : 0;
+        // New-platform tick frames carry ask/bid only; classic carries quote.
+        var quote = tickEl.TryGetProperty("quote", out var q) ? q.GetDouble() : (ask + bid) / 2;
         var epoch = tickEl.GetProperty("epoch").GetInt64();
         var pipSize = tickEl.TryGetProperty("pip_size", out var p) ? p.GetInt32() : 0;
 
-        TickReceived?.Invoke(new Tick(symbol, quote, ask, bid, epoch, pipSize));
+        TickReceived?.Invoke(new Tick(symbol, quote, ask > 0 ? ask : quote, bid > 0 ? bid : quote, epoch, pipSize));
     }
 
     private void EmitError(JsonElement error)
