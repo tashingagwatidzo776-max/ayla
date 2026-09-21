@@ -139,6 +139,8 @@ public sealed partial class TerminalViewModel : ObservableObject
     private readonly Func<bool> _isRealMoneyUnlocked;
     private readonly DashboardViewModel _dashboard;
     private readonly PublicMarketDataClient _public;
+    private readonly Action<bool>? _setAutonomyBound;
+    private readonly Action<string>? _setSymbolBound;
 
     public TerminalViewModel(
         Func<DerivClient> client,
@@ -147,7 +149,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         Func<AppSettings> settings,
         Action persist,
         Func<bool> isRealMoneyUnlocked,
-        DashboardViewModel dashboard)
+        DashboardViewModel        dashboard)
         : this(client, hub, store, settings, persist, isRealMoneyUnlocked, dashboard,
                new PublicMarketDataClient())
     {
@@ -162,6 +164,22 @@ public sealed partial class TerminalViewModel : ObservableObject
         Func<bool> isRealMoneyUnlocked,
         DashboardViewModel dashboard,
         PublicMarketDataClient publicClient)
+        : this(client, hub, store, settings, persist, isRealMoneyUnlocked, dashboard,
+               publicClient, setAutonomyBound: null, setSymbolBound: null)
+    {
+    }
+
+    public TerminalViewModel(
+        Func<DerivClient> client,
+        MultiAccountHub hub,
+        TradeStore store,
+        Func<AppSettings> settings,
+        Action persist,
+        Func<bool> isRealMoneyUnlocked,
+        DashboardViewModel dashboard,
+        PublicMarketDataClient? publicClient = null,
+        Action<bool>? setAutonomyBound = null,
+        Action<string>? setSymbolBound = null)
     {
         _client = client;
         _hub = hub;
@@ -170,7 +188,9 @@ public sealed partial class TerminalViewModel : ObservableObject
         _persist = persist;
         _isRealMoneyUnlocked = isRealMoneyUnlocked;
         _dashboard = dashboard;
-        _public = publicClient;
+        _public = publicClient ?? new PublicMarketDataClient();
+        _setAutonomyBound = setAutonomyBound;
+        _setSymbolBound = setSymbolBound;
 
         _public.TickReceived += OnPublicTick;
         Positions.CollectionChanged += (_, e) =>
@@ -341,6 +361,10 @@ public sealed partial class TerminalViewModel : ObservableObject
             && !string.Equals(settings.Symbol, SelectedSymbol.Symbol, StringComparison.Ordinal))
         {
             settings.Symbol = SelectedSymbol.Symbol;
+            // Keep the settings UI's bound field in sync: it is the source of
+            // truth on save — writing only the shared instance gets clobbered
+            // by the next settings save.
+            _setSymbolBound?.Invoke(SelectedSymbol.Symbol);
             _persist();
         }
 
@@ -487,6 +511,9 @@ public sealed partial class TerminalViewModel : ObservableObject
     {
         var settings = _settings();
         settings.AutonomyEnabled = true;
+        // Bridge to the settings UI's bound field (the save source of truth)
+        // so the flip survives the persist and every later settings save.
+        _setAutonomyBound?.Invoke(true);
         _persist();
         OnPropertyChanged(nameof(BrainIsOn));
         OnPropertyChanged(nameof(BrainStateText));
@@ -498,6 +525,7 @@ public sealed partial class TerminalViewModel : ObservableObject
     {
         var settings = _settings();
         settings.AutonomyEnabled = false;
+        _setAutonomyBound?.Invoke(false);
         _persist();
         OnPropertyChanged(nameof(BrainIsOn));
         OnPropertyChanged(nameof(BrainStateText));
