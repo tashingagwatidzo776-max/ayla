@@ -1502,12 +1502,31 @@ public sealed class MultiAccountHub
         }
     }
 
-    private AccountConnection CreateConnection(AccountConfig config) =>
-        new(config, _tickCache, _heartbeat,
+    private AccountConnection CreateConnection(AccountConfig config)
+    {
+        var connection = new AccountConnection(config, _tickCache, _heartbeat,
             newPlatformAuth: null,
             // OAuth accounts renew their access token in place — the new
             // token/refresh-token/expiry must persist, not just live in RAM.
             persist: SaveAccounts);
+
+        // A stalled tick feed (Connected but silent) gets the full alert
+        // chain: journal, toast, webhook — the same rails as risk events.
+        connection.TickFeedStalled += (c, age) =>
+        {
+            var name = c.DisplayName;
+            _journal.LogGrowthState(c.Config.Id, "tick-feed-stalled", 0, 0,
+                $"socket Connected but no live tick for {age.TotalMinutes:0} min — " +
+                "cycles would decide on stale prices; check the connection");
+            _notifications?.NotifyRiskRailEngaged("📡 Tick feed stalled",
+                $"{name}: no live ticks for {age.TotalMinutes:0} min while Connected");
+            _webhook?.PostRiskRail("📡 Tick feed stalled",
+                $"'{name}' reported Connected but received no live tick for " +
+                $"{age.TotalMinutes:0} minutes. Cycles would run on stale " +
+                "market data — reconnect the account or check the network.");
+        };
+        return connection;
+    }
 
     private void OnConnectionStateChanged(AccountConnection connection)
     {
