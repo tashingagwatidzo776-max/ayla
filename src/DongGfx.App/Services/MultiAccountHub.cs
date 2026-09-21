@@ -1525,6 +1525,13 @@ public sealed class MultiAccountHub
                 $"{age.TotalMinutes:0} minutes. Cycles would run on stale " +
                 "market data — reconnect the account or check the network.");
         };
+        connection.AutoReconnected += (c, attempts) =>
+        {
+            _journal.LogGrowthState(c.Config.Id, "auto-reconnected", 0, 0,
+                $"connection dropped and came back automatically after {attempts} attempt(s)");
+            _notifications?.NotifyRiskRailEngaged("🔁 Auto-reconnected",
+                $"{c.DisplayName}: connection restored automatically (attempt {attempts})");
+        };
         return connection;
     }
 

@@ -160,6 +160,31 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     // re-entry so the post-connect work never runs twice in parallel.
     private bool _connectInFlight;
 
+    // ── Auto-reconnect ─────────────────────────────────────────────
+    // A server-side drop (idle timeout, LB recycle) must never leave the
+    // account dark until a human clicks Connect: the watchdog catches a
+    // stalled feed, but the feed itself has to come back on its own.
+    internal const int AutoReconnectMaxAttempts = 5;
+    private bool _userWantsConnection;
+    private int _autoReconnectAttempts;
+    private CancellationTokenSource? _autoReconnectCts;
+
+    /// <summary>Test seam: attempts made by the current/last reconnect loop.</summary>
+    internal int AutoReconnectAttemptsForTests => _autoReconnectAttempts;
+
+    /// <summary>Raised when a dropped connection came back automatically.
+    /// The hub appends it to the activity feed so unattended recovery is
+    /// visible; the heartbeat log already carries the state transitions.</summary>
+    public event Action<AccountConnection, int>? AutoReconnected;
+
+    /// <summary>Test seam: forces the next reconnect attempt to fire after
+    /// ~50 ms instead of the real backoff, so tests run in milliseconds.</summary>
+    internal Func<int, TimeSpan>? AutoReconnectDelayOverride { get; set; }
+
+    internal TimeSpan AutoReconnectDelay(int attempt) =>
+        AutoReconnectDelayOverride?.Invoke(attempt)
+        ?? TimeSpan.FromSeconds(Math.Min(60, Math.Pow(2, Math.Max(0, attempt - 1))));
+
     /// <summary>Raised whenever connection state or balance changes materially.</summary>
     public event Action<AccountConnection>? StateChanged;
 
@@ -431,9 +456,20 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
             CircuitStatus = "";
             AuthFailure = false;
 
+            // The account is live again: re-arm auto-reconnect for the next
+            // drop and clear the attempt ladder.
+            _userWantsConnection = true;
+            var recovered = _autoReconnectAttempts;
+            _autoReconnectAttempts = 0;
+
             // Fresh session: the staleness clock starts now (a Connected
             // socket that never delivers a tick is exactly the stall state).
             StartStalenessWatch();
+
+            if (recovered > 0)
+            {
+                AutoReconnected?.Invoke(this, recovered);
+            }
 
             StatusText = string.IsNullOrEmpty(LoginIdText)
                 ? "Connected (not authorized)"
@@ -568,6 +604,9 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
 
     public async Task DisconnectAsync()
     {
+        _userWantsConnection = false; // an explicit disconnect is not a drop
+        StopAutoReconnect();
+        _autoReconnectAttempts = 0;
         await _client.DisconnectAsync();
         StatusText = "Not connected";
         IsConnected = false;
@@ -600,6 +639,13 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
     private void OnStatusChanged(ConnectionStatus status)
     {
         IsConnected = status is ConnectionStatus.Connected or ConnectionStatus.Reconnecting;
+        // Any live status from the client arms the auto-reconnect intent:
+        // the account was wanted live, so a later drop should self-heal.
+        if (IsConnected)
+        {
+            _userWantsConnection = true;
+        }
+        var prevState = _lastState;
         var newState = status switch
         {
             ConnectionStatus.Connected => "Connected",
@@ -615,8 +661,72 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
             _lastState = newState;
         }
 
+        // A drop while the user still wants this account live triggers the
+        // auto-reconnect loop (also fires for Error states — same remedy).
+        // Gated on the PREVIOUS state having been live so a manual connect's
+        // own Connecting… transition can't start a spurious loop.
+        if (!IsConnected && _userWantsConnection && !_disposed && !IsPaused
+            && prevState is "Connected" or "Reconnecting…")
+        {
+            StartAutoReconnect();
+        }
+
         StatusText = newState;
         RaiseStateChanged();
+    }
+
+    private void StartAutoReconnect()
+    {
+        if (_autoReconnectCts is not null)
+        {
+            return; // loop already running
+        }
+        var cts = new CancellationTokenSource();
+        _autoReconnectCts = cts;
+        var token = cts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!token.IsCancellationRequested
+                       && _userWantsConnection
+                       && _autoReconnectAttempts < AutoReconnectMaxAttempts)
+                {
+                    _autoReconnectAttempts++;
+                    var delay = AutoReconnectDelay(_autoReconnectAttempts);
+                    StatusText = $"Reconnecting in {delay.TotalSeconds:0}s (attempt {_autoReconnectAttempts}/{AutoReconnectMaxAttempts})…";
+                    RaiseStateChanged();
+                    await Task.Delay(delay, token).ConfigureAwait(false);
+
+                    _userWantsConnection = false; // ConnectAsync re-arms on success
+                    try
+                    {
+                        await ConnectAsync().ConfigureAwait(false);
+                        return; // connected — ConnectAsync re-armed the flag
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _userWantsConnection = true; // keep retrying
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // superseded or disposed
+            }
+            finally
+            {
+                if (ReferenceEquals(_autoReconnectCts, cts))
+                {
+                    _autoReconnectCts = null; // loop ended — allow a future episode
+                }
+            }
+        }, token);
+    }
+
+    private void StopAutoReconnect()
+    {
+        Interlocked.Exchange(ref _autoReconnectCts, null)?.Cancel();
     }
 
     private void OnBalanceUpdated(AccountBalance balance)
@@ -680,6 +790,7 @@ public sealed partial class AccountConnection : ObservableObject, IAsyncDisposab
         }
 
         _disposed = true;
+        StopAutoReconnect();
         _client.StatusChanged -= OnStatusChanged;
         _client.BalanceUpdated -= OnBalanceUpdated;
         _client.TickReceived -= OnTickReceived;
