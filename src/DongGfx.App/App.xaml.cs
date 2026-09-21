@@ -178,6 +178,15 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<StrategyOptimizer>(),
                 sp.GetRequiredService<TickHistoryCache>()));
         services.AddSingleton<HealthViewModel>();
+        services.AddSingleton(sp =>
+            new TerminalViewModel(
+                () => sp.GetRequiredService<DerivClient>(),
+                sp.GetRequiredService<MultiAccountHub>(),
+                sp.GetRequiredService<TradeStore>(),
+                sp.GetRequiredService<Func<AppSettings>>(),
+                persist: () => _ = sp.GetRequiredService<SettingsViewModel>().SaveSettingsQuietAsync(),
+                isRealMoneyUnlocked: () => sp.GetRequiredService<ManualRealMoneyGate>().IsUnlocked,
+                dashboard: sp.GetRequiredService<DashboardViewModel>()));
         services.AddSingleton<MainViewModel>();
 
         var provider = services.BuildServiceProvider();
