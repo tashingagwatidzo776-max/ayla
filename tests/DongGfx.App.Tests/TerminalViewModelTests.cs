@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -54,7 +55,8 @@ public class TerminalViewModelTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
 
-    private TerminalViewModel CreateVm(DerivClient? client = null, DashboardViewModel? dashboard = null)
+    private TerminalViewModel CreateVm(DerivClient? client = null, DashboardViewModel? dashboard = null,
+        Mt5BridgeClient? mt5Client = null)
     {
         return new TerminalViewModel(
             () => client ?? new DerivClient(),
@@ -64,9 +66,11 @@ public class TerminalViewModelTests : IDisposable
             persist: () => _saves++,
             isRealMoneyUnlocked: () => _gate.IsUnlocked,
             dashboard ?? new DashboardViewModel(new DerivClient(), _hub),
-            new PublicMarketDataClient("ws://127.0.0.1:1/ws"), // dead endpoint: never connects
+            _journal,
+            mt5: mt5Client ?? new Mt5BridgeClient(new StubHandler(), new Uri("http://127.0.0.1:1/")), // sidecar down
             setAutonomyBound: v => _settings.AutonomyEnabled = v,
-            setSymbolBound: s => _settings.Symbol = s);
+            setSymbolBound: s => _settings.Symbol = s,
+            publicClient: new PublicMarketDataClient("ws://127.0.0.1:1/ws")); // dead endpoint: never connects
     }
 
     /// <summary>Marks a hub row connected (same reflection seam the
@@ -104,8 +108,10 @@ public class TerminalViewModelTests : IDisposable
             () => new DerivClient(), _hub, _store, () => _settings,
             persist: () => _saves++, isRealMoneyUnlocked: () => _gate.IsUnlocked,
             new DashboardViewModel(new DerivClient(), _hub),
-            new PublicMarketDataClient("ws://127.0.0.1:1/ws"),
-            setAutonomyBound: v => bridged = v, setSymbolBound: null);
+            _journal,
+            mt5: new Mt5BridgeClient(new StubHandler(), new Uri("http://127.0.0.1:1/")),
+            setAutonomyBound: v => bridged = v, setSymbolBound: null,
+            publicClient: new PublicMarketDataClient("ws://127.0.0.1:1/ws"));
 
         vm.TurnBrainOnCommand.Execute(null);
         Assert.True(bridged);
@@ -329,6 +335,156 @@ public class TerminalViewModelTests : IDisposable
         Assert.Contains("order failed", vm.TicketStatus, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(vm.Positions);
         Assert.Empty(_store.Trades);
+    }
+
+    // ── MT5 bridge card ────────────────────────────────────────────
+
+    [Fact]
+    public void PlaceMt5Order_KillSwitchEngaged_IsRefused()
+    {
+        var dashboard = new DashboardViewModel(new DerivClient(), _hub);
+        dashboard.ToggleKillSwitchCommand.Execute(null);
+        var vm = CreateVm(dashboard: dashboard);
+
+        vm.PlaceMt5OrderCommand.Execute(null);
+
+        Assert.Contains("kill switch", vm.Mt5OrderStatus, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PlaceMt5Order_ZeroLotCap_IsRefused()
+    {
+        _settings.Mt5MaxLots = 0m; // fail-closed: MT5 placement disabled
+        var vm = CreateVm();
+
+        vm.PlaceMt5OrderCommand.Execute(null);
+
+        Assert.Contains("disabled", vm.Mt5OrderStatus, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PlaceMt5Order_LotsOverCap_IsRefused()
+    {
+        _settings.Mt5MaxLots = 1m;
+        var vm = CreateVm();
+        vm.Mt5Lots = 5.0;
+
+        vm.PlaceMt5OrderCommand.Execute(null);
+
+        Assert.Contains("outside the allowed", vm.Mt5OrderStatus);
+    }
+
+    [Fact]
+    public void PlaceMt5Order_BridgeDown_ShowsHint()
+    {
+        _settings.Mt5MaxLots = 1m;
+        var vm = CreateVm();
+        vm.Mt5Lots = 0.1;
+
+        vm.PlaceMt5OrderCommand.Execute(null);
+
+        // The client at 127.0.0.1:1 refuses instantly — the message must be
+        // the actionable hint, not an unhandled crash.
+        Assert.Contains("bridge unavailable", vm.Mt5OrderStatus, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Mt5Poll_WhenSidecarUp_ReflectsAccountAndPositions()
+    {
+        using var http = new FakeMt5SidecarHttp();
+        var vm = CreateVm(mt5Client: new Mt5BridgeClient(
+            http, new Uri($"http://127.0.0.1:{http.Port}/")));
+
+        await vm.PollMt5ForTestsAsync();
+
+        Assert.True(vm.IsMt5Connected);
+        Assert.Contains("201587365", vm.Mt5AccountText);
+        Assert.Equal("MT5 bridge: connected", vm.Mt5StatusText);
+    }
+
+    [Fact]
+    public async Task Mt5Poll_WhenSidecarDown_ReportsDown()
+    {
+        var vm = CreateVm();
+
+        await vm.PollMt5ForTestsAsync();
+
+        Assert.False(vm.IsMt5Connected);
+        Assert.Contains("bridge down", vm.Mt5StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HistoryPanel_FlowsFromTradeStore()
+    {
+        _store.Add(new Trade(Guid.NewGuid(), "R_100", Direction.Rise, 1m, "USD",
+            100, 0, "c-9", ContractStatus.Won, 0.85m, 100.8, 1, DateTimeOffset.UtcNow)
+        { Source = "Manual" });
+        var vm = CreateVm();
+
+        vm.RefreshHistoryForTests();
+
+        var row = Assert.Single(vm.HistoryRows);
+        Assert.Equal("R_100", row.Symbol);
+        Assert.Equal("won", row.Outcome);
+        Assert.Equal(0.85, row.Profit, 5);
+    }
+
+    [Fact]
+    public void SymbolFilter_NarrowsMarketWatch()
+    {
+        var vm = CreateVm();
+        vm.Symbols.Add(new TerminalSymbolRow("R_100", "Volatility 100 Index", true));
+        vm.Symbols.Add(new TerminalSymbolRow("frxEURUSD", "Euro vs US Dollar", true));
+
+        vm.SymbolFilter = "volat";
+
+        Assert.Single(vm.FilteredSymbols);
+        Assert.Equal("R_100", vm.FilteredSymbols.First().Symbol);
+    }
+
+    /// <summary>HttpMessageHandler that always fails fast (sidecar down).</summary>
+    private sealed class StubHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(new HttpRequestException("refused"));
+    }
+
+    /// <summary>In-memory stand-in for the Python sidecar: answers /health,
+    /// /account and /positions with the real payload shapes. No sockets.
+    /// </summary>
+    private sealed class FakeMt5SidecarHttp : HttpMessageHandler
+    {
+        public FakeMt5SidecarHttp()
+        {
+            var tcp = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            tcp.Start();
+            Port = ((IPEndPoint)tcp.LocalEndpoint).Port;
+            tcp.Stop();
+        }
+
+        public int Port { get; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            object payload = path switch
+            {
+                "/health" => new { ok = true, login = 201587365L, server = "Deriv-Demo", terminal_connected = true },
+                "/account" => new { login = 201587365L, server = "Deriv-Demo", currency = "USD",
+                                     balance = 2610.55, equity = 2610.55, margin = 0.0,
+                                     margin_free = 2610.55, leverage = 1000 },
+                "/positions" => new { positions = Array.Empty<object>() },
+                _ => new { error = $"no route {path}" },
+            };
+            var resp = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(payload),
+                    Encoding.UTF8, "application/json"),
+            };
+            return Task.FromResult(resp);
+        }
     }
 }
 

@@ -87,6 +87,23 @@ real primary stays `BlockedLocked` until the session unlock is armed.
 | Governor | n/a — single manual trades, not a growth plan; same rationale as Path 3. |
 | Attribution | ✅ Settled trades are written to the shared TradeStore tagged `Manual` with the account's id/name, so per-account views and the weekly P&L stay truthful. |
 
+## Path 5 — MT5 bridge orders (Terminal tab, CFD/forex)
+
+`TerminalViewModel.PlaceMt5Order → Mt5BridgeClient → loopback sidecar → MetaTrader 5 terminal`
+
+The MT5 path never touches `DerivClient.BuyAsync` — it is a separate
+transport into a different broker surface, documented here because it can
+place real orders. The sidecar (bridge/mt5_sidecar.py) binds to 127.0.0.1
+only and refuses any other bind address.
+
+| Rail | Coverage |
+|---|---|
+| Kill switch | ✅ Engaged kill switch refuses the order outright (checked first). |
+| Lot cap | ✅ `Mt5MaxLots` (Settings tab) caps single-order volume; **0 disables MT5 order placement entirely** — fail-closed by default. Lots outside `0 < lots ≤ cap` are refused before any bridge call. |
+| Real-money gate | ✅ The MT5 account's demo/real comes from `account_info()` (server name / login); a real MT5 account requires the same session unlock as every other real-money path. |
+| Journal | ✅ Every order journals `MT5_ORDER` with the retcode, ticket, price, and server. |
+| Transport | ✅ Loopback-only sidecar; the C# client refuses non-loopback base addresses by construction (`Mt5BridgeClient` ctor). |
+
 ## Residual risks (accepted, documented)
 
 - **Settings still decide `IsDemo` per account.** The gate cross-checks the

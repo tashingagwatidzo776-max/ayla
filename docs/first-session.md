@@ -92,3 +92,30 @@ cat  "$APPDATA/tf/data/settings.json"   # an ApiToken key present?
 - **A paste that doesn't trade is usually scopes, not the token.** The
   token needs `read` + `trade` + `trading information`; an
   insufficiently-scoped token authenticates but cannot place anything.
+
+## MT5 (Deriv MT5) credentials — the second password
+
+The MT5 side of Deriv (CFD/forex, driven by DON G FX through the MT5 bridge,
+see `docs/mt5-bridge.md`) uses its **own login and password**, separate from
+the Deriv API PAT:
+
+- The **MT5 login** (e.g. `201587365` on the `Deriv-Demo` server) is shown in
+  the Deriv dashboard and in the MT5 terminal's title bar once connected.
+- The **MT5 password** is set in the Deriv dashboard, not in MT5. The API PAT
+  can never log into MT5, and the MT5 password can never call the Deriv API.
+
+To (re)set the MT5 password:
+
+1. Sign in at `app.deriv.com` → **Dashboard**.
+2. Open the **MT5** section (Deriv MT5 → your account list).
+3. On the account row choose **Reset password** (under the MT5 password
+   option). A new MT5 password is generated/set there.
+4. In the MT5 terminal: **File → Login to Trade Account**, enter the login,
+   the new password, and the server exactly as shown (`Deriv-Demo` for
+   demo accounts; the real server name for real ones).
+5. Verify: the terminal's title bar shows the login and server, and
+   `python scripts/mt5_bridge_probe.py` reports the account.
+
+Pitfall: after a password reset the terminal keeps retrying with the old
+one and the bridge reports `Authorization failed` — always re-login the
+terminal itself first, then re-run the probe.
