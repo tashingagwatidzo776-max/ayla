@@ -69,6 +69,16 @@ public sealed class AppSettings
     /// <summary>Master autonomy switch; when off the brain never places trades.</summary>
     public bool AutonomyEnabled { get; set; }
 
+    /// <summary>Maximum volume (lots) for a single MT5 order placed through
+    /// the bridge. 0 disables MT5 order placement entirely (fail-closed).</summary>
+    public decimal Mt5MaxLots { get; set; } = 1.00m;
+
+    /// <summary>One-click session start: when set, launching the app
+    /// auto-connects the demo row, arms the brain, selects R_100 and starts
+    /// the engines. Demo automation only — real accounts still need the
+    /// manual session unlock.</summary>
+    public bool StartupProfile { get; set; }
+
     /// <summary>Decision interval in minutes (used from milestone 3).</summary>
     public int DecisionIntervalMinutes { get; set; } = 5;
 
