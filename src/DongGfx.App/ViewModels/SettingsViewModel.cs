@@ -278,6 +278,26 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
+    /// <summary>Programmatic save used by the Terminal's switches (brain
+    /// autonomy ON/OFF, symbol sync). Deliberately skips the real-money
+    /// confirmation dialog: these are single-field flips of an already-saved
+    /// configuration, never a first entry into real-money territory (the
+    /// gate still applies at every trade path).</summary>
+    public async Task SaveSettingsQuietAsync()
+    {
+        try
+        {
+            var settings = BuildSettings();
+            await Task.Run(() => _settingsService.Save(settings));
+            ApplyToClient(settings);
+            StatusMessage = "Settings updated from the Terminal.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Save failed: {ex.Message}";
+        }
+    }
+
     private async Task SaveAsync()
     {
         if (IsBusy)
