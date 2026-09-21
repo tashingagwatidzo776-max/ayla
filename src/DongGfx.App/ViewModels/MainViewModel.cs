@@ -23,13 +23,15 @@ public sealed class MainViewModel
     public PerformanceViewModel PerformanceVm { get; }
     public OptimizerViewModel OptimizerVm { get; }
     public HealthViewModel HealthVm { get; }
+    public TerminalViewModel TerminalVm { get; }
 
     public MainViewModel(SettingsService settingsService, DerivClient client,
         TradeStore store,
         DashboardViewModel dashboard, SettingsViewModel settingsVm, TradesViewModel trades,
         BrainViewModel brain, AccountsViewModel accountsVm, GrowthViewModel growthVm,
         JournalViewModel journalVm, UpdateViewModel updateVm, PerformanceViewModel performanceVm,
-        OptimizerViewModel optimizerVm, HealthViewModel healthVm)
+        OptimizerViewModel optimizerVm, HealthViewModel healthVm,
+        TerminalViewModel terminalVm)
     {
         _settingsService = settingsService;
         _client = client;
@@ -45,6 +47,7 @@ public sealed class MainViewModel
         PerformanceVm = performanceVm;
         OptimizerVm = optimizerVm;
         HealthVm = healthVm;
+        TerminalVm = terminalVm;
     }
 
     /// <summary>Loads persisted settings, applies them, and starts the feed.</summary>
