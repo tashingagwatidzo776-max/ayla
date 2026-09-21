@@ -11,6 +11,7 @@ public sealed class MainViewModel
     private readonly SettingsService _settingsService;
     private readonly DerivClient _client;
     private readonly TradeStore _store;
+    private readonly DongGfx.Core.Logging.TradeJournal _journal;
 
     public DashboardViewModel Dashboard { get; }
     public SettingsViewModel SettingsVm { get; }
@@ -31,11 +32,13 @@ public sealed class MainViewModel
         BrainViewModel brain, AccountsViewModel accountsVm, GrowthViewModel growthVm,
         JournalViewModel journalVm, UpdateViewModel updateVm, PerformanceViewModel performanceVm,
         OptimizerViewModel optimizerVm, HealthViewModel healthVm,
-        TerminalViewModel terminalVm)
+        TerminalViewModel terminalVm,
+        DongGfx.Core.Logging.TradeJournal? journal = null)
     {
         _settingsService = settingsService;
         _client = client;
         _store = store;
+        _journal = journal!;
         Dashboard = dashboard;
         SettingsVm = settingsVm;
         Trades = trades;
@@ -119,6 +122,57 @@ public sealed class MainViewModel
         catch (Exception ex)
         {
             SettingsVm.StatusMessage = $"Auto-connect failed: {ex.Message}";
+        }
+
+        await RunStartupProfileAsync(settings);
+    }
+
+    /// <summary>
+    /// One-click session start (Settings → Startup profile): auto-connect the
+    /// first demo row, arm the brain through the settings-VM bridge, select
+    /// R_100, and start the engines. Demo automation only — real accounts
+    /// still require the manual session unlock; the gate is never bypassed.
+    /// </summary>
+    private async Task RunStartupProfileAsync(AppSettings settings)
+    {
+        if (!settings.StartupProfile)
+        {
+            return;
+        }
+
+        try
+        {
+            var demoRow = AccountsVm.Hub.Accounts.FirstOrDefault(a => a.Config.IsDemo);
+            if (demoRow is not null && !demoRow.IsConnected)
+            {
+                await demoRow.ConnectAsync();
+            }
+
+            // Arm the brain through the same bound-fields path the terminal's
+            // switch uses, so the flip survives the next settings save.
+            if (!settings.AutonomyEnabled)
+            {
+                settings.AutonomyEnabled = true;
+                SettingsVm.AutonomyEnabled = true;
+                _settingsService.Save(settings);
+            }
+
+            if (!string.Equals(settings.Symbol, "R_100", StringComparison.Ordinal))
+            {
+                settings.Symbol = "R_100";
+                SettingsVm.Symbol = "R_100";
+                _settingsService.Save(settings);
+                Dashboard.SetSymbol("R_100");
+            }
+
+            GrowthVm.StartAllCommand.Execute(null);
+            TerminalVm.StartTerminalCommand.Execute(null);
+            _journal?.Log(Guid.Empty, "startup-profile",
+                "one-click session start executed (demo row, autonomy ON, R_100, engines started)");
+        }
+        catch (Exception ex)
+        {
+            SettingsVm.StatusMessage = $"Startup profile failed: {ex.Message}";
         }
     }
 
