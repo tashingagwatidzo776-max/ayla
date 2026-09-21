@@ -67,6 +67,10 @@ public sealed partial class AccountsViewModel : ObservableObject
 
     public ObservableCollection<AccountConnection> Accounts => _hub.Accounts;
 
+    /// <summary>The shared multi-account hub (exposed for the startup
+    /// profile's auto-connect path).</summary>
+    public MultiAccountHub Hub => _hub;
+
     public IReadOnlyList<string> AvailableBrains { get; } = new BrainRegistry().GetBrainKeys().ToList();
 
     public AccountsViewModel(MultiAccountHub hub, Func<AppSettings> settings,
