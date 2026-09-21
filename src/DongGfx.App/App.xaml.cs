@@ -186,7 +186,9 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<Func<AppSettings>>(),
                 persist: () => _ = sp.GetRequiredService<SettingsViewModel>().SaveSettingsQuietAsync(),
                 isRealMoneyUnlocked: () => sp.GetRequiredService<ManualRealMoneyGate>().IsUnlocked,
-                dashboard: sp.GetRequiredService<DashboardViewModel>()));
+                dashboard: sp.GetRequiredService<DashboardViewModel>(),
+                setAutonomyBound: v => sp.GetRequiredService<SettingsViewModel>().AutonomyEnabled = v,
+                setSymbolBound: s => sp.GetRequiredService<SettingsViewModel>().Symbol = s));
         services.AddSingleton<MainViewModel>();
 
         var provider = services.BuildServiceProvider();

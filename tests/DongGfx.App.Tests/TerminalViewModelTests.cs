@@ -64,7 +64,9 @@ public class TerminalViewModelTests : IDisposable
             persist: () => _saves++,
             isRealMoneyUnlocked: () => _gate.IsUnlocked,
             dashboard ?? new DashboardViewModel(new DerivClient(), _hub),
-            new PublicMarketDataClient("ws://127.0.0.1:1/ws")); // dead endpoint: never connects
+            new PublicMarketDataClient("ws://127.0.0.1:1/ws"), // dead endpoint: never connects
+            setAutonomyBound: v => _settings.AutonomyEnabled = v,
+            setSymbolBound: s => _settings.Symbol = s);
     }
 
     /// <summary>Marks a hub row connected (same reflection seam the
@@ -89,6 +91,26 @@ public class TerminalViewModelTests : IDisposable
         Assert.True(vm.BrainIsOn);
         Assert.Contains("ON", vm.BrainStateText);
         Assert.Equal(1, _saves);
+    }
+
+    [Fact]
+    public void BrainSwitch_BridgesIntoSettingsUiBoundFields()
+    {
+        // The settings UI's bound fields are the save source of truth: the
+        // bridge must keep them in sync or the next settings save clobbers
+        // the flip back (the Sep-21 "brain off again" bug).
+        bool? bridged = null;
+        var vm = new TerminalViewModel(
+            () => new DerivClient(), _hub, _store, () => _settings,
+            persist: () => _saves++, isRealMoneyUnlocked: () => _gate.IsUnlocked,
+            new DashboardViewModel(new DerivClient(), _hub),
+            new PublicMarketDataClient("ws://127.0.0.1:1/ws"),
+            setAutonomyBound: v => bridged = v, setSymbolBound: null);
+
+        vm.TurnBrainOnCommand.Execute(null);
+        Assert.True(bridged);
+        vm.TurnBrainOffCommand.Execute(null);
+        Assert.False(bridged);
     }
 
     [Fact]
