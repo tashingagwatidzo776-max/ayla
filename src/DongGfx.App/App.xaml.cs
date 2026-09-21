@@ -189,7 +189,23 @@ public partial class App : System.Windows.Application
                 dashboard: sp.GetRequiredService<DashboardViewModel>(),
                 setAutonomyBound: v => sp.GetRequiredService<SettingsViewModel>().AutonomyEnabled = v,
                 setSymbolBound: s => sp.GetRequiredService<SettingsViewModel>().Symbol = s));
-        services.AddSingleton<MainViewModel>();
+        services.AddSingleton(sp => new MainViewModel(
+            sp.GetRequiredService<SettingsService>(),
+            sp.GetRequiredService<DerivClient>(),
+            sp.GetRequiredService<TradeStore>(),
+            sp.GetRequiredService<DashboardViewModel>(),
+            sp.GetRequiredService<SettingsViewModel>(),
+            sp.GetRequiredService<TradesViewModel>(),
+            sp.GetRequiredService<BrainViewModel>(),
+            sp.GetRequiredService<AccountsViewModel>(),
+            sp.GetRequiredService<GrowthViewModel>(),
+            sp.GetRequiredService<JournalViewModel>(),
+            sp.GetRequiredService<UpdateViewModel>(),
+            sp.GetRequiredService<PerformanceViewModel>(),
+            sp.GetRequiredService<OptimizerViewModel>(),
+            sp.GetRequiredService<HealthViewModel>(),
+            sp.GetRequiredService<TerminalViewModel>(),
+            sp.GetRequiredService<TradeJournal>()));
 
         var provider = services.BuildServiceProvider();
         Ioc.Default.ConfigureServices(provider);
