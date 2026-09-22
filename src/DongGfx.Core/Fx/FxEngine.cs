@@ -40,6 +40,7 @@ public sealed class FxEngine
     private readonly double _lotsCap;
     private readonly double _riskFraction;
     private readonly double _atrStopMult;
+    private readonly Func<double>? _equityProvider;
 
     public bool IsLive { get; private set; }
     public string Symbol { get; }
@@ -53,7 +54,8 @@ public sealed class FxEngine
         double lotsCap,
         double riskFraction = 0.02,
         double atrStopMult = 1.5,
-        FxRegimeDetector? regimeDetector = null)
+        FxRegimeDetector? regimeDetector = null,
+        Func<double>? equityProvider = null)
     {
         Symbol = symbol;
         Timeframe = timeframe;
@@ -62,6 +64,7 @@ public sealed class FxEngine
         _riskFraction = riskFraction;
         _atrStopMult = atrStopMult;
         _regime = regimeDetector ?? new FxRegimeDetector();
+        _equityProvider = equityProvider;
     }
 
     public void AddAlpha(IFxAlpha alpha) => _alphas.Add(alpha);
@@ -162,9 +165,10 @@ public sealed class FxEngine
         }
     }
 
-    /// <summary>ATR-based sizing: stop distance = ATR × multiplier, risk per
-    /// lot ≈ distance × 100k (1 standard lot), budget = lotsCap scaled by
-    /// the risk fraction. Rounds DOWN to the 0.01 lot step; 0 = don't trade.</summary>
+    /// <summary>Risk-based sizing: budget = account equity x risk fraction,
+    /// risk per lot = stop distance x units per lot (100k for FX, 100 oz for
+    /// gold-like prices). Fails closed at no verified equity. Rounds DOWN to
+    /// the 0.01 lot step; 0 = don't trade.</summary>
     public double Size(FxSignal signal, double midPrice)
     {
         if (double.IsNaN(signal.StopDistanceHint) || signal.StopDistanceHint <= 0 || midPrice <= 0)
@@ -172,11 +176,23 @@ public sealed class FxEngine
             return 0;
         }
 
-        var riskPerLot = signal.StopDistanceHint * 100_000;
+        // Risk budget in account currency: equity x risk fraction. Fails
+        // closed - no verified equity (bridge down, first fetch pending)
+        // means the engine sizes nothing rather than sizing garbage.
+        var equity = _equityProvider?.Invoke() ?? 0;
+        if (double.IsNaN(equity) || equity <= 0)
+        {
+            return 0;
+        }
+
+        // Units per standard lot: FX = 100k units; gold-like (price > 500)
+        // = 100 oz. Stop hints are in price units, so risk per lot must be
+        // priced per those units.
+        var unitsPerLot = midPrice > 500 ? 100.0 : 100_000.0;
+        var riskPerLot = signal.StopDistanceHint * unitsPerLot;
         if (riskPerLot <= 0) return 0;
-        var budget = _lotsCap * _riskFraction * midPrice;
-        var lots = budget / riskPerLot;
-        lots = Math.Floor(lots * 100) / 100;
+
+        var lots = Math.Floor(equity * _riskFraction / riskPerLot * 100) / 100;
         return lots < 0.01 ? 0 : Math.Min(lots, _lotsCap);
     }
 

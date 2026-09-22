@@ -45,6 +45,10 @@ public sealed class FxEngineHost : IDisposable
     /// <summary>News veto: high-impact calendar window refusal.</summary>
     private readonly Func<(bool Blackout, string Reason)>? _newsVeto;
 
+    /// <summary>Bridge equity refreshed every cycle - the engine's sizing
+    /// budget reads it and fails closed at 0 while it is unknown.</summary>
+    private double _lastEquity;
+
     public int PaperSignalsSeen { get; private set; }
     public bool PaperSoakComplete => PaperSignalsSeen >= PaperSoakSignalsRequired;
 
@@ -79,7 +83,8 @@ public sealed class FxEngineHost : IDisposable
             dailyLossCap ?? (() => 0m),
             equityFloor ?? (() => 0m),
             webhook);
-        _engine = new FxEngine(symbol, Timeframe, Journal, lotsCap: (double)_lotsCap(), riskFraction: riskFraction);
+        _engine = new FxEngine(symbol, Timeframe, Journal, lotsCap: (double)_lotsCap(), riskFraction: riskFraction,
+            equityProvider: () => _lastEquity);
         _engine.AddAlpha(new FxMomentum.EmaCross());
         _engine.AddAlpha(new FxMomentum.DonchianBreakout());
         _engine.AddAlpha(new FxMomentum.Roc());
@@ -192,6 +197,7 @@ public sealed class FxEngineHost : IDisposable
 
             // Supervisor gate — the brain does not even think while halted.
             var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
+            _lastEquity = account?.Equity ?? 0;
             var verdict = Supervisor.Evaluate(account is not null, (decimal)(account?.Balance ?? 0), (decimal)(account?.Equity ?? 0));
             if (!verdict.TradingAllowed)
             {

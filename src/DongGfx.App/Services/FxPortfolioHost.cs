@@ -172,10 +172,19 @@ public sealed class FxPortfolioHost : IDisposable
         var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols);
         var news = new FxNewsVeto(newsCalendarPath, newsWindow);
 
+        // Per-engine sizing cap never exceeds the portfolio's total cap -
+        // otherwise every live order would self-veto at the exposure guard.
+        Func<decimal> engineCap = () =>
+        {
+            var total = portfolioMaxLots();
+            var single = lotsCap();
+            return total > 0 ? Math.Min(single, total) : single;
+        };
+
         foreach (var symbol in symbols)
         {
             var host = new FxEngineHost(
-                mt5, journal, symbol, killSwitchEngaged, lotsCap, realMoneyUnlocked,
+                mt5, journal, symbol, killSwitchEngaged, engineCap, realMoneyUnlocked,
                 riskFraction, Supervisor, webhook: webhook,
                 preOrderVeto: lots => exposure.VetoAsync(lots),
                 newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow));

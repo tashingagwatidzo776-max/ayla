@@ -244,7 +244,7 @@ public class FxEngineTests
     public void Paper_Decision_Journaled_No_Order()
     {
         var j = new RecordingJournal();
-        var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 1.0);
+        var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
         engine.AddAlpha(new FxMomentum.DonchianBreakout());
         var bars = TrendBars();
         bars.Add(new FxBar(1790000600, 2459.0, 2465.0, 2458.5, 2464.8, 100)); // breakout bar
@@ -253,8 +253,11 @@ public class FxEngineTests
         Assert.True(j.Has("FX_REGIME"));
         Assert.True(double.IsNaN(decision.Regime.Adx) || decision.Regime.Adx >= 0);
         Assert.NotEqual(FxDecisionAction.Ordered, decision.Action);
-        if (decision.Action == FxDecisionAction.Paper)
+        if (decision.Signal is not null)
         {
+            // A spoken signal with verified equity must SIZE - the old
+            // "if Paper" guard is exactly what let zero-lot sizing ship.
+            Assert.Equal(FxDecisionAction.Paper, decision.Action);
             Assert.True(j.Has("FX_SIGNAL"));
             Assert.True(j.Has("FX_DECISION"));
             Assert.True(decision.SuggestedLots > 0);
@@ -265,30 +268,59 @@ public class FxEngineTests
     public void Live_Engine_Returns_Order_Decision()
     {
         var j = new RecordingJournal();
-        var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 1.0);
+        var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
         engine.AddAlpha(new FxMomentum.DonchianBreakout());
         engine.GoLive();
         var bars = TrendBars();
         bars.Add(new FxBar(1790000600, 2459.0, 2465.0, 2458.5, 2464.8, 100));
 
         var decision = engine.RunOnce(DateTimeOffset.UtcNow, bars, 2464.0, 2465.0);
-        if (decision.Action == FxDecisionAction.Ordered)
+        if (decision.Signal is not null)
         {
-            Assert.NotNull(decision.Signal);
+            // signal + equity => a sized order, never a silent SkippedSizing
+            Assert.Equal(FxDecisionAction.Ordered, decision.Action);
             Assert.InRange(decision.SuggestedLots, 0.01, 1.0);
             Assert.True(j.Has("FX_DECISION"));
         }
     }
 
     [Fact]
-    public void Sizing_Never_Exceeds_Cap_And_Steps()
+    public void Sizing_Uses_EquityRiskBudget_GoldLotUnits_And_Cap()
     {
         var j = new RecordingJournal();
-        var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 0.5);
+        var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 0.5, equityProvider: () => 10_000);
         var sig = new FxSignal("test", FxDirection.Buy, 0.8, 5.0, "stop hint 5.0", 0);
+
+        // budget = equity 10 000 x 0.02 = 200; gold (>500) = 100 oz/lot
+        // -> risk/lot = 5.0 x 100 = 500 -> 0.40 lots, within the 0.5 cap
         var lots = engine.Size(sig, 2450);
-        Assert.InRange(lots, 0, 0.5);
+        Assert.Equal(0.40, lots, 9);
         Assert.Equal(Math.Floor(lots * 100) / 100, lots, 9); // 0.01 step
+        Assert.InRange(lots, 0, 0.5);
+    }
+
+    [Fact]
+    public void Sizing_Fails_Closed_Without_Verified_Equity()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 1.0); // no provider
+        var sig = new FxSignal("test", FxDirection.Buy, 0.8, 5.0, "stop hint 5.0", 0);
+        Assert.Equal(0, engine.Size(sig, 2450), 9);
+
+        var flat = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 0);
+        Assert.Equal(0, flat.Size(sig, 2450), 9);
+    }
+
+    [Fact]
+    public void Sizing_Uses_FxLotUnits_For_Currency_Pairs()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("EURUSD", "M1", j.Add, lotsCap: 0.5, equityProvider: () => 10_000);
+        var sig = new FxSignal("test", FxDirection.Buy, 0.8, 0.001, "10-pip stop", 0);
+
+        // FX: 100k units/lot -> risk/lot = 0.001 x 100k = 100
+        // budget 200 -> 2.0 lots -> capped at 0.5
+        Assert.Equal(0.5, engine.Size(sig, 1.27), 9);
     }
 
     [Fact]
