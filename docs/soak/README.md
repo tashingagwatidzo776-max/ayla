@@ -32,6 +32,7 @@ do not edit rows by hand.
 
 | Date | Entries | Settlements | Refusals | Verdict |
 |------|--------:|------------:|---------:|---------|
+| 2026-09-22 | 296 | 0 | 0 | CLEAN |
 | 2026-09-21 | 276 | 0 | 0 | CLEAN |
 | 2026-09-19 | 73 | 0 | 0 | CLEAN |
 <!-- soak-trend:end -->
