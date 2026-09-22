@@ -147,22 +147,31 @@ public sealed class MainViewModel
 
         try
         {
+            // The Terminal (MT5 bridge panel + polling) needs no Deriv
+            // connectivity — start it FIRST so the MT5 side is up even when
+            // Deriv's endpoint is degraded (observed live: a row connect
+            // can hang indefinitely on the splash path).
+            TerminalVm.StartTerminalCommand.Execute(null);
+
             var demoRow = AccountsVm.Hub.Accounts.FirstOrDefault(a => a.Config.IsDemo);
             if (demoRow is not null && !demoRow.IsConnected)
             {
-                await demoRow.ConnectAsync();
+                // Hard 20 s cap: a wedged Deriv endpoint must delay the
+                // profile journal entry, not suspend it — the row's own
+                // auto-reconnect loop keeps trying in the background.
+                var connect = demoRow.ConnectAsync();
+                await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(20)));
+                if (connect.IsFaulted)
+                {
+                    _ = connect.Exception; // observe — row state surfaces via heartbeats
+                }
             }
 
             // Autonomy and symbol are no longer forced by the profile — the
             // brain switch and symbol stay exactly where the user left them.
 
-            // Deriv binary engines are NOT started automatically: the MT5
-            // terminal is the active venue, so the profile connects accounts
-            // and starts the Terminal (MT5 panel + polling) but leaves the
-            // binary engine idle until the user explicitly starts it.
-            TerminalVm.StartTerminalCommand.Execute(null);
             _journal?.Log(Guid.Empty, "startup-profile",
-                "one-click session start executed (demo row connected, Terminal started; binary engines left idle)");
+                "one-click session start executed (Terminal started; demo row connecting in background; binary engines left idle)");
         }
         catch (Exception ex)
         {
