@@ -104,6 +104,31 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private decimal mt5MaxLots = 1.00m;
 
+    /// <summary>Fx brain daily-loss stop (currency units below session start
+    /// balance). 0 disables — not recommended.</summary>
+    [ObservableProperty]
+    private decimal mt5DailyLossCap = 25m;
+
+    /// <summary>Fx brain equity floor (absolute). 0 = disabled.</summary>
+    [ObservableProperty]
+    private decimal mt5EquityFloor = 0m;
+
+    /// <summary>CSV of symbols the FX brain runs — one engine per entry.</summary>
+    [ObservableProperty]
+    private string fxSymbols = "XAUUSDmicro,EURUSD,GBPUSD,USDJPY";
+
+    /// <summary>Portfolio cap: total open lots across all FX symbols.</summary>
+    [ObservableProperty]
+    private decimal fxPortfolioMaxLots = 0.10m;
+
+    /// <summary>News blackout half-window in minutes (both sides).</summary>
+    [ObservableProperty]
+    private int newsBlackoutMinutes = 15;
+
+    /// <summary>Pinned MT5 terminal64.exe (empty = auto-discover).</summary>
+    [ObservableProperty]
+    private string mt5TerminalPath = "";
+
     /// <summary>One-click session start: auto-connect demo, arm the brain,
     /// select R_100, start engines.</summary>
     [ObservableProperty]
@@ -167,6 +192,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         Stake = settings.Stake;
         ManualMaxStake = settings.ManualMaxStake > 0 ? settings.ManualMaxStake : null;
         Mt5MaxLots = settings.Mt5MaxLots;
+        Mt5DailyLossCap = settings.Mt5DailyLossCap;
+        Mt5EquityFloor = settings.Mt5EquityFloor;
+        FxSymbols = settings.FxSymbols;
+        FxPortfolioMaxLots = settings.FxPortfolioMaxLots;
+        NewsBlackoutMinutes = settings.NewsBlackoutMinutes;
+        Mt5TerminalPath = settings.Mt5TerminalPath;
         StartupProfile = settings.StartupProfile;
         AutonomyEnabled = settings.AutonomyEnabled;
         DecisionIntervalMinutes = settings.DecisionIntervalMinutes;
@@ -202,6 +233,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         Stake = Math.Max(0.01m, Stake),
         ManualMaxStake = Math.Max(0m, ManualMaxStake ?? 0m),
         Mt5MaxLots = Math.Max(0m, Mt5MaxLots),
+        Mt5DailyLossCap = Math.Max(0m, Mt5DailyLossCap),
+        Mt5EquityFloor = Math.Max(0m, Mt5EquityFloor),
+        FxSymbols = string.IsNullOrWhiteSpace(FxSymbols) ? "XAUUSDmicro" : FxSymbols,
+        FxPortfolioMaxLots = Math.Max(0m, FxPortfolioMaxLots),
+        NewsBlackoutMinutes = Math.Clamp(NewsBlackoutMinutes, 0, 120),
+        Mt5TerminalPath = (Mt5TerminalPath ?? "").Trim(),
         StartupProfile = StartupProfile,
         AutonomyEnabled = AutonomyEnabled,
         DecisionIntervalMinutes = Math.Max(1, DecisionIntervalMinutes),

@@ -73,6 +73,36 @@ public sealed class AppSettings
     /// the bridge. 0 disables MT5 order placement entirely (fail-closed).</summary>
     public decimal Mt5MaxLots { get; set; } = 1.00m;
 
+    /// <summary>Fx brain safety: stop trading (and flatten) when the MT5
+    /// account's realized+floating P/L is this far below the session start
+    /// balance. 0 disables the stop — not recommended for live.</summary>
+    public decimal Mt5DailyLossCap { get; set; } = 25m;
+
+    /// <summary>Fx brain safety: go back to paper when total MT5 account
+    /// equity falls below this absolute floor (0 = disabled).</summary>
+    public decimal Mt5EquityFloor { get; set; } = 0m;
+
+    /// <summary>The MT5 symbol the forex brain trades (bridge catalog name,
+    /// not a Deriv symbol).</summary>
+    public string FxSymbol { get; set; } = "XAUUSD";
+
+    /// <summary>CSV of MT5 symbols the FX brain runs (one engine each).
+    /// Falls back to FxSymbol when empty; unknown symbols degrade to a
+    /// skipped cycle, never an error.</summary>
+    public string FxSymbols { get; set; } = "XAUUSDmicro,EURUSD,GBPUSD,USDJPY";
+
+    /// <summary>Total open lots across ALL FX-brain symbols (0 = disabled).
+    /// The portfolio veto refuses any order that would exceed it.</summary>
+    public decimal FxPortfolioMaxLots { get; set; } = 0.10m;
+
+    /// <summary>Minutes before AND after a high-impact calendar event that
+    /// the FX brain refuses new orders.</summary>
+    public int NewsBlackoutMinutes { get; set; } = 15;
+
+    /// <summary>Pinned MT5 terminal64.exe (empty = auto-discover the known
+    /// install locations). Watchdog, sidecar and startup profile all honor it.</summary>
+    public string Mt5TerminalPath { get; set; } = "";
+
     /// <summary>One-click session start: when set, launching the app
     /// auto-connects the demo row, arms the brain, selects R_100 and starts
     /// the engines. Demo automation only — real accounts still need the

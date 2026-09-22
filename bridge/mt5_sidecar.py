@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """MT5 sidecar — loopback-only HTTP bridge between DON G FX and MetaTrader 5.
 
-Attaches to a RUNNING MT5 terminal (the MetaTrader5 package cannot launch
+Attaches to a RUNNING MT5 terminal (--terminal <path> targets a specific
+install and starts it when needed; the MetaTrader5 package cannot launch
 one) and serves a small JSON API on 127.0.0.1 only:
 
     GET  /health                 liveness + attached account snapshot
@@ -70,11 +71,17 @@ class OrderError(ValueError):
     """A request the sidecar refuses without touching the terminal."""
 
 
-def attach(retries: int = 6, delay: float = 2.0) -> bool:
+def attach(retries: int = 6, delay: float = 2.0,
+           terminal_path: str | None = None) -> bool:
     """initialize() with retries — IPC timeouts (-10005) are transient when
-    several MT5 terminals are running."""
+    several MT5 terminals are running. With --terminal the given
+    terminal64.exe install is targeted (and started when it is not running),
+    so a second MT5 install can never be attached by accident."""
     for _ in range(retries):
-        if mt5.initialize():
+        if terminal_path:
+            if mt5.initialize(path=terminal_path):
+                return True
+        elif mt5.initialize():
             return True
         time.sleep(delay)
     return False
@@ -128,6 +135,26 @@ class BridgeHandlers:
         if info is None:
             raise OrderError(f"symbol {symbol} not available on this account")
         return info
+
+    def symbols(self) -> dict:
+        """Tradable catalog with live quotes: symbol_select every visible
+        symbol once, then snapshot bid/ask/spread/digits + trade mode. The
+        Terminal's Market Watch is fed from this (MT5-native, not Deriv)."""
+        out = []
+        for info in (self._m.symbols_get() or []):
+            if not getattr(info, "visible", False):
+                continue
+            tick = self._m.symbol_info_tick(info.name)
+            out.append({
+                "symbol": info.name,
+                "description": info.description,
+                "bid": tick.bid if tick else None,
+                "ask": tick.ask if tick else None,
+                "spread_points": info.spread,
+                "digits": info.digits,
+                "trade_mode": int(info.trade_mode),
+            })
+        return {"symbols": out}
 
     def ticks(self, symbol: str) -> dict:
         self._symbol_or_404(symbol)
@@ -355,6 +382,8 @@ class SidecarServer:
                         self._send(200, h.health())
                     elif path == "/account":
                         self._send(200, h.account())
+                    elif path == "/symbols":
+                        self._send(200, h.symbols())
                     elif path.startswith("/ticks/"):
                         self._send(200, h.ticks(path.split("/", 2)[2]))
                     elif path.startswith("/book/"):
@@ -403,10 +432,27 @@ class SidecarServer:
         self.httpd.serve_forever()
 
 
+def parse_args(argv: list[str]) -> tuple[int, str | None]:
+    """(port, terminal_path). Port stays positional for backward
+    compat; --terminal points at a specific terminal64.exe."""
+    port = DEFAULT_PORT
+    path: str | None = None
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--terminal" and i + 1 < len(argv):
+            path = argv[i + 1]
+            i += 2
+        else:
+            port = int(argv[i])
+            i += 1
+    return port, path
+
+
 def main() -> int:
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
-    print(f"attaching to MetaTrader 5 (retries on IPC timeout)…")
-    if not attach():
+    port, terminal_path = parse_args(sys.argv[1:])
+    target = f" (terminal: {terminal_path})" if terminal_path else ""
+    print(f"attaching to MetaTrader 5{target} (retries on IPC timeout)…")
+    if not attach(terminal_path=terminal_path):
         print("ATTACH FAILED:", mt5.last_error())
         print("Start the MT5 terminal and log in first.")
         return 1

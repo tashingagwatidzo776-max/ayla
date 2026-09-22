@@ -103,6 +103,8 @@ only and refuses any other bind address.
 | Real-money gate | ✅ The MT5 account's demo/real comes from `account_info()` (server name / login); a real MT5 account requires the same session unlock as every other real-money path. |
 | Journal | ✅ Every order journals `MT5_ORDER` with the retcode, ticket, price, and server. |
 | Transport | ✅ Loopback-only sidecar; the C# client refuses non-loopback base addresses by construction (`Mt5BridgeClient` ctor). |
+| FX-brain supervisor | ✅ The autonomous FX brain (`FxEngineHost`) routes its orders through the same ticket path, and an `FxSupervisor` gate runs **before every cycle and before every order**: MT5 daily-loss cap (`Mt5DailyLossCap`, latched until explicitly re-armed), absolute equity floor (`Mt5EquityFloor`), kill switch, and portfolio governor. Any halt returns the live engine to paper automatically. Halt/flatten events journal `FX_RISK` and post to the webhook. |
+| Cross-venue stops | ✅ Kill switch and governor trip both stop the FX brain and flatten every open MT5 position (`FxEmergencyFlattenAsync`) — the MT5 leg is covered by the same emergency stops as the Deriv legs. |
 
 ## Residual risks (accepted, documented)
 

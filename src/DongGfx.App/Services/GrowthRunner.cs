@@ -291,7 +291,8 @@ public sealed partial class GrowthRunner : ObservableObject, IAsyncDisposable
                         _engine?.Bankroll ?? 0, _engine?.LossStreak ?? 0,
                         reason == GrowthExitReason.KillSwitchEngaged
                             ? "kill switch engaged"
-                            : $"repeated failures ({scheduler.ConsecutiveFailures})");
+                            : $"repeated failures ({scheduler.ConsecutiveFailures})" +
+                              (scheduler.LastFailureType is { } ft ? $" — last: {ft}" : ""));
                     Exited?.Invoke(this, reason);
                 }
             }

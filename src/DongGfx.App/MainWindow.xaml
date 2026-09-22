@@ -220,6 +220,11 @@
                             <RowDefinition Height="Auto" />  <!-- 29 Unlock staleness -->
                             <RowDefinition Height="Auto" />  <!-- 30 Actions -->
                             <RowDefinition Height="Auto" />  <!-- 31 Status -->
+                            <RowDefinition Height="Auto" />  <!-- 32 FX BRAIN section -->
+                            <RowDefinition Height="Auto" />  <!-- 33 FX portfolio fields -->
+                            <RowDefinition Height="Auto" />  <!-- 34 Portfolio max lots -->
+                            <RowDefinition Height="Auto" />  <!-- 35 News blackout -->
+                            <RowDefinition Height="Auto" />  <!-- 36 MT5 terminal path -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -262,6 +267,16 @@
                                    ToolTip="Ceiling on a single MT5 bridge order (lots). 0 disables MT5 order placement entirely." />
                         <TextBox Grid.Row="10" Grid.Column="3" Width="120" Margin="0,0,0,10"
                                  Text="{Binding SettingsVm.Mt5MaxLots, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="10" Grid.Column="4" Text="MT5 daily loss cap" Style="{StaticResource FieldLabel}" Margin="16,0,8,0"
+                                   VerticalAlignment="Center"
+                                   ToolTip="The FX brain stops (and returns to paper) when session P/L drops this far below the session-start balance. 0 disables." />
+                        <TextBox Grid.Row="10" Grid.Column="5" Width="120" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.Mt5DailyLossCap, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="10" Grid.Column="6" Text="MT5 equity floor" Style="{StaticResource FieldLabel}" Margin="16,0,8,0"
+                                   VerticalAlignment="Center"
+                                   ToolTip="Absolute equity floor: the FX brain stops when MT5 equity falls below this. 0 = disabled." />
+                        <TextBox Grid.Row="10" Grid.Column="6" Grid.ColumnSpan="1" Width="120" HorizontalAlignment="Right" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.Mt5EquityFloor, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
                         <CheckBox Grid.Row="11" Grid.Column="2" Grid.ColumnSpan="2" Margin="16,0,0,10"
                                   Content="One-click session start (connect demo, arm brain, start engines)"
                                   IsChecked="{Binding SettingsVm.StartupProfile}" />
@@ -341,6 +356,26 @@
                         <TextBlock Grid.Row="31" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
                                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+
+                        <TextBlock Grid.Row="32" Grid.ColumnSpan="2" Text="FX BRAIN (FOREX)" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="33" Grid.Column="0" Text="Symbols (CSV)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="33" Grid.Column="1" Width="220" Margin="0,0,16,10" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.FxSymbols, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="One engine per symbol — comma-separated MT5 symbols the brain runs (paper first)." />
+                        <TextBlock Grid.Row="34" Grid.Column="0" Text="Portfolio max lots" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="Total open lots across ALL FX-brain symbols at order time. 0 disables the portfolio veto." />
+                        <TextBox Grid.Row="34" Grid.Column="1" Width="80" Margin="0,0,16,10" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.FxPortfolioMaxLots, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="35" Grid.Column="0" Text="News blackout (min)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="Minutes before/after each high-impact calendar event (data
+ews-calendar.json) where the brain refuses new orders. 0 disables." />
+                        <TextBox Grid.Row="35" Grid.Column="1" Width="80" Margin="0,0,16,10" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.NewsBlackoutMinutes, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="36" Grid.Column="0" Text="MT5 terminal path" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="terminal64.exe the bridge attaches to. Empty = auto-discover. Honored by the watchdog, sidecar and startup profile." />
+                        <TextBox Grid.Row="36" Grid.Column="1" Width="220" Margin="0,0,16,10" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.Mt5TerminalPath, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center"
+                                 ToolTip="C:/Program Files/MetaTrader 5 Terminal/terminal64.exe — leave empty to auto-discover." />
                     </Grid>
                 </ScrollViewer>
             </TabItem>
@@ -911,6 +946,8 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <!-- account bar -->
+                        <RowDefinition Height="Auto" />
+                        <!-- sign-in band -->
                         <RowDefinition Height="*" />
                         <!-- main content -->
                     </Grid.RowDefinitions>
@@ -933,6 +970,19 @@
                                 </Border>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                                <!-- ── DON G FX FX BRAIN ── -->
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
+                                        ToolTip="The forex brain: regime detection + momentum/mean-reversion families on MT5. Paper mode journals signals only; go-live needs the paper soak first.">
+                                    <TextBlock Text="{Binding FxBadge}" FontWeight="Bold" FontSize="11" />
+                                </Border>
+                                <Button Content="FX BRAIN ON/OFF" Command="{Binding ToggleFxBrainCommand}"
+                                        Margin="0,0,6,0" />
+                                <Button Content="GO LIVE" Command="{Binding FxGoLiveCommand}" Margin="0,0,6,0" />
+                                <Button Content="PAPER" Style="{StaticResource GhostButton}"
+                                        Command="{Binding FxGoPaperCommand}" Margin="0,0,6,0" />
+                                <Button Content="RE-ARM" Style="{StaticResource GhostButton}"
+                                        Command="{Binding FxReArmCommand}" Margin="0,0,12,0"
+                                        ToolTip="After a supervisor loss stop: clear the halt and re-anchor the session loss baseline to the live MT5 balance." />
                                 <!-- ── THE BRAIN SWITCH ── -->
                                 <Button Content="🧠 BRAIN: ON" Command="{Binding TurnBrainOnCommand}"
                                         Margin="0,0,6,0" />
@@ -944,8 +994,56 @@
                         </DockPanel>
                     </Border>
 
+                    <!-- ── Sign-in band: accounts + PAT/OAuth + bridge, in-tab ── -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="10" Margin="0,6,0,0">
+                        <StackPanel>
+                            <DockPanel>
+                                <TextBlock Text="ACCOUNTS" Style="{StaticResource SectionTitle}"
+                                           VerticalAlignment="Center" Margin="0,0,14,0" />
+                                <TextBlock Text="{Binding Mt5BridgeLine}" FontFamily="Consolas" FontSize="11"
+                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                <TextBox Text="{Binding TerminalTokenInput, UpdateSourceTrigger=PropertyChanged}"
+                                         FontFamily="Consolas" FontSize="11" MinWidth="240" Margin="18,0,6,0"
+                                         VerticalAlignment="Center"
+                                         ToolTip="Paste a Deriv token (PAT) to sign in — verified via discovery, one row per token" />
+                                <Button Content="Sign in with token" Command="{Binding TerminalImportTokenCommand}"
+                                        Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <Button Content="Sign in with Deriv (OAuth)" Style="{StaticResource GhostButton}"
+                                        Command="{Binding TerminalSignInOAuthCommand}" VerticalAlignment="Center" />
+                            </DockPanel>
+                            <TextBlock Text="{Binding TerminalSignInStatus}" FontSize="11"
+                                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0"
+                                       TextTrimming="CharacterEllipsis" />
+                            <ItemsControl ItemsSource="{Binding TerminalAccounts}" Margin="0,6,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,4">
+                                            <DockPanel LastChildFill="False">
+                                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
+                                                    <TextBlock Text="{Binding Kind}" FontWeight="Bold" FontSize="10" />
+                                                </Border>
+                                                <TextBlock Text="{Binding Label}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11"
+                                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <TextBlock Text="{Binding BalanceText}" FontFamily="Consolas" FontSize="11"
+                                                           Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <TextBlock Text="{Binding VerifiedText}" FontFamily="Consolas" FontSize="11"
+                                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                                <Button Content="Connect" DockPanel.Dock="Right" Command="{Binding DataContext.TerminalConnectCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" Margin="6,0,0,0" />
+                                                <Button Content="Disconnect" DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                                                        Command="{Binding DataContext.TerminalDisconnectAccountCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" />
+                                            </DockPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
                     <!-- ── MT5-style workspace ── -->
-                    <DockPanel Grid.Row="1" Margin="0,10,0,0">
+                    <DockPanel Grid.Row="2" Margin="0,10,0,0">
                         <!-- Status bar (bottom) -->
                         <Border DockPanel.Dock="Bottom" Background="{DynamicResource CardBrush}"
                                 Padding="10,6" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
@@ -955,6 +1053,8 @@
                                 <TextBlock Text="{Binding BalanceText}" FontFamily="Consolas" FontSize="11"
                                            Foreground="{StaticResource AccentBrush}" Margin="0,0,16,0" />
                                 <TextBlock Text="{Binding Mt5AccountText}" FontFamily="Consolas" FontSize="11"
+                                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0" />
+                                <TextBlock Text="{Binding FxStatusText}" FontFamily="Consolas" FontSize="11"
                                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0" />
                                 <TextBlock Text="{Binding DomSourceText}" FontFamily="Consolas" FontSize="11"
                                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0" />

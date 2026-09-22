@@ -11,6 +11,11 @@ namespace DongGfx.Core.Update;
 /// </summary>
 public sealed class AutoUpdater : IDisposable
 {
+    /// <summary>The real releases endpoint for this product (the placeholder
+    /// default above points at user/tf and can never resolve).</summary>
+    public const string GitHubReleasesUrl =
+        "https://api.github.com/repos/tashingagwatidzo776-max/ayla/releases/latest";
+
     private readonly HttpClient _http;
     private readonly string _currentVersion;
     private readonly string _updateDir;

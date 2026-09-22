@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.DependencyInjection;
 using CommunityToolkit.Mvvm.Input;
 using DongGfx.App.Controls;
 using DongGfx.App.Services;
@@ -362,6 +363,18 @@ public sealed partial class DashboardViewModel : ObservableObject
     {
         IsGovernorLatched = true;
         IsGovernorWarned = false;
+
+        // Cross-venue: a governor trip is a portfolio-level stop — the FX
+        // brain halts and MT5 flattens too (same semantics as the kill switch).
+        try
+        {
+            _ = Ioc.Default.GetRequiredService<TerminalViewModel>().FxEmergencyFlattenAsync("governor trip");
+        }
+        catch (InvalidOperationException)
+        {
+            // no TerminalViewModel registered (tests) — hub already stopped Deriv-side runners
+        }
+
         RefreshPortfolioSummary();
     });
 
@@ -535,6 +548,18 @@ public sealed partial class DashboardViewModel : ObservableObject
             if (_hub is not null)
             {
                 _ = _hub.DisconnectAllAsync();
+            }
+
+            // Cross-venue: stop the FX brain and flatten every open MT5
+            // position so the kill switch covers the MT5 leg too.
+            // (Ioc-guarded: tests construct this VM without the container.)
+            try
+            {
+                _ = Ioc.Default.GetRequiredService<TerminalViewModel>().FxEmergencyFlattenAsync("kill switch");
+            }
+            catch (InvalidOperationException)
+            {
+                // no TerminalViewModel registered (tests) — Deriv-side stop above still applies
             }
         }
         else

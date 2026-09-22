@@ -1,0 +1,14 @@
+{
+  "_readme": [
+    "DON G FX news calendar — high-impact windows where the FX brain refuses new orders.",
+    "Copy this file to %APPDATA%\\tf\\data\\news-calendar.json and keep it current.",
+    "time: ISO-8601 UTC instant of the release. impact: high = blocks (default), medium/low = ignored.",
+    "The brain refuses orders from (time - NewsBlackoutMinutes) to (time + NewsBlackoutMinutes).",
+    "A missing or malformed file means no known events — it never blocks trading by itself."
+  ],
+  "events": [
+    { "time": "2026-10-02T12:30:00Z", "impact": "high", "title": "US Non-Farm Payrolls" },
+    { "time": "2026-10-15T12:30:00Z", "impact": "high", "title": "US CPI" },
+    { "time": "2026-11-01T18:00:00Z", "impact": "high", "title": "FOMC Rate Decision" }
+  ]
+}

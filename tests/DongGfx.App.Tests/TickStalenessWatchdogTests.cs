@@ -11,6 +11,7 @@ namespace DongGfx.App.Tests;
 /// or fresh, and re-arm after a recovery so a second stall is caught too.
 /// All timing is driven through TestLastTickUtc — no waiting.
 /// </summary>
+[Trait("Category", "Unit")]
 public class TickStalenessWatchdogTests
 {
     private static AccountConnection MakeConnected()
