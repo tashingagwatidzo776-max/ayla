@@ -67,6 +67,13 @@ public sealed class MainViewModel
         // Crash recovery: check for unsettled contracts from a previous session.
         await RecoverUnsettledContractsAsync(settings);
 
+        // MT5-first startup: bring up account rows and the Terminal (MT5
+        // bridge panel + polling) BEFORE any primary-client network work, so
+        // a degraded or wedged Deriv endpoint can never block the MT5 side
+        // of the app. The primary connect below only affects the dashboard
+        // chart/feed, and its failure paths already degrade gracefully.
+        await RunStartupProfileAsync(settings);
+
         if (string.IsNullOrEmpty(settings.AppId))
         {
             return;
@@ -123,8 +130,6 @@ public sealed class MainViewModel
         {
             SettingsVm.StatusMessage = $"Auto-connect failed: {ex.Message}";
         }
-
-        await RunStartupProfileAsync(settings);
     }
 
     /// <summary>
