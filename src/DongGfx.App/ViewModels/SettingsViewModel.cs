@@ -113,6 +113,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private decimal mt5EquityFloor = 0m;
 
+    /// <summary>CSV of symbols the FX brain runs — one engine per entry.</summary>
+    [ObservableProperty]
+    private string fxSymbols = "XAUUSDmicro,EURUSD,GBPUSD,USDJPY";
+
+    /// <summary>Portfolio cap: total open lots across all FX symbols.</summary>
+    [ObservableProperty]
+    private decimal fxPortfolioMaxLots = 0.10m;
+
+    /// <summary>News blackout half-window in minutes (both sides).</summary>
+    [ObservableProperty]
+    private int newsBlackoutMinutes = 15;
+
     /// <summary>One-click session start: auto-connect demo, arm the brain,
     /// select R_100, start engines.</summary>
     [ObservableProperty]
@@ -178,6 +190,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         Mt5MaxLots = settings.Mt5MaxLots;
         Mt5DailyLossCap = settings.Mt5DailyLossCap;
         Mt5EquityFloor = settings.Mt5EquityFloor;
+        FxSymbols = settings.FxSymbols;
+        FxPortfolioMaxLots = settings.FxPortfolioMaxLots;
+        NewsBlackoutMinutes = settings.NewsBlackoutMinutes;
         StartupProfile = settings.StartupProfile;
         AutonomyEnabled = settings.AutonomyEnabled;
         DecisionIntervalMinutes = settings.DecisionIntervalMinutes;
@@ -215,6 +230,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         Mt5MaxLots = Math.Max(0m, Mt5MaxLots),
         Mt5DailyLossCap = Math.Max(0m, Mt5DailyLossCap),
         Mt5EquityFloor = Math.Max(0m, Mt5EquityFloor),
+        FxSymbols = string.IsNullOrWhiteSpace(FxSymbols) ? "XAUUSDmicro" : FxSymbols,
+        FxPortfolioMaxLots = Math.Max(0m, FxPortfolioMaxLots),
+        NewsBlackoutMinutes = Math.Clamp(NewsBlackoutMinutes, 0, 120),
         StartupProfile = StartupProfile,
         AutonomyEnabled = AutonomyEnabled,
         DecisionIntervalMinutes = Math.Max(1, DecisionIntervalMinutes),

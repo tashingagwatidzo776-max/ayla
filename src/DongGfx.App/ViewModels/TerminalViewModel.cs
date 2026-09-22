@@ -194,8 +194,8 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     // ── DON G FX forex brain (C): paper/live engine surfaced in the tab ──
 
-    private FxEngineHost? _fxHost;
-    private readonly Func<FxEngineHost?> _fxHostFactory;
+    private FxPortfolioHost? _fxHost;
+    private readonly Func<FxPortfolioHost?> _fxHostFactory;
 
     [ObservableProperty]
     private string fxBadge = "FX BRAIN: OFF";
@@ -203,7 +203,7 @@ public sealed partial class TerminalViewModel : ObservableObject
     [ObservableProperty]
     private string fxStatusText = "engine not running";
 
-    public FxEngineHost? FxHost => _fxHost;
+    public FxPortfolioHost? FxHost => _fxHost;
 
     [RelayCommand]
     private void ToggleFxBrain()
@@ -227,7 +227,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         _fxHost.StatusChanged += s => OnUiThread(() => FxStatusText = s);
         _fxHost.Start();
         FxBadge = "FX BRAIN: PAPER";
-        FxStatusText = $"engine running on {_fxHost.Symbol} {_fxHost.Timeframe} (paper mode)";
+        FxStatusText = $"engine running on {string.Join(", ", _fxHost.Symbols)} (paper mode)";
     }
 
     [RelayCommand]
@@ -447,7 +447,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         Action<string>? setSymbolBound = null,
         TickArchive? tickArchive = null,
         Func<AccountsViewModel>? accounts = null,
-        Func<FxEngineHost?>? fxHostFactory = null)
+        Func<FxPortfolioHost?>? fxHostFactory = null)
         : this(client, hub, store, settings, persist, isRealMoneyUnlocked, dashboard,
                journal, mt5, setAutonomyBound, setSymbolBound, new PublicMarketDataClient(), tickArchive, accounts, fxHostFactory)
     {
@@ -468,7 +468,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         PublicMarketDataClient publicClient,
         TickArchive? tickArchive = null,
         Func<AccountsViewModel>? accounts = null,
-        Func<FxEngineHost?>? fxHostFactory = null)
+        Func<FxPortfolioHost?>? fxHostFactory = null)
     {
         // FIRST: the UI-thread helper is used from the constructor itself
         // (hub subscription below) — it must never see an unset dispatcher.

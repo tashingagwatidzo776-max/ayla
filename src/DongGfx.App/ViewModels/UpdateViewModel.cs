@@ -47,7 +47,7 @@ public partial class UpdateViewModel : ObservableObject
             IsChecking = true;
             StatusMessage = "Checking for updates...";
 
-            var update = await _updater.CheckForUpdateAsync();
+            var update = await _updater.CheckForUpdateAsync(AutoUpdater.GitHubReleasesUrl);
             AvailableUpdate = update;
 
             if (update != null)

@@ -104,6 +104,12 @@ public sealed class AutonomousScheduler : IAsyncDisposable
     /// <summary>Failed cycles since the last successful one (reset on start).</summary>
     public int ConsecutiveFailures { get; private set; }
 
+    /// <summary>Type name of the most recent cycle exception — surfaced in
+    /// stop/give-up reasons so a degraded-endpoint episode is diagnosable
+    /// from the journal alone (the 2026-09-22 "repeated failures (3)" loop
+    /// recorded nothing about WHAT failed).</summary>
+    public string? LastFailureType { get; private set; }
+
     /// <summary>Cap after which the loop exits instead of retrying forever.</summary>
     public int MaxConsecutiveFailures => _maxConsecutiveFailures;
 
@@ -355,6 +361,7 @@ public sealed class AutonomousScheduler : IAsyncDisposable
                 // failures, stop retrying entirely — the runner surfaces the
                 // exit and may restart the session itself.
                 ConsecutiveFailures++;
+                LastFailureType = ex.GetType().Name;
                 if (ConsecutiveFailures >= _maxConsecutiveFailures)
                 {
                     return;

@@ -38,6 +38,13 @@ public sealed class FxEngineHost : IDisposable
     /// least this many paper signals have been journaled (plan guardrail).</summary>
     public int PaperSoakSignalsRequired { get; set; } = 10;
 
+    /// <summary>Portfolio veto (multi-symbol): returns a refusal reason when
+    /// the requested lots would exceed the shared exposure cap.</summary>
+    private readonly Func<double, Task<string?>>? _preOrderVeto;
+
+    /// <summary>News veto: high-impact calendar window refusal.</summary>
+    private readonly Func<(bool Blackout, string Reason)>? _newsVeto;
+
     public int PaperSignalsSeen { get; private set; }
     public bool PaperSoakComplete => PaperSignalsSeen >= PaperSoakSignalsRequired;
 
@@ -53,8 +60,12 @@ public sealed class FxEngineHost : IDisposable
         Func<bool>? governorTripped = null,
         Func<decimal>? dailyLossCap = null,
         Func<decimal>? equityFloor = null,
-        WebhookService? webhook = null)
+        WebhookService? webhook = null,
+        Func<double, Task<string?>>? preOrderVeto = null,
+        Func<(bool Blackout, string Reason)>? newsVeto = null)
     {
+        _preOrderVeto = preOrderVeto;
+        _newsVeto = newsVeto;
         _mt5 = mt5;
         _journal = journal;
         Symbol = symbol;
@@ -88,7 +99,11 @@ public sealed class FxEngineHost : IDisposable
         }
 
         _timer.Start();
-        _ = AnchorSupervisorAsync();
+        if (Supervisor.SessionStartBalance is null)
+        {
+            _ = AnchorSupervisorAsync();   // first host to start anchors; siblings share
+        }
+
         _ = RunCycleAsync();
     }
 
@@ -251,6 +266,30 @@ public sealed class FxEngineHost : IDisposable
             Journal("FX_ORDER", $"refused: supervisor — {execVerdict.Reason}", "{}");
             StatusChanged?.Invoke($"order refused: {execVerdict.Reason}");
             return;
+        }
+
+        // Rails, order 3: news blackout (high-impact calendar window).
+        if (_newsVeto is not null)
+        {
+            var (blackout, reason) = _newsVeto();
+            if (blackout)
+            {
+                Journal("FX_RISK", $"order refused — {reason}", "{}");
+                StatusChanged?.Invoke($"order refused: {reason}");
+                return;
+            }
+        }
+
+        // Rails, order 4: portfolio exposure cap (shared across symbols).
+        if (_preOrderVeto is not null)
+        {
+            var veto = await _preOrderVeto(decision.SuggestedLots).ConfigureAwait(true);
+            if (veto is not null)
+            {
+                Journal("FX_ORDER", $"refused: portfolio — {veto}", "{}");
+                StatusChanged?.Invoke($"order refused: {veto}");
+                return;
+            }
         }
 
         var isDemo = account.Server.Contains("demo", StringComparison.OrdinalIgnoreCase)

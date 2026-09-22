@@ -86,6 +86,19 @@ public sealed class AppSettings
     /// not a Deriv symbol).</summary>
     public string FxSymbol { get; set; } = "XAUUSD";
 
+    /// <summary>CSV of MT5 symbols the FX brain runs (one engine each).
+    /// Falls back to FxSymbol when empty; unknown symbols degrade to a
+    /// skipped cycle, never an error.</summary>
+    public string FxSymbols { get; set; } = "XAUUSDmicro,EURUSD,GBPUSD,USDJPY";
+
+    /// <summary>Total open lots across ALL FX-brain symbols (0 = disabled).
+    /// The portfolio veto refuses any order that would exceed it.</summary>
+    public decimal FxPortfolioMaxLots { get; set; } = 0.10m;
+
+    /// <summary>Minutes before AND after a high-impact calendar event that
+    /// the FX brain refuses new orders.</summary>
+    public int NewsBlackoutMinutes { get; set; } = 15;
+
     /// <summary>One-click session start: when set, launching the app
     /// auto-connects the demo row, arms the brain, selects R_100 and starts
     /// the engines. Demo automation only — real accounts still need the

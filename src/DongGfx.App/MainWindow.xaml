@@ -220,6 +220,8 @@
                             <RowDefinition Height="Auto" />  <!-- 29 Unlock staleness -->
                             <RowDefinition Height="Auto" />  <!-- 30 Actions -->
                             <RowDefinition Height="Auto" />  <!-- 31 Status -->
+                            <RowDefinition Height="Auto" />  <!-- 32 FX BRAIN section -->
+                            <RowDefinition Height="Auto" />  <!-- 33 FX portfolio fields -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -351,6 +353,20 @@
                         <TextBlock Grid.Row="31" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
                                    Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+
+                        <TextBlock Grid.Row="32" Grid.ColumnSpan="2" Text="FX BRAIN (FOREX)" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="33" Grid.Column="0" Text="Symbols (CSV)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="33" Grid.Column="1" Width="220" Margin="0,0,16,10" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.FxSymbols, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="One engine per symbol — comma-separated MT5 symbols the brain runs (paper first)." />
+                        <TextBlock Grid.Row="33" Grid.Column="2" Text="Portfolio max lots" Style="{StaticResource FieldLabel}" Margin="16,0,8,0" VerticalAlignment="Center"
+                                   ToolTip="Total open lots across ALL FX-brain symbols at order time. 0 disables the portfolio veto." />
+                        <TextBox Grid.Row="33" Grid.Column="3" Width="80" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.FxPortfolioMaxLots, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="33" Grid.Column="4" Text="News blackout (min)" Style="{StaticResource FieldLabel}" Margin="16,0,8,0" VerticalAlignment="Center"
+                                   ToolTip="Minutes before/after each high-impact calendar event (data\news-calendar.json) where the brain refuses new orders. 0 disables." />
+                        <TextBox Grid.Row="33" Grid.Column="5" Width="80" Margin="0,0,0,10"
+                                 Text="{Binding SettingsVm.NewsBlackoutMinutes, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
                     </Grid>
                 </ScrollViewer>
             </TabItem>

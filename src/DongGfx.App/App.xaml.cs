@@ -163,7 +163,8 @@ public partial class App : System.Windows.Application
                 () => sp.GetRequiredService<DashboardViewModel>().IsKillSwitchEngaged));
 
         // New services: auto-update, performance tracking, strategy optimizer
-        services.AddSingleton(_ => new AutoUpdater("1.0.0"));
+        services.AddSingleton(_ => new AutoUpdater(
+            (VersionInfo.FullVersion).Split('+')[0]));   // strip the +sha stamp
         services.AddSingleton(_ => new StrategyOptimizer(Path.Combine(SettingsService.DataDir, "backtests")));
         services.AddSingleton<UpdateViewModel>();
         services.AddSingleton(sp => new PerformanceViewModel(
@@ -179,6 +180,7 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<TickHistoryCache>()));
         services.AddSingleton<HealthViewModel>();
         services.AddSingleton<TickArchive>();
+        services.AddSingleton<FxScorecardService>();
         services.AddSingleton(sp =>
             new TerminalViewModel(
                 () => sp.GetRequiredService<DerivClient>(),
@@ -194,11 +196,12 @@ public partial class App : System.Windows.Application
                 accounts: () => sp.GetRequiredService<AccountsViewModel>(),
                 fxHostFactory: () =>
                 {
-                    var settings = sp.GetRequiredService<Func<AppSettings>>()();
-                    return new FxEngineHost(
+                    var s = sp.GetRequiredService<Func<AppSettings>>()();
+                    var symbols = FxScorecardService.ParseSymbols(s.FxSymbols, s.FxSymbol);
+                    return new FxPortfolioHost(
                         sp.GetRequiredService<Mt5BridgeClient>(),
                         sp.GetRequiredService<TradeJournal>(),
-                        settings.FxSymbol,
+                        symbols,
                         () => sp.GetRequiredService<DashboardViewModel>().IsKillSwitchEngaged,
                         () => sp.GetRequiredService<Func<AppSettings>>()().Mt5MaxLots,
                         () => sp.GetRequiredService<MultiAccountHub>().Accounts.Any(a => !a.Config.IsDemo && sp.GetRequiredService<MultiAccountHub>().IsRealMoneyUnlocked(a.Config.Id))
@@ -206,7 +209,11 @@ public partial class App : System.Windows.Application
                         governorTripped: () => sp.GetRequiredService<MultiAccountHub>().IsGovernorTripped,
                         dailyLossCap: () => sp.GetRequiredService<Func<AppSettings>>()().Mt5DailyLossCap,
                         equityFloor: () => sp.GetRequiredService<Func<AppSettings>>()().Mt5EquityFloor,
-                        webhook: sp.GetRequiredService<WebhookService>());
+                        portfolioMaxLots: () => sp.GetRequiredService<Func<AppSettings>>()().FxPortfolioMaxLots,
+                        webhook: sp.GetRequiredService<WebhookService>(),
+                        newsCalendarPath: () => Path.Combine(SettingsService.DataDir, "news-calendar.json"),
+                        newsWindow: () => TimeSpan.FromMinutes(
+                            sp.GetRequiredService<Func<AppSettings>>()().NewsBlackoutMinutes));
                 }));
         services.AddSingleton(sp => new MainViewModel(
             sp.GetRequiredService<SettingsService>(),
@@ -280,6 +287,56 @@ public partial class App : System.Windows.Application
         // restart (and its absence the rest of the time).
         var hub = provider.GetRequiredService<MultiAccountHub>();
         digest.UnlockStateProvider = hub.DescribeUnlockState;
+        // FX-brain leg: mode, symbols, soak progress, halt state, and the
+        // latest alpha-scorecard verdict — monitoring sees the forex brain's
+        // health (and family degradation) without opening the app.
+        digest.FxStateProvider = () =>
+        {
+            var terminal = provider.GetRequiredService<TerminalViewModel>();
+            var scorecard = provider.GetRequiredService<FxScorecardService>();
+            var parts = new List<string>();
+            if (terminal.FxHost is { } portfolio)
+            {
+                var mode = portfolio.IsLiveEngine ? "LIVE" : portfolio.IsRunning ? "PAPER" : "stopped";
+                var halt = portfolio.Supervisor.IsHalted
+                    ? $"halt:{portfolio.Supervisor.HaltReason}"
+                    : "clear";
+                parts.Add($"FX brain {mode} on {string.Join("+", portfolio.Symbols)} " +
+                          $"soak {portfolio.PaperSignalsSeen}/{portfolio.PaperSoakSignalsRequired} {halt}");
+            }
+
+            if (scorecard.LastSummary is { } sc)
+            {
+                parts.Add(sc);
+            }
+
+            return parts.Count > 0 ? string.Join(" · ", parts) : null;
+        };
+
+        // Scorecard service (nightly 03:00 walk-forward verdicts per family).
+        provider.GetRequiredService<FxScorecardService>();   // start the timer
+
+        // Startup update check: silent probe ~45 s after launch; a newer
+        // release surfaces as a toast + the Update tab's normal flow.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(45)).ConfigureAwait(false);
+            try
+            {
+                var updater = provider.GetRequiredService<AutoUpdater>();
+                var update = await updater.CheckForUpdateAsync(
+                    AutoUpdater.GitHubReleasesUrl).ConfigureAwait(false);
+                if (update is not null)
+                {
+                    provider.GetRequiredService<NotificationService>()
+                        .NotifyUpdateAvailable(update.Version);
+                }
+            }
+            catch
+            {
+                // update checks are best-effort — never touch startup
+            }
+        });
         // The unlock-staleness alert reads its hours from the settings
         // editor LIVE — a save re-arms the watches without an app restart
         // (0 disables the alert). Default 4h when never configured.

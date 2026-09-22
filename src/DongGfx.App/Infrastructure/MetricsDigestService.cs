@@ -69,6 +69,11 @@ public sealed class MetricsDigestService : IDisposable
     /// after a restart means nothing is armed. Null disables the leg.</summary>
     public Func<string?>? UnlockStateProvider { get; set; }
 
+    /// <summary>FX brain state line for the digest: mode, symbols, soak
+    /// progress, halt reason, and the latest alpha-scorecard verdict. Null
+    /// disables the leg.</summary>
+    public Func<string?>? FxStateProvider { get; set; }
+
     private readonly MetricsCollector _metrics;
     private readonly WebhookService _webhook;
     private readonly HttpClient _http = new();
@@ -103,7 +108,8 @@ public sealed class MetricsDigestService : IDisposable
         var errors = _metrics.Errors;
         var audit = ComposeSafetyAuditSection();
         var unlock = ComposeUnlockSection();
-        if (latency.Count == 0 && errors.Count == 0 && audit is null && unlock is null)
+        var fx = ComposeFxSection();
+        if (latency.Count == 0 && errors.Count == 0 && audit is null && unlock is null && fx is null)
         {
             return null;
         }
@@ -139,7 +145,32 @@ public sealed class MetricsDigestService : IDisposable
             parts.Add(unlock);
         }
 
+        if (fx is not null)
+        {
+            parts.Add(fx);
+        }
+
         return string.Join(" | ", parts);
+    }
+
+    /// <summary>The FX-brain section for this tick, or null when no provider
+    /// is wired or it has nothing to say.</summary>
+    private string? ComposeFxSection()
+    {
+        if (FxStateProvider is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return FxStateProvider();
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"fx-state digest read failed: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>The real-money unlock arm-state section, or null when no
