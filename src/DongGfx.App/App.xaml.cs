@@ -180,6 +180,10 @@ public partial class App : System.Windows.Application
                 sp.GetRequiredService<TickHistoryCache>()));
         services.AddSingleton<HealthViewModel>();
         services.AddSingleton<TickArchive>();
+        // One shared bridge client: the Terminal, the FX portfolio factory
+        // and the scorecard all resolve it (it was never registered — the
+        // first eager resolution crashed the app at startup).
+        services.AddSingleton<Mt5BridgeClient>();
         services.AddSingleton<FxScorecardService>();
         services.AddSingleton(sp =>
             new TerminalViewModel(
@@ -341,6 +345,11 @@ public partial class App : System.Windows.Application
         // editor LIVE — a save re-arms the watches without an app restart
         // (0 disables the alert). Default 4h when never configured.
         var settingsFactory = provider.GetRequiredService<Func<AppSettings>>();
+        // Publish the resolved MT5 terminal path + sidecar port: the
+        // watchdog and sidecar then target the SAME terminal exe the app
+        // uses (data/mt5-bridge.json).
+        Mt5TerminalLocator.WriteConfig(
+            Mt5TerminalLocator.Find(settingsFactory().Mt5TerminalPath));
         hub.SetThresholdSource(() => settingsFactory().ArmStalenessHours);
         digest.Start();
 
@@ -377,4 +386,4 @@ public partial class App : System.Windows.Application
 
         base.OnExit(e);
     }
-}
+}

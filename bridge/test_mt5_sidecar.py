@@ -305,6 +305,28 @@ def test_loopback_round_trip():
         server.httpd.shutdown()
 
 
+def test_parse_args_defaults():
+    from mt5_sidecar import parse_args
+    assert parse_args([]) == (53190, None)
+
+
+def test_parse_args_port_positional():
+    from mt5_sidecar import parse_args
+    assert parse_args(["6000"]) == (6000, None)
+
+
+def test_parse_args_terminal_flag_alone():
+    from mt5_sidecar import parse_args
+    port, path = parse_args(["--terminal", "C:/Program Files/MetaTrader 5 Terminal/terminal64.exe"])
+    assert port == 53190
+    assert path.endswith("terminal64.exe")
+
+
+def test_parse_args_port_and_terminal():
+    from mt5_sidecar import parse_args
+    assert parse_args(["6111", "--terminal", "C:/mt5/terminal64.exe"]) == (6111, "C:/mt5/terminal64.exe")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

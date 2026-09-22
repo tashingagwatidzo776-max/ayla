@@ -151,6 +151,10 @@ public sealed class MainViewModel
             // connectivity — start it FIRST so the MT5 side is up even when
             // Deriv's endpoint is degraded (observed live: a row connect
             // can hang indefinitely on the splash path).
+            // Make sure the MT5 terminal ITSELF is up before the panel
+            // polls — pinned path or first known install; no-op when a
+            // terminal64 process is already running.
+            Mt5TerminalLocator.EnsureRunning(settings.Mt5TerminalPath);
             TerminalVm.StartTerminalCommand.Execute(null);
 
             var demoRow = AccountsVm.Hub.Accounts.FirstOrDefault(a => a.Config.IsDemo);

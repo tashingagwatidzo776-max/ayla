@@ -222,6 +222,9 @@
                             <RowDefinition Height="Auto" />  <!-- 31 Status -->
                             <RowDefinition Height="Auto" />  <!-- 32 FX BRAIN section -->
                             <RowDefinition Height="Auto" />  <!-- 33 FX portfolio fields -->
+                            <RowDefinition Height="Auto" />  <!-- 34 Portfolio max lots -->
+                            <RowDefinition Height="Auto" />  <!-- 35 News blackout -->
+                            <RowDefinition Height="Auto" />  <!-- 36 MT5 terminal path -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -359,14 +362,20 @@
                         <TextBox Grid.Row="33" Grid.Column="1" Width="220" Margin="0,0,16,10" HorizontalAlignment="Left"
                                  Text="{Binding SettingsVm.FxSymbols, UpdateSourceTrigger=PropertyChanged}"
                                  ToolTip="One engine per symbol — comma-separated MT5 symbols the brain runs (paper first)." />
-                        <TextBlock Grid.Row="33" Grid.Column="2" Text="Portfolio max lots" Style="{StaticResource FieldLabel}" Margin="16,0,8,0" VerticalAlignment="Center"
+                        <TextBlock Grid.Row="34" Grid.Column="0" Text="Portfolio max lots" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
                                    ToolTip="Total open lots across ALL FX-brain symbols at order time. 0 disables the portfolio veto." />
-                        <TextBox Grid.Row="33" Grid.Column="3" Width="80" Margin="0,0,0,10"
+                        <TextBox Grid.Row="34" Grid.Column="1" Width="80" Margin="0,0,16,10" HorizontalAlignment="Left"
                                  Text="{Binding SettingsVm.FxPortfolioMaxLots, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Row="33" Grid.Column="4" Text="News blackout (min)" Style="{StaticResource FieldLabel}" Margin="16,0,8,0" VerticalAlignment="Center"
-                                   ToolTip="Minutes before/after each high-impact calendar event (data\news-calendar.json) where the brain refuses new orders. 0 disables." />
-                        <TextBox Grid.Row="33" Grid.Column="5" Width="80" Margin="0,0,0,10"
+                        <TextBlock Grid.Row="35" Grid.Column="0" Text="News blackout (min)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="Minutes before/after each high-impact calendar event (data
+ews-calendar.json) where the brain refuses new orders. 0 disables." />
+                        <TextBox Grid.Row="35" Grid.Column="1" Width="80" Margin="0,0,16,10" HorizontalAlignment="Left"
                                  Text="{Binding SettingsVm.NewsBlackoutMinutes, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="36" Grid.Column="0" Text="MT5 terminal path" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="terminal64.exe the bridge attaches to. Empty = auto-discover. Honored by the watchdog, sidecar and startup profile." />
+                        <TextBox Grid.Row="36" Grid.Column="1" Width="220" Margin="0,0,16,10" HorizontalAlignment="Left"
+                                 Text="{Binding SettingsVm.Mt5TerminalPath, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center"
+                                 ToolTip="C:/Program Files/MetaTrader 5 Terminal/terminal64.exe — leave empty to auto-discover." />
                     </Grid>
                 </ScrollViewer>
             </TabItem>

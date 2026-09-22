@@ -99,6 +99,10 @@ public sealed class AppSettings
     /// the FX brain refuses new orders.</summary>
     public int NewsBlackoutMinutes { get; set; } = 15;
 
+    /// <summary>Pinned MT5 terminal64.exe (empty = auto-discover the known
+    /// install locations). Watchdog, sidecar and startup profile all honor it.</summary>
+    public string Mt5TerminalPath { get; set; } = "";
+
     /// <summary>One-click session start: when set, launching the app
     /// auto-connects the demo row, arms the brain, selects R_100 and starts
     /// the engines. Demo automation only — real accounts still need the

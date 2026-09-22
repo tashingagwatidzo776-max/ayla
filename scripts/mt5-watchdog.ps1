@@ -24,6 +24,21 @@ $logDir = Join-Path $env:APPDATA 'tf\data\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir 'mt5-watchdog.log'
 
+# The app publishes data/mt5-bridge.json (resolved terminal path + port) at
+# startup; honor it so watchdog, sidecar and app all target the SAME MT5
+# install. Absent file -> the defaults below (auto-discover).
+$TerminalPath = $null
+$cfg = Join-Path $env:APPDATA 'tf\data\mt5-bridge.json'
+if (Test-Path $cfg) {
+    try {
+        $j = Get-Content $cfg -Raw | ConvertFrom-Json
+        if ($j.port) { $Port = [int]$j.port }
+        if ($j.terminalPath) { $TerminalPath = [string]$j.terminalPath }
+    } catch {
+        Log "mt5-bridge.json unreadable - using defaults"
+    }
+}
+
 function Log([string]$line) {
     if (-not $Quiet) { Write-Output $line }
     Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $line)
@@ -52,7 +67,9 @@ if (-not $python) {
     exit 2
 }
 
-Start-Process -FilePath $python -ArgumentList "`"$sidecar`"", "$Port" `
+$argList = @("`"$sidecar`"", "$Port")
+if ($TerminalPath) { $argList += @('--terminal', "`"$TerminalPath`"") }
+Start-Process -FilePath $python -ArgumentList $argList `
     -WindowStyle Hidden -WorkingDirectory (Join-Path $root 'bridge') | Out-Null
 
 # Wait up to 20 s for health.

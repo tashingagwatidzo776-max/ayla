@@ -101,6 +101,19 @@ public class MonitoringSettingsTests
     }
 
     [Fact]
+    public void Mt5TerminalPath_RoundTripsAndTrims()
+    {
+        var vm = NewSettingsVm();
+
+        vm.Load(new AppSettings { Mt5TerminalPath = @"C:\mt5	erminal64.exe" });
+        Assert.Equal(@"C:\mt5	erminal64.exe", vm.Mt5TerminalPath);
+        Assert.Equal(@"C:\mt5	erminal64.exe", vm.BuildSettings().Mt5TerminalPath);
+
+        vm.Mt5TerminalPath = "  C:/mt5/terminal64.exe  "; // trimmed on build
+        Assert.Equal("C:/mt5/terminal64.exe", vm.BuildSettings().Mt5TerminalPath);
+    }
+
+    [Fact]
     public async Task TestWebhookCommand_EmptyUrl_ShowsFailureInStatus()
     {
         var vm = NewSettingsVm();

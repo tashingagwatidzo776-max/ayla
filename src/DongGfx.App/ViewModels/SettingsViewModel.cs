@@ -125,6 +125,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int newsBlackoutMinutes = 15;
 
+    /// <summary>Pinned MT5 terminal64.exe (empty = auto-discover).</summary>
+    [ObservableProperty]
+    private string mt5TerminalPath = "";
+
     /// <summary>One-click session start: auto-connect demo, arm the brain,
     /// select R_100, start engines.</summary>
     [ObservableProperty]
@@ -193,6 +197,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxSymbols = settings.FxSymbols;
         FxPortfolioMaxLots = settings.FxPortfolioMaxLots;
         NewsBlackoutMinutes = settings.NewsBlackoutMinutes;
+        Mt5TerminalPath = settings.Mt5TerminalPath;
         StartupProfile = settings.StartupProfile;
         AutonomyEnabled = settings.AutonomyEnabled;
         DecisionIntervalMinutes = settings.DecisionIntervalMinutes;
@@ -233,6 +238,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxSymbols = string.IsNullOrWhiteSpace(FxSymbols) ? "XAUUSDmicro" : FxSymbols,
         FxPortfolioMaxLots = Math.Max(0m, FxPortfolioMaxLots),
         NewsBlackoutMinutes = Math.Clamp(NewsBlackoutMinutes, 0, 120),
+        Mt5TerminalPath = (Mt5TerminalPath ?? "").Trim(),
         StartupProfile = StartupProfile,
         AutonomyEnabled = AutonomyEnabled,
         DecisionIntervalMinutes = Math.Max(1, DecisionIntervalMinutes),
