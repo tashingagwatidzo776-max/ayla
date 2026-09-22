@@ -12,6 +12,7 @@ namespace DongGfx.Core.Tests;
 /// loading) and the alpha scorecard (chronological IS/OOS split, approval
 /// only on OOS-positive families with enough trades).
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxNewsAndScorecardTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 24, 12, 0, 0, TimeSpan.Zero);

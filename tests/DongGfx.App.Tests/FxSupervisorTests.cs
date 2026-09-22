@@ -26,6 +26,7 @@ namespace DongGfx.App.Tests;
 /// during execution. All transport is a fake HttpMessageHandler — the real
 /// sidecar payload shapes, no sockets.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxSupervisorTests
 {
     private static TradeJournal NewJournal()

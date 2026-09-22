@@ -13,6 +13,7 @@ namespace DongGfx.App.Tests;
 /// Connecting… transition. Discovery is injected to fail transiently (no
 /// network), delays are overridden, so tests run in milliseconds.
 /// </summary>
+[Trait("Category", "Unit")]
 public class AutoReconnectTests
 {
     private sealed class FailingAuth : NewPlatformAuth

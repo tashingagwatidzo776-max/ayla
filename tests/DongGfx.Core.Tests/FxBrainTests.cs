@@ -9,6 +9,7 @@ namespace DongGfx.Core.Tests;
 /// regime/alpha/engine behavior on synthetic bar series. The brain places
 /// orders from these numbers — tolerance is 1e-9, not vibes.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxFeatureTests
 {
     private static List<FxBar> TrendBars(int n = 60, double start = 2400, double step = 0.5)

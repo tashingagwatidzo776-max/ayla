@@ -14,6 +14,7 @@ namespace DongGfx.Core.Tests;
 /// loop never returned, engines restart-looped, and no trade was ever
 /// journaled (the Sep 20-21 incident).
 /// </summary>
+[Trait("Category", "Unit")]
 public class ContractParsingTests
 {
     private static ContractInfo Parse(string json) =>

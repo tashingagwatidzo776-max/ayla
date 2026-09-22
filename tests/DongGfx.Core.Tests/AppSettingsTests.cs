@@ -3,6 +3,7 @@ using DongGfx.Core.Models;
 
 namespace DongGfx.Core.Tests;
 
+[Trait("Category", "Unit")]
 public class AppSettingsTests
 {
     [Fact]

@@ -16,6 +16,7 @@ namespace DongGfx.Core.Tests;
 /// deterministic (seeded RNG) and millisecond-fast — none of this touches a
 /// transport; live wiring is exercised in the App/host tests.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxAdvancedTests
 {
     private static List<(double Price, double Vol)> TickRun(int n, double start, double step, double vol)

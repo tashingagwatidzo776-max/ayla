@@ -20,6 +20,7 @@ namespace DongGfx.App.Tests;
 /// down fails closed, cap 0 disables), the news veto's file loading, and
 /// symbol CSV parsing with its fallbacks.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxPortfolioTests
 {
     // ── symbol parsing ──────────────────────────────────────────────────
