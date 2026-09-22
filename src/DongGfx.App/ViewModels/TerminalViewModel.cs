@@ -11,9 +11,7 @@ using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
 using DongGfx.Deriv;
 
-namespace DongGfx.App.ViewModels;
-
-/// <summary>One row in the terminal's Market Watch grid.</summary>
+namespace DongGfx.App.ViewModels;    /// <summary>One row in the terminal's Market Watch grid.</summary>
 public sealed partial class TerminalSymbolRow : ObservableObject
 {
     public TerminalSymbolRow(string symbol, string? displayName, bool? isOpen)
@@ -261,6 +259,21 @@ public sealed partial class TerminalViewModel : ObservableObject
         // Seed the ladder so the panel is never empty on first paint.
         RebuildLadder(0);
         RefreshHistory();
+    }
+
+    private void OnUiThread(Action action)
+    {
+        // Begin-only (never Invoke/InvokeAsync): the app runs a message pump,
+        // tests and Release CI do not, and an awaited InvokeAsync deadlocks
+        // without one. BeginInvoke keeps queue order and works everywhere.
+        if (_dispatcher.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            _dispatcher.BeginInvoke(action);
+        }
     }
 
     /// <summary>Starts the MT5 poll loop (called when the view loads).</summary>
@@ -664,7 +677,7 @@ public sealed partial class TerminalViewModel : ObservableObject
                         AccountId = connection?.Config.Id,
                         AccountName = connection?.DisplayName,
                     });
-                    _ = _dispatcher.InvokeAsync(() =>
+                    OnUiThread(() =>
                     {
                         row.Settle(final);
                         RefreshHistory();
@@ -672,7 +685,7 @@ public sealed partial class TerminalViewModel : ObservableObject
                 }
                 catch
                 {
-                    _ = _dispatcher.InvokeAsync(() => row.Status = "settlement error");
+                    OnUiThread(() => row.Status = "settlement error");
                 }
             });
 
@@ -776,7 +789,7 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     private void OnTradeAdded(Trade trade)
     {
-        _ = _dispatcher.InvokeAsync(RefreshHistory);
+        OnUiThread(RefreshHistory);
     }
 
     // ── MT5 bridge card ────────────────────────────────────────────
@@ -867,7 +880,7 @@ public sealed partial class TerminalViewModel : ObservableObject
 
             var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
             var positions = await _mt5.GetPositionsAsync().ConfigureAwait(true);
-            await _dispatcher.InvokeAsync(() =>
+            OnUiThread(() =>
             {
                 IsMt5Connected = true;
                 Mt5StatusText = "MT5 bridge: connected";
