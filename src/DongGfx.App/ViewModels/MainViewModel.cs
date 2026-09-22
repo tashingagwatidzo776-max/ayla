@@ -148,27 +148,16 @@ public sealed class MainViewModel
                 await demoRow.ConnectAsync();
             }
 
-            // Arm the brain through the same bound-fields path the terminal's
-            // switch uses, so the flip survives the next settings save.
-            if (!settings.AutonomyEnabled)
-            {
-                settings.AutonomyEnabled = true;
-                SettingsVm.AutonomyEnabled = true;
-                _settingsService.Save(settings);
-            }
+            // Autonomy and symbol are no longer forced by the profile — the
+            // brain switch and symbol stay exactly where the user left them.
 
-            if (!string.Equals(settings.Symbol, "R_100", StringComparison.Ordinal))
-            {
-                settings.Symbol = "R_100";
-                SettingsVm.Symbol = "R_100";
-                _settingsService.Save(settings);
-                Dashboard.SetSymbol("R_100");
-            }
-
-            GrowthVm.StartAllCommand.Execute(null);
+            // Deriv binary engines are NOT started automatically: the MT5
+            // terminal is the active venue, so the profile connects accounts
+            // and starts the Terminal (MT5 panel + polling) but leaves the
+            // binary engine idle until the user explicitly starts it.
             TerminalVm.StartTerminalCommand.Execute(null);
             _journal?.Log(Guid.Empty, "startup-profile",
-                "one-click session start executed (demo row, autonomy ON, R_100, engines started)");
+                "one-click session start executed (demo row connected, Terminal started; binary engines left idle)");
         }
         catch (Exception ex)
         {
