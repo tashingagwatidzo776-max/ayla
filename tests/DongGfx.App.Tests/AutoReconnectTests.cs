@@ -107,7 +107,16 @@ public class AutoReconnectTests
         var c = MakeConnection();
         c.AutoReconnectDelayOverride = _ => TimeSpan.FromMilliseconds(20);
         Drop(c);
-        Thread.Sleep(1800); // 5 attempts × ~20ms + scheduling slack
+
+        // Poll until exhaustion instead of a fixed sleep: on a loaded CI
+        // runner the loop needs longer than 5 x 20 ms of wall clock, and a
+        // fixed window turned that into "expected exhaustion at 5, saw 3".
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline &&
+               c.AutoReconnectAttemptsForTests < AccountConnection.AutoReconnectMaxAttempts)
+        {
+            Thread.Sleep(50);
+        }
 
         Assert.True(c.AutoReconnectAttemptsForTests >= AccountConnection.AutoReconnectMaxAttempts,
             $"expected exhaustion at {AccountConnection.AutoReconnectMaxAttempts}, saw {c.AutoReconnectAttemptsForTests}");
