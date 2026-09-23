@@ -181,6 +181,10 @@ public class FxSupervisorTests
     {
         public int AccountCalls;
 
+        /// <summary>When true, /symbols answers without the host's symbol —
+        /// simulating an old sidecar / snapshot gap for the pre-flight test.</summary>
+        public bool OmitSymbolFromSnapshot;
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
         {
             var path = req.RequestUri!.AbsolutePath;
@@ -191,6 +195,15 @@ public class FxSupervisorTests
                 r = Json(new { ok = true, login = 201587365, server = "Deriv-Demo", currency = "USD",
                                balance = 2632.19, equity = 2632.19, margin_free = 2632.19, leverage = 1000,
                                trade_mode = 0 });
+            }
+            else if (path.EndsWith("/symbols"))
+            {
+                r = OmitSymbolFromSnapshot
+                    ? Json(new { symbols = Array.Empty<object>() })
+                    : Json(new { symbols = new[] { new {
+                        symbol = "XAUUSDmicro", description = "Gold micro", bid = 4344.0, ask = 4344.3,
+                        spread_points = 27, digits = 2, trade_mode = 4,
+                        volume_min = 0.1, volume_step = 0.1, volume_max = 100.0, contract_size = 1.0 } } });
             }
             else if (path.Contains("/candles/"))
             {
@@ -223,11 +236,11 @@ public class FxSupervisorTests
         }
     }
 
-    private static FxEngineHost NewHost(ScriptedHandler handler, FxSupervisor supervisor)
+    private static FxEngineHost NewHost(ScriptedHandler handler, FxSupervisor supervisor, TradeJournal? journal = null)
     {
         var client = new Mt5BridgeClient(handler, new Uri("http://127.0.0.1:1/"));
         return new FxEngineHost(
-            client, NewJournal(), "XAUUSDmicro",
+            client, journal ?? NewJournal(), "XAUUSDmicro",
             killSwitchEngaged: () => false,
             lotsCap: () => 1.00m,
             realMoneyUnlocked: () => false,
@@ -284,5 +297,46 @@ public class FxSupervisorTests
         s.AnchorSession(9999m);                     // 9999 - 2632.19 > cap → halted
         await host.RunCycleAsync();
         Assert.False(s.Evaluate(true, 2632.19m, 2632.19m).TradingAllowed);
+    }
+
+    // ── Venue-spec pre-flight: no live order on a guessed size ──────────
+
+    [Fact]
+    public async Task Preflight_SpecLoads_FromSnapshot_And_Unblocks_Live_Path()
+    {
+        var host = NewHost(new ScriptedHandler(), NewSupervisor(NewJournal(), cap: 5000m));
+        await host.RunCycleAsync();   // spec fetch rides the first cycle's retry
+
+        Assert.True(host.VenueSpecLoaded);
+        Assert.False(host.LiveOrderBlockedByMissingSpec);
+
+        host.Dispose();
+    }
+
+    [Fact]
+    public async Task Preflight_MissingGeometry_Blocks_Live_Order_And_Warns_Loudly()
+    {
+        var journal = NewJournal();
+        var handler = new ScriptedHandler { OmitSymbolFromSnapshot = true };
+        var host = NewHost(handler, NewSupervisor(NewJournal(), cap: 5000m), journal);
+        await host.RunCycleAsync();   // snapshot without the symbol → fallback
+
+        Assert.False(host.VenueSpecLoaded);
+
+        host.PaperSoakSignalsRequired = 0;   // direct go-live for the rail test
+        host.GoLive();
+        Assert.True(host.LiveOrderBlockedByMissingSpec);   // live + guessed sizing = blocked
+        await host.RunCycleAsync();   // any signal would hit the pre-flight refusal
+
+        journal.Flush();
+        var fxOrderEntries = journal.GetRecent(count: 200)
+            .Where(e => e.Category == "FX_ORDER")
+            .ToList();
+
+        Assert.DoesNotContain(fxOrderEntries, e => e.Details.Contains("ticket"));
+        Assert.Contains(fxOrderEntries, e => e.Details.Contains("pre-flight warning"));
+
+        host.Dispose();
+        journal.Dispose();
     }
 }
