@@ -99,6 +99,46 @@ public class TerminalViewModelTests : IDisposable
         vm.ShutdownFxBrain();   // idempotent — teardown must never throw
     }
 
+    // ── Build-freshness badge ──────────────────────────────────────
+
+    [Fact]
+    public async Task BuildBadge_ShowsUpdateAvailable_WhenReleaseIsNewer()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var vm = CreateVm();
+        vm.LatestReleaseProbe = () => Task.FromResult<string?>("v9.9.9");
+
+        await vm.RefreshBuildBadgeAsync();
+
+        Assert.Contains("update available: v9.9.9", vm.BuildBadge);
+    }
+
+    [Fact]
+    public async Task BuildBadge_ShowsUpToDate_WhenReleaseMatchesStamp()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var vm = CreateVm();
+        vm.LatestReleaseProbe = () =>
+            Task.FromResult<string?>(DongGfx.App.Infrastructure.VersionInfo.Stamp);
+
+        await vm.RefreshBuildBadgeAsync();
+
+        Assert.Contains("up to date", vm.BuildBadge);
+    }
+
+    [Fact]
+    public async Task BuildBadge_ProbeFailure_KeepsPlainStamp_AndDoesNotThrow()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var vm = CreateVm();
+        vm.LatestReleaseProbe = () => throw new HttpRequestException("offline");
+
+        await vm.RefreshBuildBadgeAsync();
+
+        Assert.StartsWith("build ", vm.BuildBadge);
+        Assert.DoesNotContain("update available", vm.BuildBadge);
+    }
+
     // ── Brain switch ───────────────────────────────────────────────
 
     [Fact]

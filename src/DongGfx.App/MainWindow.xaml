@@ -335,6 +335,11 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                     <TextBlock Text="{Binding BalanceText}" Foreground="{StaticResource AccentBrush}"
                                                FontWeight="Bold" />
                                 </Border>
+                                <!-- build freshness: running build vs latest GitHub release -->
+                                <Border Style="{StaticResource StatusPill}" Margin="8,0,0,0"
+                                        ToolTip="The running build vs the latest published release. A stale build misses the latest safety fixes — update from the Update tab.">
+                                    <TextBlock Text="{Binding BuildBadge}" FontFamily="Consolas" FontSize="11" />
+                                </Border>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
                                 <!-- ── DON G FX FX BRAIN ── -->

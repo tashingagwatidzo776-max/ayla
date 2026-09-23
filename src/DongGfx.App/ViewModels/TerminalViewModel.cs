@@ -8,6 +8,7 @@ using DongGfx.App.Infrastructure;
 using DongGfx.App.Services;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
+using DongGfx.Core.Update;
 
 namespace DongGfx.App.ViewModels;    /// <summary>One row in the terminal's Market Watch grid.</summary>
 public sealed partial class TerminalSymbolRow : ObservableObject
@@ -339,6 +340,62 @@ public sealed partial class TerminalViewModel : ObservableObject
         _ = PollMt5Async();
         _ = RefreshAccountBarAsync();
         _ = RefreshHistoryAsync();
+        _ = RefreshBuildBadgeAsync();
+    }
+
+    // ── Build-freshness badge ──────────────────────────────────────
+
+    private static DateTimeOffset? _lastBadgeProbe;
+
+    /// <summary>Test seam: resets the badge throttle between tests.</summary>
+    internal static void ResetBadgeThrottleForTests() => _lastBadgeProbe = null;
+
+    /// <summary>The running build vs the latest published release, shown on
+    /// the account bar so a stale binary is visible in-app instead of only
+    /// in monitoring. Throttled to one probe per 5 minutes.</summary>
+    [ObservableProperty]
+    private string buildBadge = $"build {VersionInfo.Stamp}";
+
+    /// <summary>Test seam: the release probe. Default is the real GitHub
+    /// releases check; tests inject a canned value or a throwing probe.</summary>
+    public Func<Task<string?>>? LatestReleaseProbe { get; set; }
+
+    /// <summary>One badge refresh: current stamp vs the latest release tag.
+    /// Never throws — a failed probe leaves the current stamp showing.</summary>
+    public async Task RefreshBuildBadgeAsync()
+    {
+        // Throttle: StartTerminal fires on every view load; the probe is a
+        // network call. One live probe per 5 minutes is plenty.
+        if (_lastBadgeProbe is { } last && DateTimeOffset.UtcNow - last < TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
+
+        _lastBadgeProbe = DateTimeOffset.UtcNow;
+        try
+        {
+            LatestReleaseProbe ??= async () =>
+            {
+                var updater = new AutoUpdater(VersionInfo.FullVersion.Split('+')[0]);
+                var update = await updater.CheckForUpdateAsync(AutoUpdater.GitHubReleasesUrl)
+                    .ConfigureAwait(true);
+                return update?.Version;
+            };
+
+            var latest = await LatestReleaseProbe().ConfigureAwait(true);
+            if (string.IsNullOrEmpty(latest))
+            {
+                return;   // probe found nothing — keep the plain stamp
+            }
+
+            BuildBadge = latest.Equals(VersionInfo.Stamp, StringComparison.OrdinalIgnoreCase)
+                ? $"build {VersionInfo.Stamp} · up to date"
+                : $"build {VersionInfo.Stamp} · update available: {latest}";
+        }
+        catch
+        {
+            // No update verdict is better than a wrong one — keep the stamp.
+        }
     }
 
     /// <summary>Test seam: one explicit MT5 poll without the timer.</summary>
