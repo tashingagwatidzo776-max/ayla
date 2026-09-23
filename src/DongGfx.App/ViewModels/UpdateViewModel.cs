@@ -12,6 +12,7 @@ namespace DongGfx.App.ViewModels;
 public partial class UpdateViewModel : ObservableObject
 {
     private readonly AutoUpdater _updater;
+    private readonly string _checkUrl;
 
     [ObservableProperty]
     private string currentVersion = "1.0.0";
@@ -31,9 +32,12 @@ public partial class UpdateViewModel : ObservableObject
     [ObservableProperty]
     private double downloadProgress;
 
-    public UpdateViewModel(AutoUpdater updater)
+    /// <param name="checkUrl">Optional override of the release-check endpoint
+    /// (tests point this at a local listener; production uses the GitHub API).</param>
+    public UpdateViewModel(AutoUpdater updater, string? checkUrl = null)
     {
         _updater = updater;
+        _checkUrl = checkUrl ?? AutoUpdater.GitHubReleasesUrl;
         _updater.Progress += msg => StatusMessage = msg;
     }
 
@@ -47,7 +51,7 @@ public partial class UpdateViewModel : ObservableObject
             IsChecking = true;
             StatusMessage = "Checking for updates...";
 
-            var update = await _updater.CheckForUpdateAsync(AutoUpdater.GitHubReleasesUrl);
+            var update = await _updater.CheckForUpdateAsync(_checkUrl);
             AvailableUpdate = update;
 
             if (update != null)
