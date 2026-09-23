@@ -74,11 +74,13 @@ jobs:
       shell: pwsh
       env:
         TAG_NAME: ${{ inputs.tag || github.ref_name }}
-        COMMIT_SHA: ${{ github.sha }}
       run: |
         # Stamp identity: tag without the 'v' + short sha (e.g. 0.7.0+a1b2c3d).
+        # The sha comes from the CHECKED-OUT commit, not github.sha: on
+        # workflow_dispatch, github.sha is the dispatch ref's head, which can
+        # drift from the tag this run actually builds.
         $version = $env:TAG_NAME.TrimStart('v')
-        $sha = $env:COMMIT_SHA.Substring(0, 7)
+        $sha = (git rev-parse HEAD).Substring(0, 7)
         # Clean output dir first: dotnet publish merges into whatever is
         # already there; a shipped exe must contain only this run's bytes.
         if (Test-Path publish) { Remove-Item -Recurse -Force publish }
@@ -94,7 +96,6 @@ jobs:
       shell: pwsh
       env:
         TAG_NAME: ${{ inputs.tag || github.ref_name }}
-        COMMIT_SHA: ${{ github.sha }}
       run: |
         # Single-file publish: the identity lives in the apphost exe. .NET
         # surfaces the stamped InformationalVersion through the Win32
@@ -104,7 +105,7 @@ jobs:
         $exe = "publish/DongGfx.exe"
         if (-not (Test-Path $exe)) { throw "publish/DongGfx.exe missing - unexpected publish layout" }
         $version = $env:TAG_NAME.TrimStart('v')
-        $sha = $env:COMMIT_SHA.Substring(0, 7)
+        $sha = (git rev-parse HEAD).Substring(0, 7)
         $stamp = (Get-Item $exe).VersionInfo.ProductVersion
         Write-Host "ProductVersion: $stamp"
         if (-not $stamp.StartsWith("$version+")) { throw "stamp mismatch: expected '$version+<sha>', got '$stamp'" }
@@ -121,9 +122,9 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         TAG_NAME: ${{ inputs.tag || github.ref_name }}
-        COMMIT_SHA: ${{ github.sha }}
       run: |
-        $sha = $env:COMMIT_SHA.Substring(0, 7)
+        # Same rule as the publish step: name the commit that was built.
+        $sha = (git rev-parse HEAD).Substring(0, 7)
         $notes = @"
         Automated release of $env:TAG_NAME (commit $sha).
 
