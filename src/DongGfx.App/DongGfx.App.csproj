@@ -35,8 +35,8 @@
          and the tag workflow pass -p:InformationalVersion="<tag>+<commit>" (CLI
          properties override the generated one), which the window title and
          About box read at runtime so shipped binaries identify themselves.
-         Keep in sync with the release tag (v0.7.4 → 0.7.4). -->
-    <Version>0.7.4</Version>
+         Keep in sync with the release tag (v0.7.5 → 0.7.5). -->
+    <Version>0.7.5</Version>
   </PropertyGroup>
 
 </Project>

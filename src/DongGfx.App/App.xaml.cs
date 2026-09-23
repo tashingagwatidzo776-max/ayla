@@ -31,6 +31,11 @@ public partial class App : System.Windows.Application
         };
         window.Show();
 
+        // Build-freshness auto-check at startup: staleness is visible on the
+        // Terminal account bar the moment the window renders, without waiting
+        // for the Terminal view's own throttled probe. Never throws.
+        _ = provider.GetRequiredService<TerminalViewModel>().RefreshBuildBadgeAsync();
+
         var mainVm = (MainViewModel)window.DataContext;
         _ = mainVm.InitializeAsync();
 

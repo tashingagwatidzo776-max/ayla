@@ -508,17 +508,17 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                             <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="110" />
                                             <DataGridTextColumn Header="Bid" Binding="{Binding Bid, StringFormat=0.#####}" Width="90">
                                                 <DataGridTextColumn.ElementStyle>
-                                                    <Style TargetType="DataGridCell">
+                                                    <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
-                                                        <Setter Property="HorizontalContentAlignment" Value="Right" />
+                                                        <Setter Property="TextAlignment" Value="Right" />
                                                     </Style>
                                                 </DataGridTextColumn.ElementStyle>
                                             </DataGridTextColumn>
                                             <DataGridTextColumn Header="Ask" Binding="{Binding Ask, StringFormat=0.#####}" Width="90">
                                                 <DataGridTextColumn.ElementStyle>
-                                                    <Style TargetType="DataGridCell">
+                                                    <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-                                                        <Setter Property="HorizontalContentAlignment" Value="Right" />
+                                                        <Setter Property="TextAlignment" Value="Right" />
                                                     </Style>
                                                 </DataGridTextColumn.ElementStyle>
                                             </DataGridTextColumn>

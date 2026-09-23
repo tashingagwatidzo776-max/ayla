@@ -263,16 +263,10 @@ public sealed class AutoUpdater : IDisposable
     public void CreateRestartScript()
     {
         var appPath = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "DongGfx.exe");
+        var appDir = Path.GetDirectoryName(appPath)!;
         var scriptPath = Path.Combine(_updateDir, "restart.bat");
 
-        var script = $@"
-@echo off
-timeout /t 2 /nobreak > nul
-start "" """"{appPath}""""
-del ""%~f0""
-";
-
-        File.WriteAllText(scriptPath, script.TrimStart());
+        File.WriteAllText(scriptPath, BuildRestartScript(appPath, appDir));
 
         // Launch the restart script
         Process.Start(new ProcessStartInfo
@@ -281,6 +275,22 @@ del ""%~f0""
             UseShellExecute = true,
             WindowStyle = ProcessWindowStyle.Hidden
         });
+    }
+
+    /// <summary>
+    /// Renders the restart script. One clean quoted pair per token: the
+    /// previous verbatim-escaped template emitted tripled quotes, which cmd
+    /// parsed as a window title plus a garbage path — start failed silently
+    /// and the script still self-deleted, leaving the app closed.
+    /// </summary>
+    public static string BuildRestartScript(string appPath, string appDir)
+    {
+        return string.Join("\r\n",
+            "@echo off",
+            "timeout /t 2 /nobreak > nul",
+            "start \"\" /D \"" + appDir + "\" \"" + appPath + "\"",
+            "del \"%~f0\"",
+            "");
     }
 
     /// <summary>Clean up old update files.</summary>
