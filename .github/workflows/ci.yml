@@ -123,6 +123,9 @@ jobs:
       with:
         python-version: '3.x'
 
+    - name: Install test deps
+      run: pip install numpy # the fake rates arrays mimic the real package's numpy output
+
     - name: Test the MT5 bridge sidecar contract (order-path rails)
       run: python bridge/test_mt5_sidecar.py
 
