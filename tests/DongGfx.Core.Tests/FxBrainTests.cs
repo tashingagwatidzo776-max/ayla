@@ -292,8 +292,9 @@ public class FxEngineTests
         var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 0.5, equityProvider: () => 10_000);
         var sig = new FxSignal("test", FxDirection.Buy, 0.8, 5.0, "stop hint 5.0", 0);
 
-        // budget = equity 10 000 x 0.02 = 200; gold (>500) = 100 oz/lot
+        // budget = equity 10 000 x 0.02 = 200; venue spec: 100 oz/lot
         // -> risk/lot = 5.0 x 100 = 500 -> 0.40 lots, within the 0.5 cap
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 100.0, VolumeMin: 0.01, VolumeStep: 0.01, VolumeMax: 100.0));
         var lots = engine.Size(sig, 2450);
         Assert.Equal(0.40, lots, 9);
         Assert.Equal(Math.Floor(lots * 100) / 100, lots, 9); // 0.01 step
@@ -318,6 +319,7 @@ public class FxEngineTests
         var j = new RecordingJournal();
         var engine = new FxEngine("EURUSD", "M1", j.Add, lotsCap: 0.5, equityProvider: () => 10_000);
         var sig = new FxSignal("test", FxDirection.Buy, 0.8, 0.001, "10-pip stop", 0);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 100_000.0, VolumeMin: 0.01, VolumeStep: 0.01, VolumeMax: 100.0));
 
         // FX: 100k units/lot -> risk/lot = 0.001 x 100k = 100
         // budget 200 -> 2.0 lots -> capped at 0.5
@@ -331,6 +333,67 @@ public class FxEngineTests
         var engine = new FxEngine("XAUUSD", "M1", j.Add, lotsCap: 1.0);
         var decision = engine.RunOnce(DateTimeOffset.UtcNow, new List<FxBar>(), 0, 0);
         Assert.Equal(FxDecisionAction.SkippedRegime, decision.Action);
+    }
+
+    // ── venue-spec sizing (the lot geometry comes from the venue, not a price guess) ──
+
+    [Fact]
+    public void Sizing_VenueSpec_MicroContract_Sizes_In_Venue_Lots()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        // Deriv's XAUUSDmicro: "1 lot = 1 unit", 0.1 step, min 0.1
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+        var sig = new FxSignal("test", FxDirection.Buy, 0.8, 5.0, "stop hint 5.0", 0);
+
+        // budget 200 -> risk/lot = 5.0 x 1 = 5 -> 40.0 raw, capped to 1.0,
+        // snapped DOWN to the 0.1 grid -> exactly 1.0
+        Assert.Equal(1.0, engine.Size(sig, 4344.0), 9);
+    }
+
+    [Fact]
+    public void Sizing_Snaps_Down_To_Venue_Step_Before_Venue_Min()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+
+        // budget = 2 x 0.02 = 0.04 -> raw 0.008 -> snaps to 0 on the grid,
+        // below the 0.1 venue minimum: fail CLOSED (0), never forced up
+        var small = new FxSignal("test", FxDirection.Buy, 0.8, 5.0, "stop hint 5.0", 0);
+        var tinyEngine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 2);
+        tinyEngine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+        Assert.Equal(0, tinyEngine.Size(small, 4344.0), 9);
+
+        // budget = 100 x 0.02 = 2 -> raw 0.4 -> on the 0.1 grid -> exactly 0.4
+        var mid = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 100);
+        mid.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+        Assert.Equal(0.4, mid.Size(small, 4344.0), 9);
+    }
+
+    [Fact]
+    public void Sizing_Cap_Snaps_Down_To_Venue_Step()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("EURUSD", "M1", j.Add, lotsCap: 0.15, equityProvider: () => 1_000_000);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 100_000.0, VolumeMin: 0.01, VolumeStep: 0.01, VolumeMax: 100.0));
+
+        // cap 0.15 on a 0.01 grid stays 0.15; on a 0.1-step symbol it would
+        // snap to 0.1 — the old floor-to-0.01 math would have sent 0.15 to
+        // the venue and been rejected.
+        Assert.Equal(0.15, engine.Size(
+            new FxSignal("test", FxDirection.Buy, 0.8, 0.001, "10-pip stop", 0), 1.27), 9);
+    }
+
+    [Fact]
+    public void Sizing_Malformed_Venue_Spec_Fails_Closed()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+
+        Assert.Equal(0, engine.Size(
+            new FxSignal("test", FxDirection.Buy, 0.8, 5.0, "stop hint 5.0", 0), 4344.0), 9);
     }
 
     [Fact]

@@ -5,9 +5,16 @@ using System.Text.Json;
 namespace DongGfx.App.Services;
 
 /// <summary>One tradable symbol with a live quote (bridge /symbols).</summary>
+/// <summary>One tradable symbol from the bridge. The volume/contract
+/// fields are the venue's sizing ground truth (e.g. XAUUSDmicro:
+/// contract_size=1, volume step 0.1 — not the standard-gold contract).
+/// Defaults keep older sidecars parseable; contract_size=0 means unknown.
+/// </summary>
 public sealed record Mt5Symbol(
     string Symbol, string Description, double? Bid, double? Ask,
-    int SpreadPoints, int Digits, int TradeMode);
+    int SpreadPoints, int Digits, int TradeMode,
+    double VolumeMin = 0, double VolumeStep = 0, double VolumeMax = 0,
+    double ContractSize = 0);
 
 /// <summary>One open MT5 position (bridge /positions).</summary>
 public sealed record Mt5Position(
@@ -165,7 +172,11 @@ public sealed class Mt5BridgeClient : IDisposable
                 e.TryGetProperty("ask", out var a) && a.ValueKind == JsonValueKind.Number ? a.GetDouble() : null,
                 e.TryGetProperty("spread_points", out var sp) && sp.ValueKind == JsonValueKind.Number ? sp.GetInt32() : 0,
                 e.TryGetProperty("digits", out var dg) && dg.ValueKind == JsonValueKind.Number ? dg.GetInt32() : 5,
-                e.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number ? tm.GetInt32() : 0));
+                e.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number ? tm.GetInt32() : 0,
+                e.TryGetProperty("volume_min", out var vmin) && vmin.ValueKind == JsonValueKind.Number ? vmin.GetDouble() : 0,
+                e.TryGetProperty("volume_step", out var vstep) && vstep.ValueKind == JsonValueKind.Number ? vstep.GetDouble() : 0,
+                e.TryGetProperty("volume_max", out var vmx) && vmx.ValueKind == JsonValueKind.Number ? vmx.GetDouble() : 0,
+                e.TryGetProperty("contract_size", out var csz) && csz.ValueKind == JsonValueKind.Number ? csz.GetDouble() : 0));
         }
         return list;
     }

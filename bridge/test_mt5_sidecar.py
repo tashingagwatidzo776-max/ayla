@@ -58,7 +58,8 @@ class FakeMT5:
         if symbol not in ("XAUUSDmicro", "EURUSD"):
             return None
         return SimpleNamespace(
-            volume_min=0.1, volume_step=0.1, volume_max=100.0, filling_mode=1)
+            volume_min=0.1, volume_step=0.1, volume_max=100.0, filling_mode=1,
+            trade_contract_size=1.0 if symbol == "XAUUSDmicro" else 100_000.0)
 
     def symbol_info_tick(self, symbol):
         if symbol == "CLOSED":
@@ -68,11 +69,17 @@ class FakeMT5:
     def symbols_get(self):
         return [
             SimpleNamespace(name="XAUUSDmicro", description="Gold micro",
-                            spread=27, digits=2, trade_mode=4, visible=True),
+                            spread=27, digits=2, trade_mode=4, visible=True,
+                            volume_min=0.1, volume_step=0.1, volume_max=100.0,
+                            trade_contract_size=1.0),
             SimpleNamespace(name="EURUSD", description="Euro vs US Dollar",
-                            spread=10, digits=5, trade_mode=4, visible=True),
+                            spread=10, digits=5, trade_mode=4, visible=True,
+                            volume_min=0.01, volume_step=0.01, volume_max=100.0,
+                            trade_contract_size=100_000.0),
             SimpleNamespace(name="HIDDEN", description="not shown",
-                            spread=0, digits=2, trade_mode=0, visible=False),
+                            spread=0, digits=2, trade_mode=0, visible=False,
+                            volume_min=0.1, volume_step=0.1, volume_max=100.0,
+                            trade_contract_size=100_000.0),
         ]
 
     def market_book_add(self, symbol):
@@ -283,6 +290,14 @@ def test_loopback_round_trip():
         with urllib.request.urlopen(f"{base}/account", timeout=5) as r:
             acc = json.loads(r.read())
         assert acc["login"] == 201587365
+
+        # /symbols carries the venue's lot geometry (sizing ground truth)
+        with urllib.request.urlopen(f"{base}/symbols", timeout=5) as r:
+            syms = {s["symbol"]: s for s in json.loads(r.read())["symbols"]}
+        gold = syms["XAUUSDmicro"]
+        assert gold["volume_min"] == 0.1 and gold["volume_step"] == 0.1
+        assert gold["volume_max"] == 100.0 and gold["contract_size"] == 1.0
+        assert syms["EURUSD"]["contract_size"] == 100_000.0
 
         req = urllib.request.Request(
             f"{base}/order",

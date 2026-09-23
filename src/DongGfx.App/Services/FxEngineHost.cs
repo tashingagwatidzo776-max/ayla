@@ -49,6 +49,11 @@ public sealed class FxEngineHost : IDisposable
     /// budget reads it and fails closed at 0 while it is unknown.</summary>
     private double _lastEquity;
 
+    /// <summary>The venue's lot geometry for <see cref="Symbol"/>, fetched
+    /// once from the bridge /symbols snapshot — sizing ground truth
+    /// (contract size and volume grid) instead of a price heuristic.</summary>
+    private FxVenueSymbolSpec? _venueSpec;
+
     public int PaperSignalsSeen { get; private set; }
     public bool PaperSoakComplete => PaperSignalsSeen >= PaperSoakSignalsRequired;
 
@@ -91,6 +96,11 @@ public sealed class FxEngineHost : IDisposable
         _engine.AddAlpha(new FxMeanReversion.ZScore());
         _engine.AddAlpha(new FxMeanReversion.BollingerReversion());
         _engine.AddAlpha(new FxMeanReversion.VwapReversion());
+
+        // Fire-and-forget: the venue's lot geometry (contract size, volume
+        // grid) arrives once from the bridge; sizing uses the heuristic
+        // fallback until then and switches when the spec lands.
+        _ = LoadVenueSpecAsync();
 
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += async (_, _) => await RunCycleAsync().ConfigureAwait(true);
@@ -182,6 +192,7 @@ public sealed class FxEngineHost : IDisposable
             }
 
             var bars = candles.Select(c => new FxBar(c.Time, c.Open, c.High, c.Low, c.Close, 0)).ToList();
+            if (_venueSpec is null) await LoadVenueSpecAsync().ConfigureAwait(true);   // first snapshot may have failed
             var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
             double bid = 0, ask = 0;
             if (tick is { } t)
@@ -335,6 +346,34 @@ public sealed class FxEngineHost : IDisposable
         StatusChanged?.Invoke(result.Ok
             ? $"filled: {side} {lots:0.##} {Symbol} @ {result.Price:0.#####}"
             : $"refused: {result.RetcodeName}");
+    }
+
+    /// <summary>One-shot fetch of this symbol's venue spec from the bridge
+    /// /symbols snapshot. Fire-and-forget and retry-safe: failures leave the
+    /// heuristic fallback in place and the next cycle retries.</summary>
+    private async Task LoadVenueSpecAsync()
+    {
+        try
+        {
+            var symbols = await _mt5.GetSymbolsAsync().ConfigureAwait(false);
+            var match = symbols.FirstOrDefault(s =>
+                s.Symbol.Equals(Symbol, StringComparison.OrdinalIgnoreCase));
+            if (match is null || match.ContractSize <= 0)
+            {
+                return;   // not named yet (or old sidecar) — keep the fallback
+            }
+
+            _venueSpec = new FxVenueSymbolSpec(
+                ContractSize: match.ContractSize,
+                VolumeMin: match.VolumeMin > 0 ? match.VolumeMin : 0.01,
+                VolumeStep: match.VolumeStep > 0 ? match.VolumeStep : 0.01,
+                VolumeMax: match.VolumeMax > 0 ? match.VolumeMax : 100.0);
+            _engine.SetVenueSpec(_venueSpec);
+        }
+        catch
+        {
+            // Sizing falls back to the heuristic; retried on the next cycle.
+        }
     }
 
     private void Journal(string category, string detail, string json) =>
