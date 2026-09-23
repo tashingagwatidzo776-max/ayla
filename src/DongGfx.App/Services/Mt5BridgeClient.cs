@@ -270,13 +270,18 @@ public sealed class Mt5BridgeClient : IDisposable
             JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         using var resp = await _http.PostAsync("order", content, ct).ConfigureAwait(false);
         var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(raw);
-        var r = doc.RootElement;
         if (!resp.IsSuccessStatusCode)
         {
-            var error = r.TryGetProperty("error", out var e) ? e.GetString() : raw;
-            throw new Mt5BridgeException(error ?? "order refused");
+            // Refusals must surface as Mt5BridgeException even when the body
+            // is malformed (e.g. an HTML error page from something squatting
+            // on the port) — parse defensively, never let JSON plumbing
+            // failures replace the refusal itself.
+            throw new Mt5BridgeException(
+                TryErrorText(raw) ?? (string.IsNullOrWhiteSpace(raw) ? "order refused" : raw));
         }
+
+        using var doc = JsonDocument.Parse(raw);
+        var r = doc.RootElement;
 
         return new Mt5OrderResult(
             r.GetProperty("ok").GetBoolean(),
@@ -318,13 +323,15 @@ public sealed class Mt5BridgeClient : IDisposable
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
         using var resp = await _http.PostAsync($"close/{ticket}", content, ct).ConfigureAwait(false);
         var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(raw);
-        var r = doc.RootElement;
         if (!resp.IsSuccessStatusCode)
         {
-            throw new Mt5BridgeException(
-                r.TryGetProperty("error", out var e) ? e.GetString() ?? "close refused" : "close refused");
+            // Same defensive rule as PlaceOrderAsync: a malformed refusal
+            // body still becomes Mt5BridgeException, never JsonException.
+            throw new Mt5BridgeException(TryErrorText(raw) ?? "close refused");
         }
+
+        using var doc = JsonDocument.Parse(raw);
+        var r = doc.RootElement;
 
         return new Mt5OrderResult(
             r.GetProperty("ok").GetBoolean(), r.GetProperty("retcode").GetInt32(),
@@ -358,6 +365,29 @@ public sealed class Mt5BridgeClient : IDisposable
         }
 
         return deals;
+    }
+
+    /// <summary>The sidecar's "error" text from a refusal body, or null
+    /// when the body is not JSON, has no error key, or carries a non-string
+    /// value. Never throws — a malformed refusal body must not replace the
+    /// refusal itself as the exception.</summary>
+    private static string? TryErrorText(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("error", out var e) &&
+                e.ValueKind == JsonValueKind.String)
+            {
+                return e.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON body: the caller decides what message fits.
+        }
+        return null;
     }
 
     private async Task<JsonDocument?> GetJson(string path, CancellationToken ct)
