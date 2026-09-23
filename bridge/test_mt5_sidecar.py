@@ -21,6 +21,24 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+try:
+    import MetaTrader5  # noqa: F401
+except ImportError:
+    # CI runners (and any machine without the package): the sidecar only
+    # needs the MT5 constant dicts at import time — the tests inject their
+    # own facade, so a stub carrying the real constant values suffices.
+    # `None` here would make the import raise, which is what we want to
+    # avoid; a SimpleNamespace satisfies the module-level dict builds.
+    sys.modules["MetaTrader5"] = SimpleNamespace(
+        TIMEFRAME_M1=1, TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_M30=30,
+        TIMEFRAME_H1=16385,
+        ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1, ORDER_TYPE_BUY_LIMIT=2,
+        ORDER_TYPE_SELL_LIMIT=3, ORDER_TYPE_BUY_STOP=4, ORDER_TYPE_SELL_STOP=5,
+        ORDER_TYPE_BUY_STOP_LIMIT=6, ORDER_TYPE_SELL_STOP_LIMIT=7,
+        BOOK_TYPE_ASK=1, BOOK_TYPE_BID=2, POSITION_TYPE_BUY=0,
+        TRADE_ACTION_DEAL=1, TRADE_ACTION_PENDING=5, ORDER_FILLING_FOK=0,
+        DEAL_TYPE_BUY=0)
+
 import mt5_sidecar as sidecar  # noqa: E402
 
 
@@ -46,7 +64,7 @@ class FakeMT5:
         return SimpleNamespace(
             login=201587365, server="Deriv-Demo", currency="USD",
             balance=2610.55, equity=2610.55, margin=0.0, margin_free=2610.55,
-            leverage=1000)
+            leverage=1000, trade_mode=0)
 
     def terminal_info(self):
         return SimpleNamespace(connected=True, name="MetaTrader 5 Terminal")
@@ -58,7 +76,8 @@ class FakeMT5:
         if symbol not in ("XAUUSDmicro", "EURUSD"):
             return None
         return SimpleNamespace(
-            volume_min=0.1, volume_step=0.1, volume_max=100.0, filling_mode=1)
+            volume_min=0.1, volume_step=0.1, volume_max=100.0, filling_mode=1,
+            trade_contract_size=1.0 if symbol == "XAUUSDmicro" else 100_000.0)
 
     def symbol_info_tick(self, symbol):
         if symbol == "CLOSED":
@@ -68,11 +87,17 @@ class FakeMT5:
     def symbols_get(self):
         return [
             SimpleNamespace(name="XAUUSDmicro", description="Gold micro",
-                            spread=27, digits=2, trade_mode=4, visible=True),
+                            spread=27, digits=2, trade_mode=4, visible=True,
+                            volume_min=0.1, volume_step=0.1, volume_max=100.0,
+                            trade_contract_size=1.0),
             SimpleNamespace(name="EURUSD", description="Euro vs US Dollar",
-                            spread=10, digits=5, trade_mode=4, visible=True),
+                            spread=10, digits=5, trade_mode=4, visible=True,
+                            volume_min=0.01, volume_step=0.01, volume_max=100.0,
+                            trade_contract_size=100_000.0),
             SimpleNamespace(name="HIDDEN", description="not shown",
-                            spread=0, digits=2, trade_mode=0, visible=False),
+                            spread=0, digits=2, trade_mode=0, visible=False,
+                            volume_min=0.1, volume_step=0.1, volume_max=100.0,
+                            trade_contract_size=100_000.0),
         ]
 
     def market_book_add(self, symbol):
@@ -251,6 +276,9 @@ def test_reads_shape():
     h = make_handlers()
     acc = h.account()
     assert acc["login"] == 201587365 and acc["server"] == "Deriv-Demo"
+    # The venue's demo/real verdict rides on /account; the C# real-money
+    # gate maps 0→virtual, 2→real and refuses on anything else.
+    assert acc["trade_mode"] == 0
     assert h.health()["ok"] is True
     tick = h.ticks("XAUUSDmicro")
     assert tick["bid"] == 4347.61 and tick["ask"] == 4347.88
@@ -280,6 +308,14 @@ def test_loopback_round_trip():
         with urllib.request.urlopen(f"{base}/account", timeout=5) as r:
             acc = json.loads(r.read())
         assert acc["login"] == 201587365
+
+        # /symbols carries the venue's lot geometry (sizing ground truth)
+        with urllib.request.urlopen(f"{base}/symbols", timeout=5) as r:
+            syms = {s["symbol"]: s for s in json.loads(r.read())["symbols"]}
+        gold = syms["XAUUSDmicro"]
+        assert gold["volume_min"] == 0.1 and gold["volume_step"] == 0.1
+        assert gold["volume_max"] == 100.0 and gold["contract_size"] == 1.0
+        assert syms["EURUSD"]["contract_size"] == 100_000.0
 
         req = urllib.request.Request(
             f"{base}/order",

@@ -14,7 +14,7 @@ public static class VersionInfo
     public const string ProductName = "DON G FX";
 
     /// <summary>The full branding title used on the window and About box.</summary>
-    public const string FullTitle = "DON G FX — Deriv Binary-Options Trader";
+    public const string FullTitle = "DON G FX — MT5 Forex & CFD Trader";
     private static readonly string Full = Assembly.GetExecutingAssembly()
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
         ?.InformationalVersion ?? "dev";

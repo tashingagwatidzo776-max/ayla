@@ -6,15 +6,16 @@ namespace DongGfx.Core.Tests;
 [Trait("Category", "Unit")]
 public class MetricsExporterTests
 {
-    private static Trade Trade(decimal profit, string account, string source = "Growth",
+    private static Trade Trade(decimal profit, string account, string source = "FX",
         decimal stake = 1.00m, DateTimeOffset? settledAt = null) => new(
-        Guid.NewGuid(), "frxEURUSD",
-        profit >= 0 ? Direction.Rise : Direction.Fall,
-        stake, "USD", 1.17, 1700000300, $"C-{Guid.NewGuid():N}",
-        profit >= 0 ? ContractStatus.Won : ContractStatus.Lost,
-        profit, 1.165, 1700000600,
-        settledAt ?? new DateTimeOffset(2026, 9, 10, 10, 0, 0, TimeSpan.Zero),
-        Guid.NewGuid(), account, source);
+        Id: Guid.NewGuid(),
+        Symbol: "EURUSD",
+        Stake: stake,
+        Profit: profit,
+        SettledAt: settledAt ?? new DateTimeOffset(2026, 9, 10, 10, 0, 0, TimeSpan.Zero),
+        Source: source,
+        AccountId: Guid.NewGuid(),
+        AccountName: account);
 
     private static readonly List<Trade> Trades =
     [

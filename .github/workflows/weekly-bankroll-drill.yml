@@ -60,7 +60,7 @@ jobs:
       with:
         python-version: '3.x'
 
-    - name: Build the app test stack (DongGfx.Core → DongGfx.Deriv → DongGfx.App)
+    - name: Build the app test stack (DongGfx.Core → DongGfx.App)
       run: dotnet build tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --configuration Release
 
     - name: Run the bankroll drill tests (synthetic store → exporter → publisher cycle)

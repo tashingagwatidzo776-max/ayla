@@ -76,15 +76,18 @@ public sealed class MetricsDigestService : IDisposable
 
     private readonly MetricsCollector _metrics;
     private readonly WebhookService _webhook;
-    private readonly HttpClient _http = new();
+    private readonly HttpClient _http;
     private readonly Action<string>? _log;
     private System.Threading.Timer? _timer;
+    private int _busy;
 
-    public MetricsDigestService(MetricsCollector metrics, WebhookService webhook, Action<string>? log = null)
+    public MetricsDigestService(MetricsCollector metrics, WebhookService webhook, Action<string>? log = null,
+        HttpClient? http = null)
     {
         _metrics = metrics;
         _webhook = webhook;
         _log = log;
+        _http = http ?? new HttpClient();
     }
 
     /// <summary>Starts the periodic digest loop (first post after InitialDelay).</summary>
@@ -238,6 +241,14 @@ public sealed class MetricsDigestService : IDisposable
     /// breaks the timer.</summary>
     public void TryPostDigest()
     {
+        // Timer callbacks can overlap when a tick outlives the interval
+        // (webhook retries); an Interlocked guard keeps posts sequential —
+        // same shape as FxScorecardService._running.
+        if (Interlocked.Exchange(ref _busy, 1) == 1)
+        {
+            return;
+        }
+
         try
         {
             var digest = ComposeDigest();
@@ -279,6 +290,10 @@ public sealed class MetricsDigestService : IDisposable
         catch (Exception ex)
         {
             _log?.Invoke($"metrics digest tick failed: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
         }
     }
 

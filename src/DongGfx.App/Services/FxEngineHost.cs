@@ -49,6 +49,11 @@ public sealed class FxEngineHost : IDisposable
     /// budget reads it and fails closed at 0 while it is unknown.</summary>
     private double _lastEquity;
 
+    /// <summary>The venue's lot geometry for <see cref="Symbol"/>, fetched
+    /// once from the bridge /symbols snapshot — sizing ground truth
+    /// (contract size and volume grid) instead of a price heuristic.</summary>
+    private FxVenueSymbolSpec? _venueSpec;
+
     public int PaperSignalsSeen { get; private set; }
     public bool PaperSoakComplete => PaperSignalsSeen >= PaperSoakSignalsRequired;
 
@@ -91,6 +96,11 @@ public sealed class FxEngineHost : IDisposable
         _engine.AddAlpha(new FxMeanReversion.ZScore());
         _engine.AddAlpha(new FxMeanReversion.BollingerReversion());
         _engine.AddAlpha(new FxMeanReversion.VwapReversion());
+
+        // Fire-and-forget: the venue's lot geometry (contract size, volume
+        // grid) arrives once from the bridge; sizing uses the heuristic
+        // fallback until then and switches when the spec lands.
+        _ = LoadVenueSpecAsync();
 
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += async (_, _) => await RunCycleAsync().ConfigureAwait(true);
@@ -182,6 +192,7 @@ public sealed class FxEngineHost : IDisposable
             }
 
             var bars = candles.Select(c => new FxBar(c.Time, c.Open, c.High, c.Low, c.Close, 0)).ToList();
+            if (_venueSpec is null) await LoadVenueSpecAsync().ConfigureAwait(true);   // first snapshot may have failed
             var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
             double bid = 0, ask = 0;
             if (tick is { } t)
@@ -298,14 +309,27 @@ public sealed class FxEngineHost : IDisposable
             }
         }
 
-        var isDemo = account.Server.Contains("demo", StringComparison.OrdinalIgnoreCase)
-                     || account.Login > 500_000_000;
+        // Same venue verdict as the manual order card: trade_mode from the
+        // bridge, demo-only heuristic fallback (see Mt5Account).
+        var verifiedVirtual = account.GateVerifiedVirtual;
         var unlocked = _realMoneyUnlocked();
-        var gate = RealMoneyGate.Evaluate(isDemo, isDemo ? true : null, unlocked);
+        var gate = RealMoneyGate.Evaluate(configIsDemo: verifiedVirtual is true,
+                                          apiVerifiedVirtual: verifiedVirtual,
+                                          unlockArmed: unlocked);
         if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
         {
             Journal("FX_ORDER", $"refused: real-money gate — {RealMoneyGate.Explain(gate)}", "{}");
             StatusChanged?.Invoke($"order refused: {RealMoneyGate.Explain(gate)}");
+            return;
+        }
+
+        // Rails, order 5 (pre-flight): no live order on a guessed size.
+        if (LiveOrderBlockedByMissingSpec)
+        {
+            Journal("FX_ORDER",
+                "refused: live order without venue lot geometry (contract " +
+                "size/volume grid unknown) — fix the bridge /symbols snapshot first", "{}");
+            StatusChanged?.Invoke("order refused: venue spec unavailable");
             return;
         }
 
@@ -327,12 +351,83 @@ public sealed class FxEngineHost : IDisposable
                 result.Price,
                 Server = account.Server,
                 Signal = decision.Signal.Alpha,
+                // The lot geometry the size was computed against: an audit
+                // entry can be re-derived against the venue's rules later
+                // (was the 100x XAUUSDmicro bug the spec's fault or the math's?).
+                VenueSpec = _venueSpec is { } spec
+                    ? new { spec.ContractSize, spec.VolumeMin, spec.VolumeStep, spec.VolumeMax }
+                    : null,
             }));
 
         StatusChanged?.Invoke(result.Ok
             ? $"filled: {side} {lots:0.##} {Symbol} @ {result.Price:0.#####}"
             : $"refused: {result.RetcodeName}");
     }
+
+    /// <summary>True once the venue's lot geometry for <see cref="Symbol"/>
+    /// has landed from the bridge. Until then sizing uses the heuristic
+    /// fallback — good enough for paper mode, never trusted for live orders.</summary>
+    public bool VenueSpecLoaded { get; private set; }
+
+    private bool _specWarned;
+
+    /// <summary>One-shot fetch of this symbol's venue spec from the bridge
+    /// /symbols snapshot. Fire-and-forget and retry-safe: failures leave the
+    /// heuristic fallback in place and the next cycle retries. The first
+    /// failure journals a loud warning so the gap is visible in monitoring
+    /// instead of silently sizing on a guess.</summary>
+    private async Task LoadVenueSpecAsync()
+    {
+        try
+        {
+            var symbols = await _mt5.GetSymbolsAsync().ConfigureAwait(false);
+            var match = symbols.FirstOrDefault(s =>
+                s.Symbol.Equals(Symbol, StringComparison.OrdinalIgnoreCase));
+            if (match is null || match.ContractSize <= 0)
+            {
+                WarnSpecMissing(
+                    match is null
+                        ? "the bridge /symbols snapshot does not name this symbol"
+                        : "the snapshot carries no contract size for this symbol (old sidecar?)");
+                return;
+            }
+
+            _venueSpec = new FxVenueSymbolSpec(
+                ContractSize: match.ContractSize,
+                VolumeMin: match.VolumeMin > 0 ? match.VolumeMin : 0.01,
+                VolumeStep: match.VolumeStep > 0 ? match.VolumeStep : 0.01,
+                VolumeMax: match.VolumeMax > 0 ? match.VolumeMax : 100.0);
+            _engine.SetVenueSpec(_venueSpec);
+            VenueSpecLoaded = true;
+        }
+        catch
+        {
+            WarnSpecMissing("the /symbols probe failed (bridge down?)");
+        }
+    }
+
+    /// <summary>Journal + surface the missing-venue-geometry condition once
+    /// per host: sizing keeps its heuristic fallback, loudly.</summary>
+    private void WarnSpecMissing(string why)
+    {
+        if (_specWarned)
+        {
+            return;
+        }
+
+        _specWarned = true;
+        Journal("FX_ORDER",
+            $"pre-flight warning: venue lot geometry unavailable — {why}. " +
+            "Sizing is on the fallback heuristic; the venue's own volume grid " +
+            "will reject off-grid sizes at its gate.", "{}");
+        StatusChanged?.Invoke("venue spec missing — sizing on fallback heuristic");
+    }
+
+    /// <summary>Final pre-flight rail: a LIVE order may never be sized
+    /// without the venue's own lot geometry (contract size + volume grid).
+    /// Paper mode keeps the heuristic fallback — the soak is where the gap
+    /// gets noticed, the money path refuses to gamble on a guess.</summary>
+    internal bool LiveOrderBlockedByMissingSpec => IsLiveEngine && _venueSpec is null;
 
     private void Journal(string category, string detail, string json) =>
         _journal.Log(Guid.Empty, category, detail, json);

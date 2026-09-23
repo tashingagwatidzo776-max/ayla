@@ -8,8 +8,8 @@ setup; run it once after the first successful CI run on the repo.
 | Check | Enforces |
 |---|---|
 | `unit` | Release build + `Category=Unit` tests with coverage |
-| `integration` | Fake-server E2E tests (`Category=Integration`) with coverage |
-| `coverage-report` | Merged coverage report + **60% combined line-coverage gate** |
+| `integration` | MT5 bridge sidecar contract tests + soak-report verdict tests (Python) |
+| `coverage-report` | Coverage report + **60% line-coverage gate** |
 | `bankroll-drill` | Weekly bankroll auto-publish path end-to-end drill (Saturdays 05:23 UTC) |
 
 Plus `strict: true` — a PR's branch must be up to date with `main` before the

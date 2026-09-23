@@ -6,8 +6,8 @@ on:
   pull_request:
     branches: [ main ]
   # Nightly drift check: catches breakage that only shows up when the world
-  # moves — runner-image and dotnet SDK updates, and upstream API changes
-  # (Deriv WebSocket, LLM providers). The odd minute keeps it off the
+  # moves — runner-image and dotnet SDK updates, and the Python bridge
+  # tooling. The odd minute keeps it off the
   # top-of-hour schedule crunch.
   schedule:
     - cron: '17 3 * * *'
@@ -53,6 +53,17 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
+    # The repo carries a SHA-256 manifest for the portable MT5 terminal it
+    # ships beside the code (mt5_portable/ is git-ignored: two of its
+    # executables exceed GitHub's 100 MB per-file limit). Runners hold the
+    # manifest but not the terminal, so here this proves the manifest is
+    # present and parses; on any checkout that DOES carry the terminal the
+    # same command fails the run when a file is modified, missing or
+    # unexpected versus the source install it was copied from.
+    - name: MT5 copy integrity
+      shell: pwsh
+      run: ./scripts/mt5_copy_integrity.ps1
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
@@ -92,58 +103,34 @@ jobs:
         path: ./coverage/**/coverage.cobertura.xml
         if-no-files-found: warn
 
+  # The order path moves real money, so its Python transport gets its own
+  # gate here: the bridge sidecar's contract tests (bad action/type pairs,
+  # off-step lots, unknown symbols and closed markets must be refused BEFORE
+  # anything reaches the terminal) and the soak-report verdict tests. These
+  # are the only test suites CI runs outside the .NET `Category=Unit` set —
+  # they need no MT5 terminal, no network, and no sockets beyond one
+  # loopback round-trip. The job keeps the historical `integration` name so
+  # existing required-status-check configs keep matching.
   integration:
     runs-on: windows-latest
-    needs: unit
-    timeout-minutes: 40
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v7
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v6
+    - name: Setup Python
+      uses: actions/setup-python@v7
       with:
-        dotnet-version: '8.0.x'
+        python-version: '3.x'
 
-    - name: Restore dependencies
-      run: dotnet restore
+    - name: Install test deps
+      run: pip install numpy # the fake rates arrays mimic the real package's numpy output
 
-    - name: Build
-      run: dotnet build --no-restore --configuration Release
+    - name: Test the MT5 bridge sidecar contract (order-path rails)
+      run: python bridge/test_mt5_sidecar.py
 
-    # Fake-server E2E tests (DerivIntegrationFlowTests, GrowthRunnerEndToEndTests)
-    # need no network and always run. Live-Deriv tests stay opt-in: they detect
-    # TF_DERIV_SMOKE / TF_DERIV_TOKEN and pass through when unset (Deriv also
-    # rejects anonymous handshakes from datacenter IPs, so the anonymous smoke
-    # test must never run on CI runners).
-    - name: Test (Integration)
-      shell: pwsh
-      run: |
-        dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration" --collect:"XPlat Code Coverage" --results-directory ./coverage --blame-hang --blame-hang-timeout 8m --blame-crash
-        if ($LASTEXITCODE -ne 0) {
-          Write-Host "::warning::Integration tests failed on the first attempt - retrying once (flake guard)"
-          dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Integration" --collect:"XPlat Code Coverage" --results-directory ./coverage --blame-hang --blame-hang-timeout 8m --blame-crash
-          exit $LASTEXITCODE
-        }
-
-    - name: Upload blame artifacts (Integration)
-      if: failure() || cancelled()
-      uses: actions/upload-artifact@v7
-      with:
-        name: blame-integration
-        path: ./coverage/**
-        if-no-files-found: ignore
-      env:
-        TF_DERIV_TOKEN: ${{ secrets.TF_DERIV_TOKEN }}
-        TF_DERIV_APP_ID: ${{ secrets.TF_DERIV_APP_ID }}
-        TF_DERIV_SYMBOL: ${{ secrets.TF_DERIV_SYMBOL }}
-
-    - name: Upload coverage artifact (Integration)
-      uses: actions/upload-artifact@v7
-      with:
-        name: coverage-integration
-        path: ./coverage/**/coverage.cobertura.xml
-        if-no-files-found: warn
+    - name: Test the soak-report verdicts (go-live evidence path)
+      run: python scripts/test_soak_report.py
 
   # Merges both jobs' cobertura files into one HTML report and gates the
   # build on a minimum line-coverage floor (measured at 53.2% when the
@@ -287,7 +274,7 @@ jobs:
           fi
           echo ""
           site="https://${{ github.repository_owner }}.github.io/${GITHUB_REPOSITORY##*/}/trend.html"
-          echo 'Merged line coverage of the `unit` + `integration` runs. Full HTML report: the `coverage-report` [artifact]('"$run_url"') of this run. Trend over time: the [coverage history page]('"$site"').'
+          echo 'Merged line coverage of the `unit` run. Full HTML report: the `coverage-report` [artifact]('"$run_url"') of this run. Trend over time: the [coverage history page]('"$site"').'
           echo "<!-- coverage-diff -->"
         } > comment.md
         cat comment.md
@@ -524,10 +511,10 @@ jobs:
       run: |
         python3 -m pip install --quiet pyyaml
         python3 scripts/lint_workflows.py
-    # Safety-rail coverage gate: every file that can place a Deriv trade
-    # (a .BuyAsync call site) must have a coverage entry — naming its rails
-    # — in docs/real-money-safety-audit.md. Fails the PR the moment a new
-    # trade path appears without its audit section.
+    # Safety-rail coverage gate: every file that can place a real MT5 order
+    # (a .PlaceOrderAsync call site) must have a coverage entry — naming its
+    # rails — in docs/real-money-safety-audit.md. Fails the PR the moment a
+    # new trade path appears without its audit section.
     - name: Check safety-audit coverage of BuyAsync call sites
       run: python3 scripts/check_safety_audit.py
     - name: Check rail-test trait coverage (gate drill selects by trait)

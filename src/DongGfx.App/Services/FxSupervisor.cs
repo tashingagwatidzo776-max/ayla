@@ -1,7 +1,6 @@
 using DongGfx.App.Infrastructure;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
-using DongGfx.Deriv;
 
 namespace DongGfx.App.Services;
 

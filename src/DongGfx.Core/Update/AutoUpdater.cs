@@ -21,10 +21,13 @@ public sealed class AutoUpdater : IDisposable
     private readonly string _updateDir;
     private CancellationTokenSource _cts = new();
 
-    public AutoUpdater(string currentVersion, string? proxyUrl = null)
+    /// <param name="updateDir">Optional override of the update/staging
+    /// directory (tests use an isolated temp dir; production defaults to
+    /// <c>AppContext.BaseDirectory/updates</c>).</param>
+    public AutoUpdater(string currentVersion, string? proxyUrl = null, string? updateDir = null)
     {
         _currentVersion = currentVersion;
-        _updateDir = Path.Combine(AppContext.BaseDirectory, "updates");
+        _updateDir = updateDir ?? Path.Combine(AppContext.BaseDirectory, "updates");
         Directory.CreateDirectory(_updateDir);
 
         _http = new HttpClient();

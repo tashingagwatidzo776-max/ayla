@@ -32,6 +32,28 @@ public sealed record FxDecision(
 /// ORDER decision the App executes through the sidecar ticket path, where
 /// the same rails as the manual ticket apply (gate → max-lots → kill switch).
 /// </summary>
+/// <summary>The venue's lot geometry for one symbol — sizing ground truth
+/// straight from MT5 symbol_info (via the bridge /symbols snapshot).
+/// ContractSize is units per 1.0 lot: 100000 on standard FX pairs, but
+/// micro/mini contracts differ (Deriv's XAUUSDmicro is literally
+/// "1 lot = 1 unit" with a 0.1 volume step).</summary>
+public sealed record FxVenueSymbolSpec(
+    double ContractSize,
+    double VolumeMin,
+    double VolumeStep,
+    double VolumeMax)
+{
+    /// <summary>Fallback for symbols the venue has not described yet: the
+    /// historic heuristic (100k units FX, 100 oz for gold-like prices,
+    /// 0.01 lot step). Sizing uses this only until a real spec arrives.
+    /// </summary>
+    public static FxVenueSymbolSpec Heuristic(double midPrice) => new(
+        ContractSize: midPrice > 500 ? 100.0 : 100_000.0,
+        VolumeMin: 0.01,
+        VolumeStep: 0.01,
+        VolumeMax: 100.0);
+}
+
 public sealed class FxEngine
 {
     private readonly Action<string, string, string> _journal; // category, detail, json
@@ -41,6 +63,11 @@ public sealed class FxEngine
     private readonly double _riskFraction;
     private readonly double _atrStopMult;
     private readonly Func<double>? _equityProvider;
+
+    /// <summary>The venue's lot geometry, refreshed by the host from the
+    /// bridge. Null until the first /symbols snapshot names this symbol —
+    /// sizing then falls back to the heuristic.</summary>
+    private FxVenueSymbolSpec? _venueSpec;
 
     public bool IsLive { get; private set; }
     public string Symbol { get; }
@@ -68,6 +95,11 @@ public sealed class FxEngine
     }
 
     public void AddAlpha(IFxAlpha alpha) => _alphas.Add(alpha);
+
+    /// <summary>Feeds the engine the venue's own lot geometry for its
+    /// symbol (from the bridge /symbols snapshot). Idempotent; the latest
+    /// spec wins.</summary>
+    public void SetVenueSpec(FxVenueSymbolSpec spec) => _venueSpec = spec;
 
     /// <summary>Paper→live is an explicit, journaled act (a paper soak must
     /// exist first — the App layer enforces the soak window before calling).</summary>
@@ -166,9 +198,13 @@ public sealed class FxEngine
     }
 
     /// <summary>Risk-based sizing: budget = account equity x risk fraction,
-    /// risk per lot = stop distance x units per lot (100k for FX, 100 oz for
-    /// gold-like prices). Fails closed at no verified equity. Rounds DOWN to
-    /// the 0.01 lot step; 0 = don't trade.</summary>
+    /// risk per lot = stop distance x contract size. The venue's own lot
+    /// geometry (SetVenueSpec) is the source of truth; without it the
+    /// historic price heuristic stands in until the first /symbols snapshot.
+    /// Lots are snapped DOWN to the venue's volume step, clamped to its
+    /// volume_max and the engine cap, and fail closed (0 = don't trade)
+    /// below the venue's volume_min — an untradable size is refused, never
+    /// forced up to the minimum.</summary>
     public double Size(FxSignal signal, double midPrice)
     {
         if (double.IsNaN(signal.StopDistanceHint) || signal.StopDistanceHint <= 0 || midPrice <= 0)
@@ -185,15 +221,29 @@ public sealed class FxEngine
             return 0;
         }
 
-        // Units per standard lot: FX = 100k units; gold-like (price > 500)
-        // = 100 oz. Stop hints are in price units, so risk per lot must be
-        // priced per those units.
-        var unitsPerLot = midPrice > 500 ? 100.0 : 100_000.0;
-        var riskPerLot = signal.StopDistanceHint * unitsPerLot;
+        var spec = _venueSpec ?? FxVenueSymbolSpec.Heuristic(midPrice);
+        if (spec.ContractSize <= 0 || spec.VolumeStep <= 0)
+        {
+            return 0;   // malformed spec — size nothing rather than guess
+        }
+
+        // Stop hints are in price units, so risk per lot is priced per the
+        // venue's own contract size.
+        var riskPerLot = signal.StopDistanceHint * spec.ContractSize;
         if (riskPerLot <= 0) return 0;
 
-        var lots = Math.Floor(equity * _riskFraction / riskPerLot * 100) / 100;
-        return lots < 0.01 ? 0 : Math.Min(lots, _lotsCap);
+        var raw = equity * _riskFraction / riskPerLot;
+
+        // Clamp to venue max and the engine cap FIRST, then snap DOWN to
+        // the venue's volume step (a cap like 0.15 on a 0.1-step symbol
+        // must become 0.1, not a guaranteed rejection).
+        var capped = Math.Min(raw, Math.Min(_lotsCap, spec.VolumeMax));
+        var lots = Math.Floor(capped / spec.VolumeStep + 1e-9) * spec.VolumeStep;
+        lots = Math.Round(lots, 8);   // kill floating-point dust off the grid
+
+        // Below the venue minimum (or dust) = don't trade. Never force the
+        // size up to volume_min — that would exceed the risk budget.
+        return lots >= spec.VolumeMin && lots >= 0.01 ? lots : 0;
     }
 
     private static double PipSizeOf(double price) => price switch

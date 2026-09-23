@@ -290,6 +290,102 @@ public class AutoUpdaterTests : IDisposable
         }
     }
 
+    [Fact]
+    public void InstallUpdate_CopyFailure_RollsBack_And_Restores_From_Backup()
+    {
+        // The previous "failure" test actually took the success path: the
+        // bin dir is writable, so nothing rolled back. Force a genuine
+        // failure: a read-only destination makes the staged copy throw.
+        var appDir = AppContext.BaseDirectory;
+        var collision = Path.Combine(appDir, "collision.dll");
+        var stagedDir = Path.Combine(Path.GetTempPath(), "staged-" + Guid.NewGuid());
+        Directory.CreateDirectory(stagedDir);
+        File.WriteAllText(Path.Combine(stagedDir, "collision.dll"), "new content");
+        var messages = new List<string>();
+
+        try
+        {
+            File.WriteAllText(collision, "original content");
+            File.SetAttributes(collision, FileAttributes.ReadOnly);
+
+            using var updater = new AutoUpdater("1.0.0");
+            updater.Progress += m => messages.Add(m);
+
+            var result = updater.InstallUpdate(stagedDir);
+
+            Assert.False(result);
+            Assert.Contains(messages, m => m.Contains("Install failed, rolling back"));
+            Assert.Contains(messages, m => m.Contains("Rolled back"));
+            // The destination was read-only, so neither the install nor the
+            // rollback could touch it: the original content survives.
+            Assert.Equal("original content", File.ReadAllText(collision));
+        }
+        finally
+        {
+            File.SetAttributes(collision, File.GetAttributes(collision) & ~FileAttributes.ReadOnly);
+            File.Delete(collision);
+            try { Directory.Delete(stagedDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Rollback_Missing_Backup_Dir_Is_Surfaced_Not_Thrown()
+    {
+        var messages = new List<string>();
+        using var updater = new AutoUpdater("1.0.0");
+        updater.Progress += m => messages.Add(m);
+
+        var method = typeof(AutoUpdater).GetMethod("RollbackFromBackup",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var missing = Path.Combine(Path.GetTempPath(), $"no_backup_{Guid.NewGuid():N}");
+
+        method.Invoke(updater, new object?[] { missing, AppContext.BaseDirectory });
+
+        Assert.Contains(messages, m => m.Contains("No backup to restore from"));
+    }
+
+    [Fact]
+    public void CleanupOldUpdates_Drives_The_Real_Update_Dir()
+    {
+        // The previous test re-implemented the cleanup logic on a private
+        // temp dir and never ran the method. Drive the real one: the
+        // updater's dir is this test's own bin/updates, which we populate
+        // and clean ourselves.
+        var updateDir = Path.Combine(Path.GetTempPath(), $"tf-cleanup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(updateDir);
+        // Hermetic: isolated temp dir — no shared-bin races, no pre-cleaning.
+        foreach (var z in new[] { "tf-update-1.0.91.zip", "tf-update-1.0.92.zip" })
+        {
+            File.WriteAllText(Path.Combine(updateDir, z), "pkg");
+        }
+
+        var createdBackups = new List<string>();
+        for (var i = 1; i <= 5; i++)
+        {
+            var d = Path.Combine(updateDir, $"backup-20991230-00000{i}");
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "file.txt"), "backup");
+            createdBackups.Add(d);
+        }
+
+        using var updater = new AutoUpdater("1.0.0", updateDir: updateDir);
+        updater.CleanupOldUpdates();
+
+        foreach (var z in new[] { "tf-update-1.0.91.zip", "tf-update-1.0.92.zip" })
+        {
+            Assert.False(File.Exists(Path.Combine(updateDir, z)));
+        }
+        // The 3 newest backups survive (my future-dated 3..5); my oldest 1..2 gone.
+        Assert.False(Directory.Exists(createdBackups[0]));
+        Assert.False(Directory.Exists(createdBackups[1]));
+        Assert.True(Directory.Exists(createdBackups[2]));
+        Assert.True(Directory.Exists(createdBackups[3]));
+        Assert.True(Directory.Exists(createdBackups[4]));
+
+        foreach (var d in createdBackups) try { Directory.Delete(d, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(updateDir, recursive: true); } catch { /* best effort */ }
+    }
+
     private static byte[] CreateZip(Dictionary<string, string> files)
     {
         using var stream = new MemoryStream();

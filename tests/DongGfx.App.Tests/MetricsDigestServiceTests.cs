@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using DongGfx.App.Infrastructure;
@@ -65,7 +66,16 @@ public class MetricsDigestServiceTests : IDisposable
     private int Count { get { lock (_sync) { return _bodies.Count; } } }
     private List<string> Bodies { get { lock (_sync) { return _bodies.ToList(); } } }
 
-    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 5000)
+    // Under full-suite parallel load the loopback POST can exceed the
+    // service's fail-fast 10 s HttpClient timeout (one random webhook test
+    // failing per run, always passing in isolation). Tests use a wider
+    // budget; the production default stays fail-fast.
+    private static readonly TimeSpan HttpBudget = TimeSpan.FromSeconds(60);
+
+    // 5s was occasionally exceeded under full-suite load (one random webhook
+    // test failing per run, always passing in isolation): give the default
+    // budget headroom. Explicit short timeouts (negative checks) unchanged.
+    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 30000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
@@ -76,7 +86,7 @@ public class MetricsDigestServiceTests : IDisposable
     }
 
     private MetricsDigestService NewService(MetricsCollector collector) =>
-        new(collector, new WebhookService { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero });
+        new(collector, new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero });
 
     [Fact]
     public void ComposeDigest_NoSamples_ReturnsNull()
@@ -179,7 +189,7 @@ public class MetricsDigestServiceTests : IDisposable
         """;
 
     private MetricsDigestService NewAuditService(string markdown, string statePath) =>
-        new(new MetricsCollector(), new WebhookService { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero })
+        new(new MetricsCollector(), new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero })
         {
             SafetyAuditPath = "audit.md", // non-null enables the leg; content comes from the override
             SafetyAuditContentOverride = () => markdown,
@@ -302,5 +312,193 @@ public class MetricsDigestServiceTests : IDisposable
         Assert.NotNull(text);
         Assert.Contains("errors", text);
         Assert.DoesNotContain("boom", text);
+    }
+
+    // ── FX-state leg ───────────────────────────────────────────
+
+    [Fact]
+    public void FxState_ProviderLine_Appears_In_The_Digest()
+    {
+        var digest = NewService(new MetricsCollector());
+        digest.FxStateProvider = () => "🧠 FX paper XAUUSD/EURUSD soak 3/5, scorecard pass";
+
+        var text = digest.ComposeDigest();
+
+        Assert.NotNull(text);
+        Assert.Contains("soak 3/5", text);
+        Assert.Contains("scorecard pass", text);
+    }
+
+    [Fact]
+    public void FxState_ProviderThrows_IsDroppedWithoutBreakingTheDigest()
+    {
+        var collector = new MetricsCollector();
+        collector.RecordLatency(150, "Alpha", DateTimeOffset.UtcNow);
+        var digest = NewService(collector);
+        digest.FxStateProvider = () => throw new InvalidOperationException("fx boom");
+
+        var text = digest.ComposeDigest();
+
+        Assert.NotNull(text);
+        Assert.Contains("latency", text);
+        Assert.DoesNotContain("fx boom", text);
+    }
+
+    // ── loop start (enabled path) + audit failure paths ────────────────────
+
+    [Fact]
+    public void Start_WhenEnabled_CreatesTheLoop_And_DisposeStopsIt()
+    {
+        var digest = NewService(new MetricsCollector());
+        digest.InitialDelay = TimeSpan.FromHours(1); // nothing fires during the test
+
+        digest.Start();
+        digest.Dispose();
+
+        Assert.Equal(0, Count);
+    }
+
+    [Fact]
+    public void SafetyAudit_ReadFailure_SilencesTheLeg_With_A_Log()
+    {
+        var logs = new List<string>();
+        var digest = new MetricsDigestService(
+            new MetricsCollector(),
+            new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero },
+            m => logs.Add(m))
+        {
+            SafetyAuditPath = Path.Combine(Path.GetTempPath(), $"no_audit_{Guid.NewGuid():N}.md"),
+            SafetyAuditStatePath = StatePath(),
+            // no override -> File.ReadAllText on the missing doc throws IOException
+        };
+
+        var text = digest.ComposeDigest();
+
+        Assert.Null(text); // nothing else to report: silence beats a broken read
+        Assert.Contains(logs, m => m.Contains("safety-audit digest read failed"));
+    }
+
+    [Fact]
+    public async Task AuditStateWrite_Failure_IsLogged_And_The_Post_Still_Goes_Out()
+    {
+        // A directory as the state path makes the write fail exactly once.
+        var stateDir = Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), $"tf_audit_{Guid.NewGuid():N}")).FullName;
+        var logs = new List<string>();
+        var digest = new MetricsDigestService(
+            new MetricsCollector(),
+            new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero },
+            m => logs.Add(m))
+        {
+            SafetyAuditPath = "audit.md",
+            SafetyAuditContentOverride = () => AuditMarkdown,
+            SafetyAuditStatePath = stateDir,
+        };
+
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 1);
+
+        Assert.Equal(1, Count);
+        Assert.Contains("safety rails changed", Bodies[0]);
+        Assert.Contains(logs, m => m.Contains("safety-audit state write failed"));
+        try { Directory.Delete(stateDir); } catch { /* best effort */ }
+    }
+
+    // ── GitHub repository_dispatch leg (injected handler, no network) ──────
+
+    private sealed class FakeDispatchHandler : HttpMessageHandler
+    {
+        public HttpRequestMessage? Last { get; private set; }
+        public string? LastBody { get; private set; }
+        public Exception? Throw { get; set; }
+        public HttpStatusCode Status { get; set; } = HttpStatusCode.Forbidden;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            if (Throw is not null) throw Throw;
+            Last = request;
+            LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
+            return new HttpResponseMessage(Status);
+        }
+
+        // TryDispatch uses HttpClient.Send (sync): a custom handler must
+        // override the sync entry point or Send throws NotSupportedException.
+        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken ct) =>
+            SendAsync(request, ct).GetAwaiter().GetResult();
+    }
+
+    private MetricsDigestService NewDispatchService(FakeDispatchHandler handler, List<string> logs)
+    {
+        var collector = new MetricsCollector();
+        collector.RecordLatency(120, "Alpha", DateTimeOffset.UtcNow);
+        return new MetricsDigestService(
+            collector,
+            new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero },
+            m => logs.Add(m),
+            new HttpClient(handler))
+        {
+            GitHubToken = "tok-123",
+            GitHubRepo = "owner/ayla",
+        };
+    }
+
+    [Fact]
+    public async Task DispatchLeg_PostsTheDigest_With_Bearer_And_Surfaces_Non2xx()
+    {
+        var handler = new FakeDispatchHandler { Status = HttpStatusCode.Forbidden };
+        var logs = new List<string>();
+        var digest = NewDispatchService(handler, logs);
+
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 1); // the webhook leg still lands
+
+        Assert.Equal(1, Count);
+        Assert.True(handler.Last is not null,
+            "handler never invoked; logs=[" + string.Join(" || ", logs) + "]");
+        Assert.Contains("/repos/owner/ayla/dispatches", handler.Last!.RequestUri!.AbsoluteUri);
+        Assert.Equal("tok-123", handler.Last.Headers.Authorization?.Parameter);
+        Assert.Contains("Bearer", handler.Last.Headers.Authorization?.Scheme ?? "");
+        Assert.True(handler.LastBody is not null, "request had no content");
+        Assert.Contains("metrics-digest", handler.LastBody);
+        Assert.Contains(logs, m => m.Contains("dispatch returned 403"));
+    }
+
+    [Fact]
+    public async Task DispatchLeg_HandlerFailure_IsLogged_Never_Thrown()
+    {
+        var handler = new FakeDispatchHandler
+        {
+            Throw = new HttpRequestException("no route to host"),
+        };
+        var logs = new List<string>();
+        var digest = NewDispatchService(handler, logs);
+
+        digest.TryPostDigest(); // must not throw
+        await WaitForAsync(() => Count >= 1);
+
+        Assert.Equal(1, Count);
+        Assert.Contains(logs, m => m.Contains("dispatch failed"));
+    }
+
+    [Fact]
+    public async Task ReentrancyGuard_Drops_Overlapping_Ticks()
+    {
+        var collector = new MetricsCollector();
+        collector.RecordLatency(50, "Alpha", DateTimeOffset.UtcNow);
+        var digest = NewService(collector);
+
+        var busy = typeof(MetricsDigestService).GetField(
+            "_busy", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+        busy.SetValue(digest, 1); // simulate an in-flight tick
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 1, 300);
+        Assert.Equal(0, Count); // the guard returned before composing/posting
+
+        busy.SetValue(digest, 0); // tick completes — the next one posts
+        digest.TryPostDigest();
+        await WaitForAsync(() => Count >= 1);
+        Assert.Equal(1, Count);
     }
 }

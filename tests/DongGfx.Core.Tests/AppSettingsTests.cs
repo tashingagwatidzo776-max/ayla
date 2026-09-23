@@ -12,11 +12,13 @@ public class AppSettingsTests
         var s = new AppSettings();
 
         Assert.True(s.IsDemo);
-        Assert.Equal("frxEURUSD", s.Symbol);
+        Assert.Equal("XAUUSD", s.FxSymbol);
         Assert.False(s.AutonomyEnabled);
-        Assert.Equal(10.00m, s.MaxStake);
-        Assert.Equal(1, s.MaxConcurrentContracts);
-        Assert.Equal(50.00m, s.DailyLossCap);
+        Assert.Equal(1.00m, s.Mt5MaxLots);
+        Assert.Equal(25m, s.Mt5DailyLossCap);
+        Assert.Equal(0m, s.Mt5EquityFloor);
+        Assert.Equal("", s.Mt5TerminalPath);
+        Assert.True(s.WebhookOnTrade);
     }
 
     [Fact]
@@ -24,22 +26,23 @@ public class AppSettingsTests
     {
         var original = new AppSettings
         {
-            ApiToken = "secret",
-            AppId = "12345",
-            Symbol = "frxGBPUSD",
+            IsDemo = false,
             AutonomyEnabled = true,
-            Stake = 2.50m,
-            DurationMinutes = 10
+            FxSymbol = "XAUUSDmicro",
+            FxSymbols = "XAUUSDmicro,EURUSD",
+            Mt5TerminalPath = @"C:\Users\me\Desktop\tf\mt5_portable\terminal64.exe",
+            Mt5MaxLots = 0.25m,
         };
 
         var json = JsonSerializer.Serialize(original);
         var restored = JsonSerializer.Deserialize<AppSettings>(json);
 
         Assert.NotNull(restored);
-        Assert.Equal("12345", restored!.AppId);
-        Assert.Equal("frxGBPUSD", restored.Symbol);
+        Assert.False(restored!.IsDemo);
         Assert.True(restored.AutonomyEnabled);
-        Assert.Equal(2.50m, restored.Stake);
-        Assert.Equal(10, restored.DurationMinutes);
+        Assert.Equal("XAUUSDmicro", restored.FxSymbol);
+        Assert.Equal("XAUUSDmicro,EURUSD", restored.FxSymbols);
+        Assert.Equal(@"C:\Users\me\Desktop\tf\mt5_portable\terminal64.exe", restored.Mt5TerminalPath);
+        Assert.Equal(0.25m, restored.Mt5MaxLots);
     }
 }

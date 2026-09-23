@@ -3,8 +3,8 @@ using System.IO;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using DongGfx.Core;
 using DongGfx.Core.Analytics;
+using DongGfx.Core.Models;
 
 namespace DongGfx.App.ViewModels;
 
@@ -15,7 +15,7 @@ namespace DongGfx.App.ViewModels;
 public partial class PerformanceViewModel : ObservableObject
 {
     private readonly PerformanceTracker _tracker;
-    private readonly TradeStore? _tradeStore;
+    private readonly Func<IReadOnlyList<Trade>>? _trades;
     private readonly string? _metricsExportDirectory;
     private readonly MetricsCollector? _metrics;
     private readonly Dispatcher _dispatcher;
@@ -48,16 +48,19 @@ public partial class PerformanceViewModel : ObservableObject
     public ObservableCollection<EquityPoint> EquityCurve { get; } = new();
     public ObservableCollection<StrategyComparisonItem> StrategyComparison { get; } = new();
 
+    /// <param name="trades">Live settled-trade feed (the FX deal feed's
+    /// realised trades); when present, the metrics export carries per-account
+    /// rows for spreadsheets and monitoring.</param>
     /// <param name="metricsExportDirectory">Overrides the metrics export
     /// target directory (defaults to Documents); injectable for tests.</param>
     /// <param name="metrics">Live cycle telemetry (latency/errors) collected
-    /// by the growth runners; when present, the JSON export carries the
-    /// latency and error sections with real runtime samples.</param>
-    public PerformanceViewModel(PerformanceTracker tracker, TradeStore? tradeStore = null,
+    /// by the engines; when present, the JSON export carries the latency and
+    /// error sections with real runtime samples.</param>
+    public PerformanceViewModel(PerformanceTracker tracker, Func<IReadOnlyList<Trade>>? trades = null,
         string? metricsExportDirectory = null, MetricsCollector? metrics = null)
     {
         _tracker = tracker;
-        _tradeStore = tradeStore;
+        _trades = trades;
         _metricsExportDirectory = metricsExportDirectory;
         _metrics = metrics;
         _dispatcher = Dispatcher.CurrentDispatcher;
@@ -230,21 +233,21 @@ public partial class PerformanceViewModel : ObservableObject
     }
 
     /// <summary>Operational metrics export: per-account trades/wins/P&L to
-    /// CSV and JSON straight from the trade store (independent of the
+    /// CSV and JSON straight from the settled-trade feed (independent of the
     /// tracker's daily aggregation), for spreadsheets and monitoring.</summary>
     [RelayCommand]
     private void ExportMetrics()
     {
-        if (_tradeStore is null)
+        if (_trades is null)
         {
-            statusMessage = "Metrics export unavailable: no trade store attached";
+            statusMessage = "Metrics export unavailable: no trade feed attached";
             OnPropertyChanged(nameof(StatusMessage));
             return;
         }
 
         try
         {
-            var trades = _tradeStore.Trades;
+            var trades = _trades();
             var stamp = DateTime.UtcNow.ToString("yyyyMMdd");
             var exportDir = _metricsExportDirectory
                 ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);

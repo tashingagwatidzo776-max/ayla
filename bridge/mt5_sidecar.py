@@ -127,6 +127,10 @@ class BridgeHandlers:
             "margin": acc.margin,
             "margin_free": acc.margin_free,
             "leverage": acc.leverage,
+            # The venue's own demo/real verdict (0=demo, 1=contest, 2=real).
+            # Optional: an older terminal without it must not crash the
+            # payload — the C# gate fails closed when the field is absent.
+            "trade_mode": int(acc.trade_mode) if hasattr(acc, "trade_mode") else None,
         }
 
     def _symbol_or_404(self, symbol: str) -> Any:
@@ -153,6 +157,14 @@ class BridgeHandlers:
                 "spread_points": info.spread,
                 "digits": info.digits,
                 "trade_mode": int(info.trade_mode),
+                # Sizing ground truth: the engine must size in venue lots
+                # (contract size), not guessed units. E.g. XAUUSDmicro is
+                # "1 lot = 1 unit" with 0.1 step — 100× smaller than the
+                # standard-gold contract the old price heuristic assumed.
+                "volume_min": float(info.volume_min),
+                "volume_step": float(info.volume_step),
+                "volume_max": float(info.volume_max),
+                "contract_size": float(info.trade_contract_size),
             })
         return {"symbols": out}
 

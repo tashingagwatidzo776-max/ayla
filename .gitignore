@@ -27,7 +27,12 @@ coverage/
 # Session logs
 .wraplog.txt
 __pycache__/
+bridge/_sidecar*.log
 
 # Local tool installs and release-verification scratch
 .tools/
 bin-verify/
+
+# Portable MT5 terminal copied into the repo tree (never enters git history:
+# its terminal64.exe / MetaEditor64.exe exceed GitHub's 100 MB per-file limit)
+mt5_portable/

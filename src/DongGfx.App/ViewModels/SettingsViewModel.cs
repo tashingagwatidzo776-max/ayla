@@ -1,77 +1,29 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DongGfx.App.Infrastructure;
-using DongGfx.App.Services;
 using DongGfx.Core.Models;
-using DongGfx.Deriv;
 
 namespace DongGfx.App.ViewModels;
 
+/// <summary>
+/// Settings editor for an MT5/forex-only DON G FX: FX brain caps, the
+/// webhook, cycle-telemetry monitoring, logging and the demo/real flag the
+/// real-money gate reads. The Deriv surface (API token, app id, market
+/// symbol, stake/duration, LLM brain, growth plan) is gone with the binary
+/// options integration.
+/// </summary>
 public sealed partial class SettingsViewModel : ObservableObject
 {
     private readonly SettingsService _settingsService;
-    private readonly DerivClient _client;
-    private readonly DashboardViewModel _dashboard;
 
-    [ObservableProperty]
-    private string apiToken = "";
-
-    [ObservableProperty]
-    private string appId = AppSettings.DefaultAppId;
-
+    /// <summary>True = the configured account is a demo one. The real-money
+    /// gate reads this: demo passes straight through, real demands the
+    /// session unlock.</summary>
     [ObservableProperty]
     private bool isDemo = true;
 
-    // Primary-client new-platform identity (set by the Accounts tab's
-    // "Set as primary" switch; not user-edited here). Round-tripped through
-    // Load/BuildSettings so a later Settings save cannot wipe the switch.
-    [ObservableProperty]
-    private bool primaryNewPlatform;
-
-    [ObservableProperty]
-    private string primaryDerivAppId = "";
-
-    [ObservableProperty]
-    private string primaryDerivAccountId = "";
-
-    [ObservableProperty]
-    private string symbol = AppSettings.DefaultSymbol;
-
-    [ObservableProperty]
-    private string currency = AppSettings.DefaultCurrency;
-
-    [ObservableProperty]
-    private int durationMinutes = 5;
-
-    [ObservableProperty]
-    private decimal stake = 1.00m;
-
     [ObservableProperty]
     private bool autonomyEnabled;
-
-    [ObservableProperty]
-    private int decisionIntervalMinutes = 5;
-
-    [ObservableProperty]
-    private string llmBaseUrl = AppSettings.DefaultLlmBaseUrl;
-
-    [ObservableProperty]
-    private string llmModel = AppSettings.DefaultLlmModel;
-
-    [ObservableProperty]
-    private string llmApiKey = "";
-
-    [ObservableProperty]
-    private bool respectMarketHours;
-
-    [ObservableProperty]
-    private bool overlapsOnly;
-
-    [ObservableProperty]
-    private string webhookUrl = "";
-
-    [ObservableProperty]
-    private bool isDiscordWebhook = true;
 
     [ObservableProperty]
     private bool webhookOnTrade = true;
@@ -83,6 +35,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool webhookOnCircuitBreaker = true;
 
     [ObservableProperty]
+    private string webhookUrl = "";
+
+    [ObservableProperty]
+    private bool isDiscordWebhook = true;
+
+    [ObservableProperty]
     private bool metricsDigestEnabled = true;
 
     [ObservableProperty]
@@ -92,12 +50,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// fires (0 = alert disabled). Default mirrors AppSettings.</summary>
     [ObservableProperty]
     private int armStalenessHours = 4;
-
-    /// <summary>Hard ceiling on the manual trade surfaces' stake (null/
-    /// empty box = no extra limit). Editable alongside Stake; negatives are
-    /// dropped on build.</summary>
-    [ObservableProperty]
-    private decimal? manualMaxStake;
 
     /// <summary>Maximum volume (lots) for a single MT5 bridge order.
     /// 0 disables MT5 order placement entirely (fail-closed).</summary>
@@ -112,6 +64,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Fx brain equity floor (absolute). 0 = disabled.</summary>
     [ObservableProperty]
     private decimal mt5EquityFloor = 0m;
+
+    /// <summary>The MT5 symbol last selected in the Terminal's Market
+    /// Watch (fallback when FxSymbols is empty; the Terminal's selection
+    /// writes this through the quiet-save path).</summary>
+    [ObservableProperty]
+    private string fxSymbol = "XAUUSD";
 
     /// <summary>CSV of symbols the FX brain runs — one engine per entry.</summary>
     [ObservableProperty]
@@ -128,11 +86,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Pinned MT5 terminal64.exe (empty = auto-discover).</summary>
     [ObservableProperty]
     private string mt5TerminalPath = "";
-
-    /// <summary>One-click session start: auto-connect demo, arm the brain,
-    /// select R_100, start engines.</summary>
-    [ObservableProperty]
-    private bool startupProfile;
 
     [ObservableProperty]
     private int logLevel = 1;
@@ -171,41 +124,23 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool isBusy;
 
-    public SettingsViewModel(SettingsService settingsService, DerivClient client, DashboardViewModel dashboard)
+    public SettingsViewModel(SettingsService settingsService)
     {
         _settingsService = settingsService;
-        _client = client;
-        _dashboard = dashboard;
     }
 
     public void Load(AppSettings settings)
     {
-        ApiToken = settings.ApiToken;
-        AppId = settings.AppId;
         IsDemo = settings.IsDemo;
-        PrimaryNewPlatform = settings.PrimaryNewPlatform;
-        PrimaryDerivAppId = settings.PrimaryDerivAppId;
-        PrimaryDerivAccountId = settings.PrimaryDerivAccountId;
-        Symbol = settings.Symbol;
-        Currency = settings.Currency;
-        DurationMinutes = settings.DurationMinutes;
-        Stake = settings.Stake;
-        ManualMaxStake = settings.ManualMaxStake > 0 ? settings.ManualMaxStake : null;
+        AutonomyEnabled = settings.AutonomyEnabled;
         Mt5MaxLots = settings.Mt5MaxLots;
         Mt5DailyLossCap = settings.Mt5DailyLossCap;
         Mt5EquityFloor = settings.Mt5EquityFloor;
+        FxSymbol = settings.FxSymbol;
         FxSymbols = settings.FxSymbols;
         FxPortfolioMaxLots = settings.FxPortfolioMaxLots;
         NewsBlackoutMinutes = settings.NewsBlackoutMinutes;
         Mt5TerminalPath = settings.Mt5TerminalPath;
-        StartupProfile = settings.StartupProfile;
-        AutonomyEnabled = settings.AutonomyEnabled;
-        DecisionIntervalMinutes = settings.DecisionIntervalMinutes;
-        LlmBaseUrl = settings.LlmBaseUrl;
-        LlmModel = settings.LlmModel;
-        LlmApiKey = settings.LlmApiKey;
-        RespectMarketHours = settings.RespectMarketHours;
-        OverlapsOnly = settings.OverlapsOnly;
         WebhookUrl = settings.WebhookUrl;
         IsDiscordWebhook = settings.IsDiscordWebhook;
         WebhookOnTrade = settings.WebhookOnTrade;
@@ -221,37 +156,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Snapshots current editor fields into a settings object.</summary>
     public AppSettings BuildSettings() => new()
     {
-        ApiToken = ApiToken.Trim(),
-        AppId = string.IsNullOrWhiteSpace(AppId) ? AppSettings.DefaultAppId : AppId.Trim(),
         IsDemo = IsDemo,
-        PrimaryNewPlatform = PrimaryNewPlatform,
-        PrimaryDerivAppId = PrimaryDerivAppId,
-        PrimaryDerivAccountId = PrimaryDerivAccountId,
-        Symbol = string.IsNullOrWhiteSpace(Symbol) ? AppSettings.DefaultSymbol : Symbol.Trim(),
-        Currency = string.IsNullOrWhiteSpace(Currency) ? AppSettings.DefaultCurrency : Currency.Trim(),
-        DurationMinutes = Math.Max(1, DurationMinutes),
-        Stake = Math.Max(0.01m, Stake),
-        ManualMaxStake = Math.Max(0m, ManualMaxStake ?? 0m),
+        AutonomyEnabled = AutonomyEnabled,
         Mt5MaxLots = Math.Max(0m, Mt5MaxLots),
         Mt5DailyLossCap = Math.Max(0m, Mt5DailyLossCap),
         Mt5EquityFloor = Math.Max(0m, Mt5EquityFloor),
+        FxSymbol = string.IsNullOrWhiteSpace(FxSymbol) ? "XAUUSD" : FxSymbol.Trim(),
         FxSymbols = string.IsNullOrWhiteSpace(FxSymbols) ? "XAUUSDmicro" : FxSymbols,
         FxPortfolioMaxLots = Math.Max(0m, FxPortfolioMaxLots),
         NewsBlackoutMinutes = Math.Clamp(NewsBlackoutMinutes, 0, 120),
         Mt5TerminalPath = (Mt5TerminalPath ?? "").Trim(),
-        StartupProfile = StartupProfile,
-        AutonomyEnabled = AutonomyEnabled,
-        DecisionIntervalMinutes = Math.Max(1, DecisionIntervalMinutes),
-        LlmBaseUrl = string.IsNullOrWhiteSpace(LlmBaseUrl) ? AppSettings.DefaultLlmBaseUrl : LlmBaseUrl.Trim(),
-        LlmModel = string.IsNullOrWhiteSpace(LlmModel) ? AppSettings.DefaultLlmModel : LlmModel.Trim(),
-        LlmApiKey = LlmApiKey.Trim(),
-        MaxStake = 10.00m,
-        MaxConcurrentContracts = 1,
-        DailyLossCap = 50.00m,
-        MinConfidence = 0.60,
-        CooldownMinutesAfterLoss = 15,
-        RespectMarketHours = RespectMarketHours,
-        OverlapsOnly = OverlapsOnly,
         WebhookUrl = WebhookUrl?.Trim() ?? "",
         IsDiscordWebhook = IsDiscordWebhook,
         WebhookOnTrade = WebhookOnTrade,
@@ -263,73 +177,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         LogLevel = LogLevel
     };
 
-    /// <summary>Re-points the primary client (Dashboard, Trades and Brain
-    /// surfaces) at a hub account: verifies the account's type via the new
-    /// platform's discovery (mandatory — the OTP socket carries no
-    /// is_virtual, and an unverified verdict must never reach the gate),
-    /// re-wires the primary DerivClient to the account's transport, and
-    /// only then persists. The real-money gate is untouched — a real
-    /// account still refuses every real trade until the session unlock is
-    /// armed, on every surface.</summary>
     [RelayCommand]
-    private async Task SetPrimaryAsync(AccountConnection? account)
-    {
-        if (account is null || IsBusy)
-        {
-            return;
-        }
-
-        IsBusy = true;
-        try
-        {
-            var settings = BuildSettings();
-            account.ApplyToPrimarySettings(settings);
-
-            await _client.DisconnectAsync();
-            _client.IsVirtualOverride = null;
-
-            // Discovery IS the demo/real verification for a PAT primary.
-            // It must succeed before anything is persisted or connected:
-            // without it the gate would see an unverified account.
-            await PrimaryClientWiring.ApplyAsync(_client, settings);
-
-            await _client.ConnectAsync(
-                string.IsNullOrEmpty(settings.ApiToken) ? null : settings.ApiToken);
-            try
-            {
-                await _client.SubscribeTicksAsync(settings.Symbol);
-            }
-            catch
-            {
-                // Tick subscription is best-effort on switch; history and
-                // balance still confirm the account.
-            }
-
-            // Everything succeeded — persist and sync the editor.
-            _settingsService.Save(settings);
-            ApiToken = settings.ApiToken;
-            IsDemo = settings.IsDemo;
-            AppId = settings.AppId;
-            PrimaryNewPlatform = settings.PrimaryNewPlatform;
-            PrimaryDerivAppId = settings.PrimaryDerivAppId;
-            PrimaryDerivAccountId = settings.PrimaryDerivAccountId;
-
-            StatusMessage =
-                $"Primary account switched to {account.DisplayName}. " +
-                "Real accounts still require the session unlock before any real trade.";
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Switch failed: {ex.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
-
-    [RelayCommand]
-    /// <summary>Programmatic save used by the Terminal's switches (brain
+    /// <summary>Programmatic save used by the Terminal's switches (FX brain
     /// autonomy ON/OFF, symbol sync). Deliberately skips the real-money
     /// confirmation dialog: these are single-field flips of an already-saved
     /// configuration, never a first entry into real-money territory (the
@@ -340,7 +189,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             var settings = BuildSettings();
             await Task.Run(() => _settingsService.Save(settings));
-            ApplyToClient(settings);
             StatusMessage = "Settings updated from the Terminal.";
         }
         catch (Exception ex)
@@ -379,7 +227,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             var settings = BuildSettings();
             await Task.Run(() => _settingsService.Save(settings));
-            ApplyToClient(settings);
 
             StatusMessage = IsDemo ? "Settings saved (demo)." : "Settings saved (REAL MONEY — trade carefully).";
         }
@@ -419,69 +266,5 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             IsBusy = false;
         }
-    }
-
-    [RelayCommand]
-    private async Task ConnectAsync()
-    {
-        if (IsBusy)
-        {
-            return;
-        }
-
-        IsBusy = true;
-        try
-        {
-            var settings = BuildSettings();
-            ApplyToClient(settings);
-
-            await _client.DisconnectAsync();
-            // Authorize whenever a token is present — demo tokens authorize too,
-            // and that is what surfaces the account balance.
-            await _client.ConnectAsync(string.IsNullOrEmpty(ApiToken) ? null : ApiToken);
-            _dashboard.SetSymbol(settings.Symbol);
-
-            // Backfill the chart quickly, then stream live ticks.
-            try
-            {
-                var history = await _client.GetTicksHistoryAsync(settings.Symbol, 200);
-                _dashboard.AddHistory(history);
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Connected, but history failed: {ex.Message}";
-            }
-
-            try
-            {
-                await _client.SubscribeTicksAsync(settings.Symbol);
-                StatusMessage = string.IsNullOrEmpty(ApiToken)
-                    ? $"Connected to {settings.Symbol} (no token — live feed needs authorization)."
-                    : $"Connected and authorized on {settings.Symbol}.";
-            }
-            catch (DerivApiException ex) when (ex.Code == "InvalidSymbol")
-            {
-                StatusMessage =
-                    $"Connected, but live ticks for {settings.Symbol} need a token ({ex.Message}). " +
-                    "Paste your Deriv demo token above and press Connect.";
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Live feed unavailable: {ex.Message}";
-            }
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Connect failed: {ex.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
-
-    private void ApplyToClient(AppSettings settings)
-    {
-        _client.AppId = settings.AppId;
     }
 }

@@ -13,9 +13,11 @@ public sealed class WebhookService : IDisposable
     private readonly HttpClient _http;
     private bool _disposed;
 
-    public WebhookService()
+    /// <param name="timeout">HTTP timeout. Defaults to a fail-fast 10 s —
+    /// webhook failures must never hold up trading or the settings UI.</param>
+    public WebhookService(TimeSpan? timeout = null)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        _http = new HttpClient { Timeout = timeout ?? TimeSpan.FromSeconds(10) };
     }
 
     /// <summary>Webhook URL (Discord or Slack). Null/empty disables sending.</summary>

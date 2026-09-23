@@ -59,7 +59,7 @@ public class FxPortfolioTests
             var json = path.Contains("/positions") ? PositionsJson
                 : path.Contains("/account")
                     ? "{\"ok\":true,\"login\":201587365,\"server\":\"Deriv-Demo\",\"currency\":\"USD\"," +
-                       "\"balance\":2632.19,\"equity\":2632.19,\"margin_free\":2632.19,\"leverage\":1000}"
+                       "\"balance\":2632.19,\"equity\":2632.19,\"margin_free\":2632.19,\"leverage\":1000,\"trade_mode\":0}"
                     : "{\"ok\":true}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {

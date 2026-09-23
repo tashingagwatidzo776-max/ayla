@@ -22,7 +22,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DongGfx.Core\DongGfx.Core.csproj" />
-    <ProjectReference Include="..\..\src\DongGfx.Deriv\DongGfx.Deriv.csproj" />
   </ItemGroup>
 
 </Project>

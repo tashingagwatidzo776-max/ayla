@@ -5,9 +5,16 @@ using System.Text.Json;
 namespace DongGfx.App.Services;
 
 /// <summary>One tradable symbol with a live quote (bridge /symbols).</summary>
+/// <summary>One tradable symbol from the bridge. The volume/contract
+/// fields are the venue's sizing ground truth (e.g. XAUUSDmicro:
+/// contract_size=1, volume step 0.1 — not the standard-gold contract).
+/// Defaults keep older sidecars parseable; contract_size=0 means unknown.
+/// </summary>
 public sealed record Mt5Symbol(
     string Symbol, string Description, double? Bid, double? Ask,
-    int SpreadPoints, int Digits, int TradeMode);
+    int SpreadPoints, int Digits, int TradeMode,
+    double VolumeMin = 0, double VolumeStep = 0, double VolumeMax = 0,
+    double ContractSize = 0);
 
 /// <summary>One open MT5 position (bridge /positions).</summary>
 public sealed record Mt5Position(
@@ -25,10 +32,41 @@ public sealed record Mt5OrderResult(
     bool Ok, int Retcode, string RetcodeName, long? Deal, long? Order,
     double? Price, double? Volume, string Comment);
 
+/// <summary>One closed/open deal from the bridge history (/deals).</summary>
+public sealed record Mt5Deal(
+    long Ticket, long Order, string Symbol, string Side, double Volume,
+    double Price, double Profit, double Commission, double Swap, long Time);
+
 /// <summary>Snapshot of the account behind the bridge.</summary>
 public sealed record Mt5Account(
     long Login, string Server, string Currency,
-    double Balance, double Equity, double MarginFree, int Leverage);
+    double Balance, double Equity, double MarginFree, int Leverage,
+    int? TradeMode = null)
+{
+    /// <summary>The venue's own demo/real verdict from
+    /// <c>account_info().trade_mode</c>: true = verified virtual (demo),
+    /// false = verified real, null = absent or unknown value (old sidecar /
+    /// contest mode) — the real-money gate fails closed on null.</summary>
+    public bool? TradeModeVerifiedVirtual => TradeMode switch
+    {
+        0 => true,   // ACCOUNT_TRADE_MODE_DEMO
+        2 => false,  // ACCOUNT_TRADE_MODE_REAL
+        _ => null,   // 1 = contest, or field missing — refuse to verify
+    };
+
+    /// <summary>The demo/real verdict the real-money gate consumes: the
+    /// venue's <c>trade_mode</c> when the sidecar publishes it, else the
+    /// server-name/login heuristic — which may verify an account as demo
+    /// but NEVER as real. A real account without a venue verdict stays
+    /// unverified, so the gate fails closed.</summary>
+    public bool? GateVerifiedVirtual =>
+        TradeMode is not null
+            ? TradeModeVerifiedVirtual
+            : Server.Contains("demo", StringComparison.OrdinalIgnoreCase)
+              || Login > 500_000_000
+                ? true
+                : null;
+}
 
 /// <summary>
 /// Typed client for the loopback MT5 sidecar (bridge/mt5_sidecar.py).
@@ -108,7 +146,11 @@ public sealed class Mt5BridgeClient : IDisposable
             r.GetProperty("balance").GetDouble(),
             r.GetProperty("equity").GetDouble(),
             r.GetProperty("margin_free").GetDouble(),
-            r.GetProperty("leverage").GetInt32());
+            r.GetProperty("leverage").GetInt32(),
+            // Optional field: absent on an older sidecar → null (fails closed).
+            r.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number
+                ? tm.GetInt32()
+                : null);
     }
 
     /// <summary>Live bid/ask for a symbol, or null when unavailable.</summary>
@@ -125,12 +167,16 @@ public sealed class Mt5BridgeClient : IDisposable
         {
             list.Add(new Mt5Symbol(
                 e.GetProperty("symbol").GetString() ?? "",
-                e.TryGetProperty("description", out var d) ? d.GetString() : null,
+                e.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "",
                 e.TryGetProperty("bid", out var b) && b.ValueKind == JsonValueKind.Number ? b.GetDouble() : null,
                 e.TryGetProperty("ask", out var a) && a.ValueKind == JsonValueKind.Number ? a.GetDouble() : null,
                 e.TryGetProperty("spread_points", out var sp) && sp.ValueKind == JsonValueKind.Number ? sp.GetInt32() : 0,
                 e.TryGetProperty("digits", out var dg) && dg.ValueKind == JsonValueKind.Number ? dg.GetInt32() : 5,
-                e.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number ? tm.GetInt32() : 0));
+                e.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number ? tm.GetInt32() : 0,
+                e.TryGetProperty("volume_min", out var vmin) && vmin.ValueKind == JsonValueKind.Number ? vmin.GetDouble() : 0,
+                e.TryGetProperty("volume_step", out var vstep) && vstep.ValueKind == JsonValueKind.Number ? vstep.GetDouble() : 0,
+                e.TryGetProperty("volume_max", out var vmx) && vmx.ValueKind == JsonValueKind.Number ? vmx.GetDouble() : 0,
+                e.TryGetProperty("contract_size", out var csz) && csz.ValueKind == JsonValueKind.Number ? csz.GetDouble() : 0));
         }
         return list;
     }
@@ -224,13 +270,18 @@ public sealed class Mt5BridgeClient : IDisposable
             JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         using var resp = await _http.PostAsync("order", content, ct).ConfigureAwait(false);
         var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(raw);
-        var r = doc.RootElement;
         if (!resp.IsSuccessStatusCode)
         {
-            var error = r.TryGetProperty("error", out var e) ? e.GetString() : raw;
-            throw new Mt5BridgeException(error ?? "order refused");
+            // Refusals must surface as Mt5BridgeException even when the body
+            // is malformed (e.g. an HTML error page from something squatting
+            // on the port) — parse defensively, never let JSON plumbing
+            // failures replace the refusal itself.
+            throw new Mt5BridgeException(
+                TryErrorText(raw) ?? (string.IsNullOrWhiteSpace(raw) ? "order refused" : raw));
         }
+
+        using var doc = JsonDocument.Parse(raw);
+        var r = doc.RootElement;
 
         return new Mt5OrderResult(
             r.GetProperty("ok").GetBoolean(),
@@ -272,17 +323,71 @@ public sealed class Mt5BridgeClient : IDisposable
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
         using var resp = await _http.PostAsync($"close/{ticket}", content, ct).ConfigureAwait(false);
         var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(raw);
-        var r = doc.RootElement;
         if (!resp.IsSuccessStatusCode)
         {
-            throw new Mt5BridgeException(
-                r.TryGetProperty("error", out var e) ? e.GetString() ?? "close refused" : "close refused");
+            // Same defensive rule as PlaceOrderAsync: a malformed refusal
+            // body still becomes Mt5BridgeException, never JsonException.
+            throw new Mt5BridgeException(TryErrorText(raw) ?? "close refused");
         }
+
+        using var doc = JsonDocument.Parse(raw);
+        var r = doc.RootElement;
 
         return new Mt5OrderResult(
             r.GetProperty("ok").GetBoolean(), r.GetProperty("retcode").GetInt32(),
             r.GetProperty("retcode_name").GetString() ?? "", null, ticket, null, null, "");
+    }
+
+    /// <summary>Recent deal history (bridge /deals?days=N): the FX side's
+    /// realised P/L, used to feed the performance tracker and journal.</summary>
+    public async Task<IReadOnlyList<Mt5Deal>> GetDealsAsync(int days = 7, CancellationToken ct = default)
+    {
+        using var doc = await GetJson($"deals?days={days}", ct).ConfigureAwait(false);
+        if (doc is null || !doc.RootElement.TryGetProperty("deals", out var arr) || arr.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<Mt5Deal>();
+        }
+
+        var deals = new List<Mt5Deal>();
+        foreach (var d in arr.EnumerateArray())
+        {
+            deals.Add(new Mt5Deal(
+                d.GetProperty("ticket").GetInt64(),
+                d.TryGetProperty("order", out var o) && o.ValueKind == JsonValueKind.Number ? o.GetInt64() : 0,
+                d.GetProperty("symbol").GetString() ?? "",
+                d.TryGetProperty("side", out var s) ? s.GetString() ?? "" : "",
+                d.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0,
+                d.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number ? p.GetDouble() : 0,
+                d.TryGetProperty("profit", out var pr) && pr.ValueKind == JsonValueKind.Number ? pr.GetDouble() : 0,
+                d.TryGetProperty("commission", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0,
+                d.TryGetProperty("swap", out var sw) && sw.ValueKind == JsonValueKind.Number ? sw.GetDouble() : 0,
+                d.TryGetProperty("time", out var t) && t.ValueKind == JsonValueKind.Number ? t.GetInt64() : 0));
+        }
+
+        return deals;
+    }
+
+    /// <summary>The sidecar's "error" text from a refusal body, or null
+    /// when the body is not JSON, has no error key, or carries a non-string
+    /// value. Never throws — a malformed refusal body must not replace the
+    /// refusal itself as the exception.</summary>
+    private static string? TryErrorText(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("error", out var e) &&
+                e.ValueKind == JsonValueKind.String)
+            {
+                return e.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON body: the caller decides what message fits.
+        }
+        return null;
     }
 
     private async Task<JsonDocument?> GetJson(string path, CancellationToken ct)

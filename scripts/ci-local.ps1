@@ -50,6 +50,12 @@ Invoke-Step 'safety-audit' {
 Invoke-Step 'rail-traits' {
     python scripts/check_rail_traits.py
 }
+# The in-repo portable MT5 terminal (mt5_portable/, git-ignored) must still
+# match the SHA-256 manifest recorded from its source install. Skips cleanly
+# when the copy is absent; fails on any modified/missing/unexpected file.
+Invoke-Step 'mt5-copy integrity' {
+    & "$PSScriptRoot/mt5_copy_integrity.ps1"
+}
 
 # Merge preview: only meaningful when the branch has (or will have) a PR and
 # gh is authenticated. Missing gh or no PR is a skip, not a failure; a BLOCKED

@@ -29,22 +29,26 @@ public class PerformanceViewModelTests : IDisposable
     }
 
     private static Trade Trade(decimal profit, string source, string accountName, DateTimeOffset settledAt) => new(
-        Guid.NewGuid(), "frxEURUSD",
-        profit >= 0 ? Direction.Rise : Direction.Fall,
-        1.00m, "USD", 1.17, 1700000300, $"C-{Guid.NewGuid():N}",
-        profit >= 0 ? ContractStatus.Won : ContractStatus.Lost,
-        profit, 1.165, 1700000600, settledAt,
-        Guid.NewGuid(), accountName, source);
+        Id: Guid.NewGuid(),
+        Symbol: "EURUSD",
+        Stake: 1.00m,
+        Profit: profit,
+        SettledAt: settledAt,
+        Source: source,
+        AccountId: Guid.NewGuid(),
+        AccountName: accountName);
 
     [Fact]
-    public void ExportMetrics_WritesCsvAndJsonFromStore()
+    public void ExportMetrics_WritesCsvAndJsonFromDealFeed()
     {
-        var store = new TradeStore(_dir);
-        store.Add(Trade(0.90m, "Growth", "Alpha", DateTimeOffset.Now));
-        store.Add(Trade(-1.00m, "Growth", "Alpha", DateTimeOffset.Now));
+        var trades = new List<Trade>
+        {
+            Trade(0.90m, "FX", "Alpha", DateTimeOffset.Now),
+            Trade(-1.00m, "FX", "Alpha", DateTimeOffset.Now),
+        };
         var exportDir = Path.Combine(_dir, "export");
 
-        var vm = new PerformanceViewModel(_tracker, store, exportDir);
+        var vm = new PerformanceViewModel(_tracker, () => trades, exportDir);
         vm.ExportMetricsCommand.Execute(null);
 
         var stamp = DateTime.UtcNow.ToString("yyyyMMdd");
@@ -69,8 +73,7 @@ public class PerformanceViewModelTests : IDisposable
     [Fact]
     public void ExportMetrics_WithCollector_FillsLatencyAndErrorSections()
     {
-        var store = new TradeStore(_dir);
-        store.Add(Trade(0.90m, "Growth", "Alpha", DateTimeOffset.Now));
+        var trades = new List<Trade> { Trade(0.90m, "FX", "Alpha", DateTimeOffset.Now) };
 
         var collector = new MetricsCollector();
         collector.RecordLatency(120, "Alpha", DateTimeOffset.UtcNow);
@@ -78,7 +81,7 @@ public class PerformanceViewModelTests : IDisposable
         collector.RecordError("Alpha", DateTimeOffset.UtcNow);
 
         var exportDir = Path.Combine(_dir, "export");
-        var vm = new PerformanceViewModel(_tracker, store, exportDir, collector);
+        var vm = new PerformanceViewModel(_tracker, () => trades, exportDir, collector);
         vm.ExportMetricsCommand.Execute(null);
 
         var json = File.ReadAllText(Path.Combine(exportDir, $"tf_metrics_{DateTime.UtcNow:yyyyMMdd}.json"));
@@ -149,8 +152,8 @@ public class PerformanceViewModelTests : IDisposable
         var today = DateTimeOffset.Now;
         var alpha = Guid.NewGuid();
         _tracker.RecordTrade(new Trade(
-            Guid.NewGuid(), "frxEURUSD", Direction.Rise, 1m, "USD", 1.17, 1, "C-1",
-            ContractStatus.Won, 0.9m, 1.165, 2,            today, alpha, "Alpha", "Growth"));
+            Id: Guid.NewGuid(), Symbol: "EURUSD", Stake: 1m, Profit: 0.9m,
+            SettledAt: today, Source: "FX", AccountId: alpha, AccountName: "Alpha"));
         _tracker.RecordTrade(Trade(-0.5m, "Growth", "Beta", today));
 
         var vm = new PerformanceViewModel(_tracker);
@@ -223,8 +226,8 @@ public class PerformanceViewModelTests : IDisposable
         for (var i = 0; i < 3; i++)
         {
             _tracker.RecordTrade(new Trade(
-                Guid.NewGuid(), "frxEURUSD", Direction.Rise, 1m, "USD", 1.17, 1, "C-1",
-                ContractStatus.Won, 0.25m, 1.165, 2, today, soloId, "Solo", "Growth"));
+                Id: Guid.NewGuid(), Symbol: "EURUSD", Stake: 1m, Profit: 0.25m,
+                SettledAt: today, Source: "Growth", AccountId: soloId, AccountName: "Solo"));
         }
 
         var vm = new PerformanceViewModel(_tracker);

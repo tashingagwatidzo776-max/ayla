@@ -10,7 +10,7 @@ namespace DongGfx.App.Infrastructure;
 /// trade settlements, growth targets, circuit breaker trips, and errors.
 /// Falls back to taskbar flash on older Windows versions.
 /// </summary>
-public sealed class NotificationService : IDisposable
+public class NotificationService : IDisposable
 {
     private readonly string _toastExePath;
     private bool _disposed;
@@ -122,7 +122,9 @@ public sealed class NotificationService : IDisposable
         return true;
     }
 
-    private void SendToast(string title, string body, string severity)
+    /// <summary>Virtual so tests can capture toasts without spawning
+    /// PowerShell; production sends via a background powershell.exe.</summary>
+    internal virtual void SendToast(string title, string body, string severity)
     {
         try
         {
