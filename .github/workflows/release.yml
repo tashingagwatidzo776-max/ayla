@@ -1,9 +1,16 @@
 name: Release
 
-# Cuts a release when a vX.Y.Z tag is pushed: builds the win-x64
-# self-contained publish, zips it as the exact asset name AutoUpdater
-# looks for (win-x64 .zip), and creates the GitHub release the app's
-# update check and Terminal build-badge read.
+# Cuts a release when a vX.Y.Z tag is pushed. Honors the repo's publish
+# contract (see scripts/publish_exe.ps1, which this mirrors):
+#   1. A release may not ship until the tag's real-money gate drill
+#      (gate-drill.yml) completed green — the drill re-rehearses the gate
+#      lifecycle on every v* tag, in parallel with this workflow.
+#   2. The shipped binary is a single-file, self-contained win-x64
+#      DongGfx.exe stamped <tag-without-v>+<sha> (what the window title,
+#      About box, update check and Terminal build badge all read).
+#   3. The asset is DongGfx-win-x64.zip — AutoUpdater selects any
+#      *win-x64*.zip, extracts it, and copies the files over the app dir,
+#      so the zip carries exactly the single-file exe.
 
 on:
   push:
@@ -17,16 +24,17 @@ on:
 
 permissions:
   contents: write # create the release and upload the asset
+  actions: read   # poll the gate-drill run for this tag
 
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v7
       with:
-        # workflow_dispatch releases from an existing tag; tag pushes are
+        # workflow_dispatch re-cuts from an existing tag; tag pushes are
         # already checked out at the tag.
         ref: ${{ inputs.tag || github.ref }}
 
@@ -34,42 +42,82 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
-    - name: Publish win-x64 (self-contained, single version stamp)
+    - name: Wait for the tag's gate drill to go green
       shell: pwsh
       env:
-        # Tag name for both triggers (tag push => github.ref_name, dispatch => input).
+        GH_TOKEN: ${{ github.token }}
+        TAG_NAME: ${{ inputs.tag || github.ref_name }}
+      run: |
+        # Mirror of publish_exe.ps1's release block: no publish from a tag
+        # whose real-money gate drill failed or never ran. Both workflows
+        # trigger on the tag push, so poll until the drill registers and
+        # completes; a failed drill fails this release.
+        $deadline = (Get-Date).AddMinutes(20)
+        while ((Get-Date) -lt $deadline) {
+          $runs = gh run list --workflow gate-drill.yml --branch "$env:TAG_NAME" `
+                    --limit 5 --json status,conclusion | ConvertFrom-Json
+          if (@($runs | Where-Object { $_.conclusion -eq 'success' }).Count -gt 0) {
+            Write-Host "Gate drill green on $env:TAG_NAME - release may proceed."
+            exit 0
+          }
+          $running = @($runs | Where-Object { $_.status -in 'queued', 'in_progress' }).Count
+          $failed  = @($runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -ne 'success' }).Count
+          if ($running -eq 0 -and $failed -gt 0 -and @($runs).Count -gt 0) {
+            throw "Gate drill FAILED on $env:TAG_NAME - release blocked (real-money gate convention)."
+          }
+          Write-Host "Waiting for gate-drill on $env:TAG_NAME (runs so far: $(@($runs).Count))..."
+          Start-Sleep -Seconds 20
+        }
+        throw "Timed out waiting for a green gate drill on $env:TAG_NAME - release blocked."
+
+    - name: Publish single-file win-x64 (same flags as publish_exe.ps1)
+      shell: pwsh
+      env:
         TAG_NAME: ${{ inputs.tag || github.ref_name }}
         COMMIT_SHA: ${{ github.sha }}
       run: |
-        # The publish stamp the running build shows and the update check
-        # compares against: tag without the 'v' + short sha (e.g. 0.7.0+a1b2c3d).
+        # Stamp identity: tag without the 'v' + short sha (e.g. 0.7.0+a1b2c3d).
         $version = $env:TAG_NAME.TrimStart('v')
         $sha = $env:COMMIT_SHA.Substring(0, 7)
+        # Clean output dir first: dotnet publish merges into whatever is
+        # already there; a shipped exe must contain only this run's bytes.
+        if (Test-Path publish) { Remove-Item -Recurse -Force publish }
         dotnet publish src/DongGfx.App/DongGfx.App.csproj `
-          -c Release -r win-x64 --self-contained true `
-          -p:InformationalVersion="$version+$sha" `
-          -o publish
+          -c Release -r win-x64 -o publish --self-contained true `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:EnableCompressionInSingleFile=true `
+          -p:InformationalVersion="$version+$sha"
+        if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)" }
 
-    - name: Verify the stamp landed in the binary
+    - name: Verify the stamp landed in the exe
       shell: pwsh
       run: |
-        $exe = "publish/DongGfx.dll"  # on windows-latest the slash form resolves fine
+        # Single-file publish: the identity lives in the apphost exe.
+        $exe = "publish/DongGfx.exe"
+        if (-not (Test-Path $exe)) { throw "publish/DongGfx.exe missing - unexpected publish layout" }
         $info = (Get-Item $exe).VersionInfo
         Write-Host "InformationalVersion: $($info.InformationalVersion)"
         if (-not $info.InformationalVersion) { throw "publish stamp missing" }
 
-    - name: Zip as the asset AutoUpdater selects (win-x64.zip)
+    - name: Zip the exe as the AutoUpdater asset (win-x64.zip)
       shell: pwsh
       run: |
-        Compress-Archive -Path publish/* -DestinationPath DongGfx-win-x64.zip
+        Compress-Archive -Path publish/DongGfx.exe -DestinationPath DongGfx-win-x64.zip
         Get-Item DongGfx-win-x64.zip | Select-Object Name, Length
 
     - name: Create the release and upload the asset
+      shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
-        TAG: ${{ inputs.tag || github.ref_name }}
-      shell: pwsh
+        TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        COMMIT_SHA: ${{ github.sha }}
       run: |
-        gh release create "$env:TAG" DongGfx-win-x64.zip `
-          --title "DON G FX $env:TAG" `
-          --notes "Automated release of $env:TAG. The app's AutoUpdater picks up DongGfx-win-x64.zip; the Terminal build badge flips to 'up to date' once this build is running."
+        $sha = $env:COMMIT_SHA.Substring(0, 7)
+        gh release create "$env:TAG_NAME" DongGfx-win-x64.zip `
+          --title "DON G FX $env:TAG_NAME" `
+          --notes ("Automated release of {0} (commit {1}).`n`n" +
+                  "- Shipped from a commit whose real-money gate drill passed.`n" +
+                  "- Asset: DongGfx-win-x64.zip (single-file, self-contained — what the app's AutoUpdater installs).`n" +
+                  "- The Terminal build badge flips to 'up to date' once this build is running.") `
+          -f commit=$sha
