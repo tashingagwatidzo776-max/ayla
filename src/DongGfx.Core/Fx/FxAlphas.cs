@@ -128,7 +128,7 @@ public static class FxMomentum
 
     /// <summary>Volatility breakout: compression (low bandwidth) followed by
     /// expansion in a direction — the classic squeeze play.</summary>
-    public sealed class VolatilityBreakout(int period = 20, double squeezePct = 0.004) : IFxAlpha
+    public sealed class VolatilityBreakout(int period = 20) : IFxAlpha
     {
         public string Name => "vol-breakout";
         public FxRegime[] Regimes { get; } = [FxRegime.Range, FxRegime.Trend];
