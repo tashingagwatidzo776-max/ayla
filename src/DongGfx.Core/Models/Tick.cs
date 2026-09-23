@@ -1,7 +1,7 @@
 namespace DongGfx.Core.Models;
 
 /// <summary>
-/// A single market tick as delivered by the Deriv ticks subscription.
+/// A single market tick as delivered by the MT5 bridge quote feed.
 /// Epoch is milliseconds since Unix epoch; Quote is the mid price.
 /// </summary>
 public sealed record Tick(

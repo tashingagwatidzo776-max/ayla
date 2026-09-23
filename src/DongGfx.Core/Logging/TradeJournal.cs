@@ -243,10 +243,15 @@ public sealed class TradeJournal : IDisposable
         };
     }
 
+    /// <summary>Raised (on the logging thread) whenever an entry is queued —
+    /// the journal viewer subscribes to auto-refresh instead of polling.</summary>
+    public event Action<JournalEntry>? EntryAdded;
+
     private void Enqueue(JournalEntry entry)
     {
         if (_disposed) return;
         _pending.Enqueue(entry);
+        EntryAdded?.Invoke(entry);
     }
 
     /// <summary>Writes any pending buffered entries to disk immediately

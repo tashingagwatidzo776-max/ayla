@@ -5,7 +5,6 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DongGfx.App.Infrastructure;
-using DongGfx.Core;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
 
@@ -19,7 +18,6 @@ namespace DongGfx.App.ViewModels;
 public partial class JournalViewModel : ObservableObject
 {
     private readonly TradeJournal _journal;
-    private readonly TradeStore _store;
     private readonly Func<bool> _killSwitch;
     private readonly Dispatcher _dispatcher;
 
@@ -48,20 +46,20 @@ public partial class JournalViewModel : ObservableObject
 
     public IReadOnlyList<string> Categories { get; } = new[]
     {
-        "ALL", "BRAIN_DECISION", "TRADE_EXECUTION", "TRADE_SETTLEMENT",
-        "GROWTH_STATE", "ACCOUNT_EVENT", "REAL_MONEY_UNLOCK_ARMED",
-        "REAL_MONEY_UNLOCK_STALE"
+        "ALL", "FX_ORDER", "FX_RISK", "FX_MODE", "FX_SCORECARD",
+        "MT5_ORDER", "TRADE_SETTLEMENT",
+        "REAL_MONEY_UNLOCK_ARMED", "REAL_MONEY_UNLOCK_STALE"
     };
 
-    public JournalViewModel(TradeJournal journal, TradeStore store, Func<bool> killSwitch)
+    public JournalViewModel(TradeJournal journal, Func<bool> killSwitch)
     {
         _journal = journal;
-        _store = store;
         _killSwitch = killSwitch;
         _dispatcher = Dispatcher.CurrentDispatcher;
 
-        // Auto-refresh when a new trade is recorded.
-        _store.TradeAdded += OnTradeAdded;
+        // Auto-refresh when the FX engine, the supervisor or the deal feed
+        // writes an entry (the journal is the app's single append path).
+        _journal.EntryAdded += OnEntryAdded;
     }
 
     [RelayCommand]
@@ -157,11 +155,7 @@ public partial class JournalViewModel : ObservableObject
         {
             return entry.Category switch
             {
-                "BRAIN_DECISION" => FormatBrainDecision(entry),
-                "TRADE_EXECUTION" => FormatTradeExecution(entry),
                 "TRADE_SETTLEMENT" => FormatTradeSettlement(entry),
-                "GROWTH_STATE" => FormatGrowthState(entry),
-                "ACCOUNT_EVENT" => FormatAccountEvent(entry),
                 "REAL_MONEY_UNLOCK_ARMED" => FormatRealMoneyUnlockArmed(entry),
                 "REAL_MONEY_UNLOCK_STALE" => FormatRealMoneyUnlockStale(entry),
                 _ => entry.Details
@@ -173,55 +167,16 @@ public partial class JournalViewModel : ObservableObject
         }
     }
 
-    private string FormatBrainDecision(JournalEntry entry)
-    {
-        // Simple formatting without System.Text.Json dependency
-        var details = entry.Details;
-        var direction = ExtractJsonValue(details, "Direction");
-        var stake = ExtractJsonValue(details, "Stake");
-        var confidence = ExtractJsonValue(details, "Confidence");
-        var reasoning = ExtractJsonValue(details, "Reasoning");
-
-        return $"🧠 {direction} | Stake: ${stake} | Conf: {confidence} | {reasoning}";
-    }
-
     private string FormatTradeSettlement(JournalEntry entry)
     {
         var details = entry.Details;
         var won = ExtractJsonValue(details, "Won");
         var profit = ExtractJsonValue(details, "Profit");
-        var newBankroll = ExtractJsonValue(details, "NewBankroll");
+        var contractId = ExtractJsonValue(details, "ContractId");
 
         var icon = won == "true" ? "✅" : "❌";
-        return $"{icon} {(won == "true" ? "WIN" : "LOSS")} | Profit: ${profit} | Bankroll: ${newBankroll}";
-    }
-
-    private string FormatGrowthState(JournalEntry entry)
-    {
-        var details = entry.Details;
-        var state = ExtractJsonValue(details, "State");
-        var bankroll = ExtractJsonValue(details, "Bankroll");
-        var lossStreak = ExtractJsonValue(details, "LossStreak");
-
-        return $"💰 {state} | Bankroll: ${bankroll} | Loss streak: {lossStreak}";
-    }
-
-    private string FormatTradeExecution(JournalEntry entry)
-    {
-        var details = entry.Details;
-        var status = ExtractJsonValue(details, "Status");
-        var error = ExtractJsonValue(details, "Error");
-
-        return $"📤 {status}" + (string.IsNullOrEmpty(error) ? "" : $" | Error: {error}");
-    }
-
-    private string FormatAccountEvent(JournalEntry entry)
-    {
-        var details = entry.Details;
-        var eventName = ExtractJsonValue(details, "Event");
-        var detailsText = ExtractJsonValue(details, "Details");
-
-        return $"👤 {eventName}" + (string.IsNullOrEmpty(detailsText) ? "" : $" | {detailsText}");
+        var leg = string.IsNullOrEmpty(contractId) ? "" : $" | deal {contractId}";
+        return $"{icon} {(won == "true" ? "WIN" : "LOSS")} | P/L: {profit}{leg}";
     }
 
     /// <summary>The moment real trading became possible this session —
@@ -333,26 +288,27 @@ public partial class JournalViewModel : ObservableObject
                    $"Win rate: {stats.WinRate:P0} | Period: {stats.PeriodStart:MM/dd HH:mm} - {stats.PeriodEnd:HH:mm}";
     }
 
-    /// <summary>Auto-refresh the journal when a new trade is recorded.</summary>
-    private void OnTradeAdded(Trade trade)
+    /// <summary>Auto-refresh the viewer when any journal entry lands.</summary>
+    private void OnEntryAdded(JournalEntry entry)
     {
         void Update()
         {
-            // Prepend the new entry if it matches the current filter.
-            if (FilterCategory != "ALL" && FilterCategory != "TRADE_SETTLEMENT")
+            // Honour the current filter; an unmatched entry is simply not
+            // prepended (the next manual Refresh re-evaluates everything).
+            if (FilterCategory != "ALL" && entry.Category != FilterCategory)
                 return;
 
-            if (SelectedAccountId != null && trade.AccountId != SelectedAccountId)
+            if (FilterDateFrom.HasValue && entry.Timestamp < FilterDateFrom.Value)
+                return;
+            if (FilterDateTo.HasValue && entry.Timestamp > FilterDateTo.Value.AddDays(1))
                 return;
 
             Entries.Insert(0, new JournalEntryViewModel
             {
-                Timestamp = trade.SettledAt.ToLocalTime().ToString("HH:mm:ss.fff"),
-                AccountId = (trade.AccountId ?? Guid.Empty).ToString()[..8],
-                Category = "TRADE_SETTLEMENT",
-                Details = trade.IsWin
-                    ? $"✅ WIN | Profit: ${trade.Profit:0.##} | {trade.Symbol} {trade.Direction} stake {trade.Stake:0.##}"
-                    : $"❌ LOSS | Profit: ${trade.Profit:0.##} | {trade.Symbol} {trade.Direction} stake {trade.Stake:0.##}"
+                Timestamp = entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"),
+                AccountId = entry.AccountId.ToString()[..8],
+                Category = entry.Category,
+                Details = FormatDetails(entry)
             });
 
             // Cap the list size.

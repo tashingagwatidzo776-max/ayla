@@ -19,7 +19,7 @@ public sealed class TrayIconService : IDisposable
         _window = window;
 
         _icon = new System.Windows.Forms.NotifyIcon();
-        _icon.Text = "DON G FX — Deriv Trader";
+        _icon.Text = "DON G FX — MT5 Trader";
         _icon.Visible = false;
 
         // Prefer the brand icon (packed as a WPF resource so it survives
@@ -87,7 +87,7 @@ public sealed class TrayIconService : IDisposable
         _icon.Visible = true;
         _icon.ShowBalloonTip(
             2000,
-            "DON G FX — Deriv Trader",
+            "DON G FX — MT5 Trader",
             "Running in background. Double-click tray icon to restore.",
             System.Windows.Forms.ToolTipIcon.Info);
     }

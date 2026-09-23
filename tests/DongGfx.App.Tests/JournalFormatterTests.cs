@@ -18,7 +18,6 @@ namespace DongGfx.App.Tests;
 public class JournalFormatterTests : IDisposable
 {
     private readonly string _dir;
-    private readonly TradeStore _store;
     private readonly TradeJournal _journal;
     private readonly JournalViewModel _vm;
 
@@ -26,9 +25,8 @@ public class JournalFormatterTests : IDisposable
     {
         _dir = Path.Combine(Path.GetTempPath(), $"tf_jfmt_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_dir);
-        _store = new TradeStore(_dir);
         _journal = new TradeJournal(Path.Combine(_dir, "journal"));
-        _vm = new JournalViewModel(_journal, _store, () => false);
+        _vm = new JournalViewModel(_journal, () => false);
     }
 
     public void Dispose()

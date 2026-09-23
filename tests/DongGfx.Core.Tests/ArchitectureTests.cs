@@ -29,7 +29,7 @@ public class ArchitectureTests
     [Fact]
     public void Core_DoesNotReferenceUiAssemblies()
     {
-        var referenced = ReadAssemblyReferences(typeof(DongGfx.Core.Brain.GrowthPlan).Assembly.Location);
+        var referenced = ReadAssemblyReferences(typeof(DongGfx.Core.Models.AppSettings).Assembly.Location);
 
         var violations = referenced
             .Intersect(BannedUiAssemblies, StringComparer.OrdinalIgnoreCase)
@@ -48,7 +48,7 @@ public class ArchitectureTests
         // Guard for the guard: if the reader ever returns an empty set the
         // boundary test above would pass vacuously. DongGfx.Core always references
         // at least the base runtime assemblies.
-        var referenced = ReadAssemblyReferences(typeof(DongGfx.Core.Brain.GrowthPlan).Assembly.Location);
+        var referenced = ReadAssemblyReferences(typeof(DongGfx.Core.Models.AppSettings).Assembly.Location);
 
         Assert.NotEmpty(referenced);
         Assert.Contains(referenced, r =>

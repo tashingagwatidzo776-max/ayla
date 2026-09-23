@@ -19,7 +19,6 @@ public class JournalViewModelTests : IDisposable
 {
     private readonly string _dir;
     private readonly Guid _accountId;
-    private readonly TradeStore _store;
     private readonly TradeJournal _journal;
 
     public JournalViewModelTests()
@@ -27,7 +26,6 @@ public class JournalViewModelTests : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), $"tf_journalvm_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_dir);
         _accountId = Guid.NewGuid();
-        _store = new TradeStore(_dir);
         _journal = new TradeJournal(_dir);
     }
 
@@ -53,7 +51,7 @@ public class JournalViewModelTests : IDisposable
             JsonSerializer.Serialize(entry) + Environment.NewLine);
     }
 
-    private JournalViewModel CreateVm() => new(_journal, _store, () => false);
+    private JournalViewModel CreateVm() => new(_journal, () => false);
 
     // ─── Date range filtering ─────────────────────────────
 

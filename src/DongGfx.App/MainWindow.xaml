@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:DongGfx.App.Controls"
         xmlns:infra="clr-namespace:DongGfx.App.Infrastructure"
-        Title="DON G FX — Deriv Binary-Options Trader"
+        Title="DON G FX — MT5 Forex &amp; CFD Trader"
         Icon="assets/logo.ico"
         Width="1280" Height="820"
         MinWidth="1024" MinHeight="680"
@@ -24,7 +24,7 @@
                            RenderOptions.BitmapScalingMode="HighQuality" VerticalAlignment="Center" />
                     <TextBlock Text="DON G FX" FontSize="20" FontWeight="Bold"
                                Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" />
-                    <TextBlock Text="  Deriv Binary-Options Trader · Trade | Analyze | Profit"
+                    <TextBlock Text="  MT5 Forex &amp; CFD Trader · Trade | Analyze | Profit"
                                FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"
                                VerticalAlignment="Center" />
                 </StackPanel>
@@ -90,20 +90,7 @@
                             <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="Brain: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding Brain.StatusText}" />
-                                </StackPanel>
-                            </Border>
-                            <!-- Growth drill-down: the pill doubles as the account selector;
-                                 the chosen account's session history shows in the portfolio card below. -->
-                            <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
-                                    ToolTip="Pick an account to drill into its growth sessions">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="Growth: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding Dashboard.GrowthStatus}" Margin="0,0,6,0" />
-                                    <ComboBox ItemsSource="{Binding Dashboard.AccountSummaries}"
-                                              SelectedItem="{Binding Dashboard.SelectedAccount}"
-                                              MinWidth="110" FontSize="11"
-                                              Visibility="{Binding Dashboard.HasGrowthAccounts, Converter={StaticResource BoolToVis}}" />
+                                    <TextBlock Text="{Binding TerminalVm.BrainStateText}" />
                                 </StackPanel>
                             </Border>
                             <Border Style="{StaticResource StatusPill}">
@@ -138,7 +125,7 @@
                                         <TextBlock Text="{Binding Dashboard.CombinedGrowthPnlText}" FontFamily="Consolas" FontWeight="SemiBold" />
                                     </StackPanel>
                                 </Border>
-                                <TextBlock Text="all growth accounts, today" VerticalAlignment="Center"
+                                <TextBlock Text="FX realised, today" VerticalAlignment="Center"
                                            Foreground="{StaticResource TextSecondaryBrush}" />
                             </StackPanel>
                             <ItemsControl ItemsSource="{Binding Dashboard.RiskRailAlerts}" Margin="0,6,0,0">
@@ -151,12 +138,6 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <!-- Account drill-down: session history, stakes and win streak for the
-                                 account picked in the Growth pill, straight from the trade store. -->
-                            <TextBlock Text="{Binding Dashboard.AccountDetailsText}"
-                                       Margin="0,8,0,0" FontFamily="Consolas" FontSize="11"
-                                       TextWrapping="Wrap"
-                                       Foreground="{StaticResource TextSecondaryBrush}" />
                         </StackPanel>
                     </Border>
 
@@ -228,34 +209,10 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="API token (demo)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <PasswordBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,10"
-                                     infra:PasswordBoxHelper.BoundPassword="{Binding SettingsVm.ApiToken, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="App ID" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="2" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.AppId, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="Demo account" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
                         <CheckBox Grid.Row="3" Grid.Column="1" Margin="0,0,0,10"
                                   Content="Demo (real money requires explicit opt-in + risk guardrails)"
                                   IsChecked="{Binding SettingsVm.IsDemo}" />
-
-                        <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Text="MARKET" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Symbol" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="5" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.Symbol, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Currency" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="6" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.Currency, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Duration (min)" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="7" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.DurationMinutes, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Stake" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
-                            <TextBox Width="120" Text="{Binding SettingsVm.Stake, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
-                            <TextBlock Text="Manual max stake" Style="{StaticResource FieldLabel}" Margin="16,0,8,0" VerticalAlignment="Center"
-                                       ToolTip="Hard ceiling on the Trades tab's manual stake and the Brain tab's cycles (blank/0 = no extra limit beyond the growth risk engine's own MaxStake). Keeps a mistyped stake from reaching a real account." />
-                            <TextBox Width="120" Text="{Binding SettingsVm.ManualMaxStake, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" VerticalAlignment="Center" />
-                        </StackPanel>
 
                         <TextBlock Grid.Row="9" Grid.ColumnSpan="2" Text="AUTONOMY" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
                         <TextBlock Grid.Row="10" Grid.Column="0" Text="Autonomy" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
@@ -277,33 +234,6 @@
                                    ToolTip="Absolute equity floor: the FX brain stops when MT5 equity falls below this. 0 = disabled." />
                         <TextBox Grid.Row="10" Grid.Column="6" Grid.ColumnSpan="1" Width="120" HorizontalAlignment="Right" Margin="0,0,0,10"
                                  Text="{Binding SettingsVm.Mt5EquityFloor, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
-                        <CheckBox Grid.Row="11" Grid.Column="2" Grid.ColumnSpan="2" Margin="16,0,0,10"
-                                  Content="One-click session start (connect demo, arm brain, start engines)"
-                                  IsChecked="{Binding SettingsVm.StartupProfile}" />
-                        <TextBox Grid.Row="11" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.DecisionIntervalMinutes, UpdateSourceTrigger=PropertyChanged}" />
-
-                        <TextBlock Grid.Row="12" Grid.ColumnSpan="2" Text="LLM BRAIN" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
-                        <TextBlock Grid.Row="13" Grid.Column="0" Text="Base URL" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="13" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.LlmBaseUrl, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="14" Grid.Column="0" Text="Model" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="14" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.LlmModel, UpdateSourceTrigger=PropertyChanged}" />
-                        <TextBlock Grid.Row="15" Grid.Column="0" Text="API key" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <TextBox Grid.Row="15" Grid.Column="1" Margin="0,0,0,10"
-                                 Text="{Binding SettingsVm.LlmApiKey, UpdateSourceTrigger=PropertyChanged}" />
-
-                        <TextBlock Grid.Row="16" Grid.ColumnSpan="2" Text="MARKET HOURS" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
-                        <TextBlock Grid.Row="17" Grid.Column="0" Text="Respect hours" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <CheckBox Grid.Row="17" Grid.Column="1" Margin="0,0,0,10"
-                                  Content="Only trade during active forex sessions"
-                                  IsChecked="{Binding SettingsVm.RespectMarketHours}" />
-                        <TextBlock Grid.Row="18" Grid.Column="0" Text="Overlaps only" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                        <CheckBox Grid.Row="18" Grid.Column="1" Margin="0,0,0,10"
-                                  Content="Only trade during high-liquidity overlap windows (London/NY)"
-                                  IsChecked="{Binding SettingsVm.OverlapsOnly}" />
-
                         <TextBlock Grid.Row="19" Grid.ColumnSpan="2" Text="WEBHOOKS" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
                         <TextBlock Grid.Row="20" Grid.Column="0" Text="Webhook URL" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
                         <TextBox Grid.Row="20" Grid.Column="1" Margin="0,0,0,4"
@@ -325,7 +255,7 @@
                         <TextBlock Grid.Row="23" Grid.Column="0" Text="Events" Style="{StaticResource FieldLabel}" VerticalAlignment="Top" />
                         <StackPanel Grid.Row="23" Grid.Column="1" Margin="0,0,0,10">
                             <CheckBox Content="Trade settlements" IsChecked="{Binding SettingsVm.WebhookOnTrade}" Margin="0,0,0,4" />
-                            <CheckBox Content="Growth milestones (target/floor)" IsChecked="{Binding SettingsVm.WebhookOnMilestone}" Margin="0,0,0,4" />
+                            <CheckBox Content="Milestones (target/floor)" IsChecked="{Binding SettingsVm.WebhookOnMilestone}" Margin="0,0,0,4" />
                             <CheckBox Content="Circuit breaker events" IsChecked="{Binding SettingsVm.WebhookOnCircuitBreaker}" />
                         </StackPanel>
 
@@ -351,7 +281,6 @@
 
                         <StackPanel Grid.Row="30" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,18,0,0">
                             <Button Content="Save settings" Command="{Binding SettingsVm.SaveCommand}" Margin="0,0,10,0" />
-                            <Button Content="Connect" Style="{StaticResource GhostButton}" Command="{Binding SettingsVm.ConnectCommand}" />
                         </StackPanel>
                         <TextBlock Grid.Row="31" Grid.ColumnSpan="2" Margin="0,10,0,0"
                                    Text="{Binding SettingsVm.StatusMessage}"
@@ -380,574 +309,12 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Header="Accounts &amp; Growth">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />   <!-- add-account card -->
-                        <RowDefinition Height="Auto" />   <!-- PAT split band -->
-                        <RowDefinition Height="Auto" />   <!-- OAuth sign-in band -->
-                        <RowDefinition Height="Auto" />   <!-- accounts header -->
-                        <RowDefinition Height="220" />    <!-- accounts grid -->
-                        <RowDefinition Height="Auto" />   <!-- go-live readiness panel -->
-                        <RowDefinition Height="Auto" />   <!-- growth plan card -->
-                        <RowDefinition Height="Auto" />   <!-- growth grid header -->
-                        <RowDefinition Height="190" />    <!-- growth grid -->
-                        <RowDefinition Height="Auto" />   <!-- locked real-money banners -->
-                        <RowDefinition Height="Auto" />   <!-- in-tab unlock panel -->
-                        <RowDefinition Height="Auto" />   <!-- stale-unlock banners -->
-                        <RowDefinition Height="Auto" />   <!-- gave-up banners -->
-                        <RowDefinition Height="Auto" />   <!-- governor latch banner -->
-                        <RowDefinition Height="Auto" />   <!-- governor warning banner -->
-                        <RowDefinition Height="Auto" />   <!-- activity header -->
-                        <RowDefinition Height="*" />      <!-- activity log -->
-                        <RowDefinition Height="Auto" />   <!-- intraday pnl header -->
-                        <RowDefinition Height="180" />    <!-- intraday pnl curve -->
-                    </Grid.RowDefinitions>
-
-                    <!-- ── Add account card ─────────────────────────── -->
-                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
-                        <StackPanel>
-                            <TextBlock Text="MULTI-ACCOUNT CONNECT" Style="{StaticResource SectionTitle}" />
-                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
-                                       Text="Each token is its own Deriv account (one WebSocket each). Paste a demo token per row, then Connect all — every account streams its own feed and balance." />
-                            <WrapPanel Margin="0,10,0,0">
-                                <StackPanel Width="430" Margin="0,0,12,0">
-                                    <TextBlock Text="API token (demo)" Style="{StaticResource FieldLabel}" />
-                                    <PasswordBox infra:PasswordBoxHelper.BoundPassword="{Binding AccountsVm.NewToken, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="130" Margin="0,0,12,0">
-                                    <TextBlock Text="Label (optional)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding AccountsVm.NewLabel, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="120" Margin="0,0,12,0">
-                                    <TextBlock Text="Symbol" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding AccountsVm.NewSymbol, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,12,0">
-                                    <TextBlock Text="Dur (min)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding AccountsVm.NewDurationMinutes, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,12,0">
-                                    <TextBlock Text="Budget ($)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding AccountsVm.NewBudget, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="120" Margin="0,0,12,0">
-                                    <TextBlock Text="Brain" Style="{StaticResource FieldLabel}" />
-                                    <ComboBox ItemsSource="{Binding AccountsVm.AvailableBrains}" SelectedItem="{Binding AccountsVm.NewBrainKey}" />
-                                </StackPanel>
-                                <StackPanel Width="220" Margin="0,0,12,0">
-                                    <TextBlock Text="Ensemble voters (Brain:weight)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding AccountsVm.NewEnsembleConfig, UpdateSourceTrigger=PropertyChanged}"
-                                             ToolTip="Only used when Brain = Ensemble. Example: Growth:1.5 TrendFollowing Breakout:0.5 — blank means all brains vote equally." />
-                                </StackPanel>
-                                <StackPanel Width="150" Margin="0,0,12,0">
-                                    <TextBlock Text="Token kind" Style="{StaticResource FieldLabel}" />
-                                    <CheckBox Content="PAT (new platform)" IsChecked="{Binding AccountsVm.NewIsPat}"
-                                              ToolTip="Tick when the token was created on developers.deriv.com as a Personal Access Token. Classic tokens from app.deriv.com keep this unticked." />
-                                </StackPanel>
-                                <StackPanel Width="220" Margin="0,0,12,0">
-                                    <StackPanel.Style>
-                                        <Style TargetType="StackPanel">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding AccountsVm.NewIsPat}" Value="True">
-                                                    <Setter Property="Visibility" Value="Visible" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </StackPanel.Style>
-                                    <TextBlock Text="PAT App ID (from your app registration)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding AccountsVm.NewDerivAppId, UpdateSourceTrigger=PropertyChanged}"
-                                             ToolTip="The Deriv application id shown on your developers.deriv.com app registration — required for PAT auth, not the token itself." />
-                                </StackPanel>
-                            </WrapPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button Content="＋ Add account" Command="{Binding AccountsVm.AddAccountCommand}" />
-                                <Button Content="Connect all" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding AccountsVm.ConnectAllCommand}" />
-                                <Button Content="Disconnect all" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding AccountsVm.DisconnectAllCommand}" />
-                                <Button Content="Export" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding AccountsVm.ExportAccountsCommand}" />
-                                <Button Content="Import" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding AccountsVm.ImportAccountsCommand}" />
-                                <TextBlock Text="{Binding AccountsVm.StatusMessage}" Margin="12,0,0,0"
-                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── PAT split guided flow (hidden when every account has its own token) -->
-                    <Border Grid.Row="1" Grid.ColumnSpan="2" BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,10,0,0"
-                            Background="#14FF9800">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding AccountsVm.HasSharedToken}" Value="True">
-                                        <Setter Property="Visibility" Value="Visible" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Border.Style>
-                        <StackPanel>
-                            <TextBlock Text="SPLIT SHARED TOKEN — one token per account stops the reconnect churn"
-                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <TextBlock Text="{Binding AccountsVm.SharedTokens}" Margin="0,4,0,0"
-                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                            <TextBlock Text="1. Create a fresh token in Deriv (app.deriv.com → Settings → API token) for the account below.  2. Paste it and Verify.  3. Apply — the account keeps its id and history."
-                                       Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button Content="Detect shared tokens" Style="{StaticResource GhostButton}"
-                                        Command="{Binding AccountsVm.DetectSharedTokensCommand}" />
-                                <TextBlock Text="{Binding AccountsVm.SplitAccountLabel}" Margin="10,0,0,0" FontWeight="SemiBold"
-                                           VerticalAlignment="Center" Foreground="{StaticResource TextPrimaryBrush}" />
-                                <TextBox Text="{Binding AccountsVm.SplitNewToken, UpdateSourceTrigger=PropertyChanged}" Width="280"
-                                         Margin="10,0,0,0" ToolTip="The fresh per-account token you created in Deriv" />
-                                <Button Content="Verify" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding AccountsVm.VerifySplitTokenCommand}" />
-                                <Button Content="Apply" Margin="8,0,0,0"
-                                        Command="{Binding AccountsVm.ApplySplitTokenCommand}" />
-                            </StackPanel>
-                            <TextBlock Text="{Binding AccountsVm.SplitVerifyResult}" Margin="0,6,0,0"
-                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── OAuth 2.0 sign-in (second sign-in path; PAT stays default) -->
-                    <Border Grid.Row="2" Grid.ColumnSpan="2" BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,10,0,0"
-                            Background="#142196F3">
-                        <StackPanel>
-                            <TextBlock Text="SIGN IN WITH DERIV (OAUTH 2.0) — no token pasting; browser consent; short-lived session"
-                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <TextBlock Text="Requires a one-time OAuth app registration at developers.deriv.com (OAuth type) — paste its client id here, and whitelist the redirect URI below exactly. The sign-in opens your browser, and Deriv's consent page returns a session token that expires in about an hour — but it renews itself from the refresh token, so sessions survive restarts. PATs remain the default."
-                                       Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                <TextBox Text="{Binding AccountsVm.OAuthClientId, UpdateSourceTrigger=PropertyChanged}" Width="240"
-                                         ToolTip="The client id from your OAuth-type app registration at developers.deriv.com" />
-                                <Button Content="Sign in with Deriv" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding AccountsVm.SignInWithDerivCommand}" />
-                            </StackPanel>
-                            <TextBlock Text="Redirect URI to whitelist (copy exactly): http://localhost:53175/callback"
-                                       Margin="0,6,0,0" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12" FontFamily="Consolas" />
-                            <TextBlock Text="{Binding AccountsVm.OAuthStatus}" Margin="0,6,0,0"
-                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── Connected accounts grid ──────────────────── -->
-                    <TextBlock Grid.Row="3" Text="CONNECTED ACCOUNTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
-                    <DataGrid Grid.Row="4" ItemsSource="{Binding AccountsVm.Accounts}" AutoGenerateColumns="False"
-                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True" Margin="0,0,0,10">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Account" Width="140" Binding="{Binding DisplayName}" />
-                            <DataGridTextColumn Header="Login" Width="110" Binding="{Binding LoginIdText}" />
-                            <DataGridTextColumn Header="Status" Width="110" Binding="{Binding StatusText}" />
-                            <DataGridTextColumn Header="Circuit" Width="110" Binding="{Binding CircuitStatus}" />
-                            <DataGridTextColumn Header="Balance" Width="110" Binding="{Binding BalanceText}" />
-                            <DataGridTextColumn Header="Symbol" Width="110" Binding="{Binding Config.Symbol}" />
-                            <DataGridTextColumn Header="Mode" Width="60" Binding="{Binding Config.IsDemo}" />
-                            <DataGridTextColumn Header="Brain" Width="100" Binding="{Binding Config.BrainKey}" />
-                            <DataGridTemplateColumn Header="Actions" Width="*" MinWidth="210">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Button Margin="0,0,6,0" Padding="12,3"
-                                                    Command="{Binding DataContext.AccountsVm.ConnectAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}">
-                                                <Button.Style>
-                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
-                                                        <Setter Property="Content" Value="Connect" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                                                <Setter Property="Content" Value="Disconnect" />
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                                                <Setter Property="Content" Value="…" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
-                                            <Button Margin="0,0,6,0" Padding="12,3"
-                                                    Command="{Binding DataContext.SettingsVm.SetPrimaryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}">
-                                                <Button.Style>
-                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
-                                                        <Setter Property="Content" Value="Set as primary" />
-                                                        <Setter Property="ToolTip" Value="Point the Dashboard, Trades and Brain surfaces at this account. Real accounts stay locked behind the session unlock." />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                                                <Setter Property="Content" Value="…" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
-                                            <Button Margin="0,0,6,0" Padding="12,3"
-                                                    Command="{Binding DataContext.AccountsVm.TogglePauseCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}">
-                                                <Button.Style>
-                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
-                                                        <Setter Property="Content" Value="Pause" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsPaused}" Value="True">
-                                                                <Setter Property="Content" Value="Resume" />
-                                                                <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
-                                            <Button Margin="0,0,6,0" Padding="12,3"
-                                                    Command="{Binding DataContext.AccountsVm.ResetCircuitBreakerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}">
-                                                <Button.Style>
-                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
-                                                        <Setter Property="Content" Value="Reset" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsDegraded}" Value="False">
-                                                                <Setter Property="Visibility" Value="Collapsed" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
-                                            <Button Padding="12,3"
-                                                    Command="{Binding DataContext.AccountsVm.RemoveAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}">
-                                                <Button.Style>
-                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
-                                                        <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
-                                                        <Setter Property="Content" Value="Remove" />
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                        </DataGrid.Columns>
-                    </DataGrid>
-
-                    <!-- ── Go-live readiness (real trading) ────────── -->
-                    <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0,0,0,10">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="GO-LIVE READINESS" Style="{StaticResource SectionTitle}" />
-                                <TextBlock Margin="12,0,0,0" VerticalAlignment="Center" FontFamily="Consolas" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextSecondaryBrush}"
-                                           Text="{Binding GrowthVm.FirstBlocker, TargetNullValue='✓ READY FOR REAL TRADING'}" />
-                            </StackPanel>
-                            <ItemsControl ItemsSource="{Binding GrowthVm.ReadinessChecks}" Margin="0,8,0,0">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Orientation="Horizontal" Margin="0,2">
-                                            <TextBlock Width="22" FontFamily="Consolas" FontWeight="Bold" Text="✗">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsMet}" Value="True">
-                                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-                                                                <Setter Property="Text" Value="✓" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                            <TextBlock Width="92" FontWeight="SemiBold" VerticalAlignment="Center" Text="{Binding Name}" />
-                                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"
-                                                       TextWrapping="Wrap" Text="{Binding Text}" />
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── Growth plan card ──────────────────────────── -->
-                    <Border Grid.Row="6" Style="{StaticResource Card}" Margin="0,0,0,10">
-                        <StackPanel>
-                            <TextBlock Text="GROWTH ENGINES — the second brain ($5 challenge)" Style="{StaticResource SectionTitle}" />
-                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"
-                                       Text="Deterministic rules brain — no LLM or API key needed. Every connected demo account gets a session that starts at the budget below and replays today's trades, so it survives restarts. Stakes are a % of the bankroll with a ×2 recovery ladder; the session stops at the floor or daily target." />
-                            <WrapPanel Margin="0,10,0,0">
-                                <StackPanel Width="90" Margin="0,0,10,0">
-                                    <TextBlock Text="Budget ($)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.Budget, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="90" Margin="0,0,10,0">
-                                    <TextBlock Text="Risk / trade (%)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.RiskPercent, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="90" Margin="0,0,10,0">
-                                    <TextBlock Text="Daily target (%)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.TargetPercent, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="90" Margin="0,0,10,0">
-                                    <TextBlock Text="Stop at floor (%)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.FloorPercent, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="100" Margin="0,0,10,0">
-                                    <TextBlock Text="Recovery steps" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.RecoverySteps, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Interval (min)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.IntervalMinutes, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="90" Margin="0,0,10,0">
-                                    <TextBlock Text="Failure backoff (s)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.FailureBackoffSeconds, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Max restarts" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.MaxAutoRestarts, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Restart delay (s)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.RestartBaseDelaySeconds, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Restart ×3.0" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.RestartBackoffFactor, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="90" Margin="0,0,10,0">
-                                    <TextBlock Text="Portfolio DD cap ($)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding GrowthVm.PortfolioDrawdownCapText, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                            </WrapPanel>
-                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,6,0,0"
-                                       Text="Portfolio DD cap: stop every engine when the combined daily P&amp;L of all accounts breaches −cap (blank = off). Manual start re-arms it." />
-                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button Content="Save plan" Style="{StaticResource GhostButton}" Command="{Binding GrowthVm.SavePlanCommand}" />
-                                <Button Content="▶ Start all engines" Margin="8,0,0,0" Command="{Binding GrowthVm.StartAllCommand}" />
-                                <Button Content="■ Stop all engines" Style="{StaticResource DangerButton}" Margin="8,0,0,0" Command="{Binding GrowthVm.StopAllCommand}" />
-                                <Border Style="{StaticResource StatusPill}" Margin="12,0,0,0" VerticalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Portfolio P&amp;L: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                        <TextBlock Text="{Binding GrowthVm.CombinedPnlText}" FontFamily="Consolas" FontWeight="SemiBold" />
-                                    </StackPanel>
-                                </Border>
-                                <TextBlock Text="{Binding GrowthVm.StatusMessage}" Margin="12,0,0,0"
-                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── Growth runners grid ───────────────────────── -->                     <TextBlock Grid.Row="7" Text="RUNNERS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />                     <DataGrid Grid.Row="7" ItemsSource="{Binding GrowthVm.Rows}" AutoGenerateColumns="False"
-                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Account" Width="130" Binding="{Binding DisplayName}" />
-                            <DataGridTextColumn Header="Login" Width="110" Binding="{Binding Connection.LoginIdText}" />
-                            <DataGridTextColumn Header="Status" Width="120" Binding="{Binding Connection.StatusText}" />
-                            <DataGridTextColumn Header="Balance" Width="100" Binding="{Binding Connection.BalanceText}" />
-                            <DataGridTextColumn Header="Type" Width="90" Binding="{Binding Connection.VerifiedText}" />
-                            <DataGridTextColumn Header="Budget" Width="70" Binding="{Binding BudgetText}" />
-                            <DataGridTextColumn Header="Bankroll" Width="110" Binding="{Binding Runner.BankrollText}" />
-                            <DataGridTemplateColumn Header="P&amp;L today" Width="110">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <controls:PnlSparkline Points="{Binding PnlSeries}" Height="22" Margin="0,2" />
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Session" Width="150" Binding="{Binding Runner.SessionStateText}" />
-                            <DataGridTemplateColumn Header="Auto-restart" Width="170">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="{Binding RestartText}" VerticalAlignment="Center"
-                                                       Foreground="{StaticResource TextSecondaryBrush}" />
-                                            <Button Content="↻ Restart" Margin="8,0,0,0" Padding="10,2"
-                                                    Command="{Binding DataContext.GrowthVm.RestartAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding Connection.Config.Id}">
-                                                <Button.Style>
-                                                    <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsGaveUp}" Value="True">
-                                                                <Setter Property="Visibility" Value="Visible" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Last activity" Width="*" Binding="{Binding Runner.LastActivity}" />
-                        </DataGrid.Columns>
-                    </DataGrid>
-
-                    <!-- ── Locked real-money banners (session unlock not armed) ── -->                     <ItemsControl Grid.Row="9" ItemsSource="{Binding GrowthVm.LockedRealAccountBanners}" Margin="0,0,0,4">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
-                                        CornerRadius="4" Padding="10,6" Margin="0,0,0,6">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
-                                            <Run Text="🔒 " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" is a real-money account, " /><Run Text="{Binding VerificationText, Mode=OneWay}" FontStyle="Italic" /><Run Text=" — real trading stays locked until the session unlock is armed (app restarts always re-lock)." />
-                                        </TextBlock>
-                                        <Button Content="🔓 Unlock…" Margin="10,0,0,0" Padding="12,3"
-                                                Command="{Binding DataContext.GrowthVm.ShowUnlockPanelCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <!-- ── In-tab real-money unlock panel ────────── -->                     <Border Grid.Row="10" Margin="0,0,0,4" CornerRadius="4" Padding="12,10"
-                            Background="#22FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                                <Setter Property="Grid.Row" Value="7" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding GrowthVm.IsUnlockPanelVisible}" Value="True">
-                                        <Setter Property="Visibility" Value="Visible" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Border.Style>
-                        <StackPanel>
-                            <TextBlock Text="⚠ UNLOCK REAL-MONEY TRADING — THIS SESSION" FontWeight="Bold" Margin="0,0,0,4" />
-                            <TextBlock Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,6"
-                                       Text="App restarts always re-lock real accounts. The phrase below arms the session unlock for every listed account AND the Brain/Trades tabs' manual surfaces. Nothing trades unless each account is also API-verified as real and not paused/kill-switched." />
-                            <ItemsControl ItemsSource="{Binding GrowthVm.UnlockableAccounts}" Margin="0,0,0,8">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Orientation="Horizontal" Margin="0,1">
-                                            <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
-                                                <Run Text="• " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" — " /><Run Text="{Binding VerificationText, Mode=OneWay}" FontStyle="Italic" Foreground="{StaticResource TextSecondaryBrush}" />
-                                            </TextBlock>
-                                            <Button Content="✓ Fix flag → demo" Margin="10,0,0,0" Padding="10,2" FontSize="11"
-                                                    Visibility="{Binding CanFixFlag, Converter={StaticResource BoolToVis}}"
-                                                    Command="{Binding DataContext.GrowthVm.FixAccountFlagCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding AccountId}" />
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            <TextBlock Text="{Binding GrowthVm.UnlockPanelNotice}" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,6"
-                                       Visibility="{Binding GrowthVm.UnlockPanelNotice, Converter={StaticResource NullToVisibility}}" />
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="Type the phrase to unlock: " VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBox Width="220" Text="{Binding GrowthVm.UnlockPhrase, UpdateSourceTrigger=PropertyChanged}" FontFamily="Consolas" />
-                                <Button Content="Arm unlock" Margin="8,0,0,0" Padding="14,3"
-                                        Command="{Binding GrowthVm.ConfirmUnlockCommand}" />
-                                <Button Content="Cancel" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding GrowthVm.CancelUnlockCommand}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── Stale-unlock banners (armed past the staleness threshold) ── -->                     <ItemsControl Grid.Row="11" ItemsSource="{Binding GrowthVm.StaleUnlockBanners}" Margin="0,0,0,4">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
-                                        CornerRadius="4" Padding="10,6" Margin="0,0,0,6">
-                                    <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
-                                        <Run Text="⏰ " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text="'s real-money unlock has been armed for " /><Run Text="{Binding ArmedForText, Mode=OneWay}" FontWeight="Bold" /><Run Text=" (threshold " /><Run Text="{Binding ThresholdText, Mode=OneWay}" FontStyle="Italic" /><Run Text=") — real trading is live. Re-arm deliberately or let the session end clear it." />
-                                    </TextBlock>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <!-- ── Gave-up banners (auto-restart budget exhausted) ── -->                     <ItemsControl Grid.Row="12" ItemsSource="{Binding GrowthVm.GaveUpBanners}" Margin="0,0,0,4">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
-                                        CornerRadius="4" Padding="10,6" Margin="0,0,0,6">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
-                                            <Run Text="⚠ " /><Run Text="{Binding AccountName, Mode=OneWay}" FontWeight="Bold" /><Run Text=" stopped after repeated broker failures — auto-restarts exhausted. Start it manually to try again." />
-                                        </TextBlock>
-                                        <Button Content="↻ Restart" Margin="10,0,0,0" Padding="12,3"
-                                                Command="{Binding DataContext.GrowthVm.RestartAccountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding AccountId}" />
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <!-- ── Portfolio governor latch banner ────────── -->
-                    <Border Grid.Row="13" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
-                            Background="#33FF5C5C" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding GrowthVm.IsGovernorTripped}" Value="True">
-                                        <Setter Property="Visibility" Value="Visible" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Border.Style>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding GrowthVm.GovernorBannerText}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            <Button Content="✓ Re-arm governor" Margin="10,0,0,0" Padding="12,3"
-                                    Command="{Binding GrowthVm.RearmGovernorCommand}" />
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── Portfolio governor warning banner ──────── -->
-                    <Border Grid.Row="14" Margin="0,0,0,4" CornerRadius="4" Padding="10,6"
-                            Background="#33FFC85C" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                                <Style.Triggers>
-                                    <MultiDataTrigger>
-                                        <MultiDataTrigger.Conditions>
-                                            <Condition Binding="{Binding GrowthVm.IsGovernorWarned}" Value="True" />
-                                            <Condition Binding="{Binding GrowthVm.IsGovernorTripped}" Value="False" />
-                                        </MultiDataTrigger.Conditions>
-                                        <Setter Property="Visibility" Value="Visible" />
-                                    </MultiDataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Border.Style>
-                        <TextBlock Text="{Binding GrowthVm.GovernorWarningText}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                    </Border>
-
-                    <!-- ── Activity log ──────────────────────────────── -->
-                    <TextBlock Grid.Row="15" Text="ACTIVITY LOG" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="16" Style="{StaticResource Card}" Padding="10">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding GrowthVm.ActivityLog}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding}" FontFamily="Consolas" FontSize="12"
-                                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2" TextWrapping="Wrap" />
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </Border>
-
-                    <!-- ── Intraday P&amp;L curve (per account, cumulative) ───── -->
-                    <TextBlock Grid.Row="17" Text="INTRADAY P&amp;L — CUMULATIVE PER ACCOUNT" Style="{StaticResource SectionTitle}" Margin="4,10,0,6" />
-                    <Border Grid.Row="18" Style="{StaticResource Card}" Padding="6">
-                        <controls:PnlCurveControl x:Name="PnlCurve" />
-                    </Border>
-                </Grid>
-            </TabItem>
-
             <!-- ════════════════ TERMINAL — our own MT5-style trading desk ════════════════ -->
             <TabItem Header="Terminal">
                 <Grid Margin="12" DataContext="{Binding TerminalVm}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <!-- account bar -->
-                        <RowDefinition Height="Auto" />
-                        <!-- sign-in band -->
                         <RowDefinition Height="*" />
                         <!-- main content -->
                     </Grid.RowDefinitions>
@@ -992,58 +359,8 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                         Command="{Binding EmergencyStopCommand}" />
                             </StackPanel>
                         </DockPanel>
-                    </Border>
-
-                    <!-- ── Sign-in band: accounts + PAT/OAuth + bridge, in-tab ── -->
-                    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="10" Margin="0,6,0,0">
-                        <StackPanel>
-                            <DockPanel>
-                                <TextBlock Text="ACCOUNTS" Style="{StaticResource SectionTitle}"
-                                           VerticalAlignment="Center" Margin="0,0,14,0" />
-                                <TextBlock Text="{Binding Mt5BridgeLine}" FontFamily="Consolas" FontSize="11"
-                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                                <TextBox Text="{Binding TerminalTokenInput, UpdateSourceTrigger=PropertyChanged}"
-                                         FontFamily="Consolas" FontSize="11" MinWidth="240" Margin="18,0,6,0"
-                                         VerticalAlignment="Center"
-                                         ToolTip="Paste a Deriv token (PAT) to sign in — verified via discovery, one row per token" />
-                                <Button Content="Sign in with token" Command="{Binding TerminalImportTokenCommand}"
-                                        Margin="0,0,6,0" VerticalAlignment="Center" />
-                                <Button Content="Sign in with Deriv (OAuth)" Style="{StaticResource GhostButton}"
-                                        Command="{Binding TerminalSignInOAuthCommand}" VerticalAlignment="Center" />
-                            </DockPanel>
-                            <TextBlock Text="{Binding TerminalSignInStatus}" FontSize="11"
-                                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0"
-                                       TextTrimming="CharacterEllipsis" />
-                            <ItemsControl ItemsSource="{Binding TerminalAccounts}" Margin="0,6,0,0">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,4">
-                                            <DockPanel LastChildFill="False">
-                                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
-                                                    <TextBlock Text="{Binding Kind}" FontWeight="Bold" FontSize="10" />
-                                                </Border>
-                                                <TextBlock Text="{Binding Label}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0" />
-                                                <TextBlock Text="{Binding StatusText}" FontFamily="Consolas" FontSize="11"
-                                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                                                <TextBlock Text="{Binding BalanceText}" FontFamily="Consolas" FontSize="11"
-                                                           Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                                                <TextBlock Text="{Binding VerifiedText}" FontFamily="Consolas" FontSize="11"
-                                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                                                <Button Content="Connect" DockPanel.Dock="Right" Command="{Binding DataContext.TerminalConnectCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                        CommandParameter="{Binding}" Margin="6,0,0,0" />
-                                                <Button Content="Disconnect" DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
-                                                        Command="{Binding DataContext.TerminalDisconnectAccountCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                        CommandParameter="{Binding}" />
-                                            </DockPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ── MT5-style workspace ── -->
-                    <DockPanel Grid.Row="2" Margin="0,10,0,0">
+                    </Border>                    <!-- ── MT5-style workspace ── -->
+                    <DockPanel Grid.Row="1" Margin="0,10,0,0">
                         <!-- Status bar (bottom) -->
                         <Border DockPanel.Dock="Bottom" Background="{DynamicResource CardBrush}"
                                 Padding="10,6" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
@@ -1283,48 +600,10 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                             <Grid Grid.Column="4">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
-                                <!-- Binary order ticket -->
-                                <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
-                                    <StackPanel>
-                                        <TextBlock Text="NEW ORDER — BINARY" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
-                                        <TextBlock Text="{Binding SelectedSymbol.DisplayName}" FontWeight="Bold" FontSize="15" />
-                                        <TextBlock Text="{Binding QuoteText}" FontFamily="Consolas" FontSize="22"
-                                                   Foreground="{StaticResource AccentBrush}" Margin="0,2,0,8" />
-                                        <UniformGrid Columns="2">
-                                            <RadioButton Content="RISE ▲" GroupName="dir" IsChecked="{Binding IsRise, Mode=TwoWay}"
-                                                         Margin="0,0,6,6" Padding="6,4" Foreground="{StaticResource AccentBrush}" />
-                                            <RadioButton Content="FALL ▼" GroupName="dir" IsChecked="{Binding IsFall, Mode=TwoWay}"
-                                                         Margin="6,0,0,6" Padding="6,4" Foreground="{StaticResource DangerBrush}" />
-                                        </UniformGrid>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="Stake" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
-                                            <TextBox Grid.Column="1" Text="{Binding Stake, TargetNullValue=''}" Margin="4,0"
-                                                     Padding="4,3" />
-                                            <TextBlock Grid.Column="2" Text="Minutes" Style="{StaticResource FieldLabel}"
-                                                       VerticalAlignment="Center" />
-                                            <TextBox Grid.Column="3" Text="{Binding DurationMinutes, TargetNullValue=''}" Margin="4,0"
-                                                     Padding="4,3" />
-                                        </Grid>
-                                        <Button Content="PLACE ORDER" Command="{Binding PlaceOrderCommand}" Margin="0,10,0,4"
-                                                FontWeight="Bold" />
-                                        <TextBlock Text="{Binding TicketStatus}" TextWrapping="Wrap"
-                                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0" />
-                                        <TextBlock Text="{Binding BrainStateText}" TextWrapping="Wrap" FontSize="11"
-                                                   Foreground="{StaticResource WarningBrush}" Margin="0,2,0,0" />
-                                    </StackPanel>
-                                </Border>
-
                                 <!-- MT5 order card -->
-                                <Border Grid.Row="1" Style="{StaticResource Card}">
+                                <Border Grid.Row="0" Style="{StaticResource Card}">
                                     <StackPanel>
                                         <DockPanel Margin="0,0,0,8">
                                             <TextBlock Text="MT5 ORDER (CFD/FOREX)" Style="{StaticResource SectionTitle}" DockPanel.Dock="Left" />
@@ -1355,181 +634,15 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                                 Margin="0,10,0,4" FontWeight="Bold" />
                                         <TextBlock Text="{Binding Mt5OrderStatus}" TextWrapping="Wrap"
                                                    Foreground="{StaticResource TextSecondaryBrush}" />
+                                        <TextBlock Text="{Binding TicketStatus}" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0" />
+                                        <TextBlock Text="{Binding BrainStateText}" TextWrapping="Wrap" FontSize="11"
+                                                   Foreground="{StaticResource WarningBrush}" Margin="0,2,0,0" />
                                     </StackPanel>
                                 </Border>
                             </Grid>
                         </Grid>
                     </DockPanel>
-                </Grid>
-            </TabItem>
-
-            <TabItem Header="Trades">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Summary + manual demo trade -->
-                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="DAILY SUMMARY" Style="{StaticResource SectionTitle}" />
-                                <TextBlock Text="{Binding Trades.SummaryText}" FontSize="16" FontWeight="Bold" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="Direction:" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                                <ComboBox Width="100" Margin="0,0,10,0"
-                                          ItemsSource="{Binding Trades.Directions}"
-                                          SelectedItem="{Binding Trades.SelectedDirection}" />
-                                <Button Command="{Binding Trades.PlaceDemoTradeCommand}"
-                                        IsEnabled="{Binding Trades.CanTrade}">
-                                    <Button.Style>
-                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                            <Setter Property="Content" Value="Place demo trade" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding Trades.IsBusy}" Value="True">
-                                                    <Setter Property="Content" Value="Placing…" />
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding Trades.IsRealModeBlocked}" Value="True">
-                                                    <Setter Property="Content" Value="🔒 Real account locked" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
-                            </StackPanel>
-                        </Grid>
-                    </Border>
-
-                    <TextBlock Grid.Row="1" Margin="4,0,0,8" TextWrapping="Wrap"
-                               Text="{Binding Trades.StatusMessage}"
-                               Foreground="{StaticResource TextSecondaryBrush}" />
-
-                    <!-- Trade history -->
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding Trades.Trades}">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Acct" Width="80"
-                                                Binding="{Binding AccountName, TargetNullValue=primary}" />
-                            <DataGridTextColumn Header="Source" Width="70"
-                                                Binding="{Binding Source, TargetNullValue=—}" />
-                            <DataGridTextColumn Header="Settled" Width="80"
-                                                Binding="{Binding SettledAt, StringFormat=HH:mm}" />
-                            <DataGridTextColumn Header="Symbol" Width="*"
-                                                Binding="{Binding Symbol}" />
-                            <DataGridTextColumn Header="Direction" Width="70"
-                                                Binding="{Binding Direction}" />
-                            <DataGridTextColumn Header="Stake" Width="70"
-                                                Binding="{Binding Stake, StringFormat=0.##}" />
-                            <DataGridTextColumn Header="Outcome" Width="80"
-                                                Binding="{Binding Outcome}" />
-                            <DataGridTemplateColumn Header="P&amp;L" Width="80">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Profit, StringFormat=+0.##;-0.##;0}" FontWeight="Bold">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsWin}" Value="True">
-                                                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding Outcome}" Value="Lost">
-                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </Grid>
-            </TabItem>
-
-            <TabItem Header="Brain">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Controls -->
-                    <Grid Grid.Row="0" Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel>
-                            <TextBlock Text="DECISION ENGINE" Style="{StaticResource SectionTitle}" />
-                            <TextBlock Text="{Binding Brain.LlmInfo}" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="Autonomy off: cycle decides + risk-checks only. Autonomy on: allowed trades are placed."
-                                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4,0,0" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Button Content="Start" Style="{StaticResource {x:Type Button}}" Margin="0,0,6,0"
-                                    Command="{Binding Brain.StartAutonomyCommand}" />
-                            <Button Content="Stop" Style="{StaticResource {x:Type Button}}"
-                                    Command="{Binding Brain.StopAutonomyCommand}" />
-                        </StackPanel>
-                        <Button Grid.Column="2" VerticalAlignment="Center" Command="{Binding Brain.RunCycleCommand}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                    <Setter Property="Content" Value="Run" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Brain.IsBusy}" Value="True">
-                                            <Setter Property="Content" Value="Thinking…" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                    </Grid>
-
-                    <!-- Last decision card -->
-                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10">
-                        <StackPanel>
-                            <TextBlock Text="LAST DECISION" Style="{StaticResource SectionTitle}" />
-                            <TextBlock Text="{Binding Brain.LastDecisionText}"
-                                       FontFamily="Consolas" FontSize="13" LineHeight="20" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Confidence history -->
-                    <TextBlock Grid.Row="2" Text="CONFIDENCE HISTORY" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
-                    <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,0" Padding="10">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding Brain.ConfidenceHistory}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding}" FontFamily="Consolas" FontSize="12"
-                                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2" />
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </Border>
-
-                    <!-- Lessons -->
-                    <TextBlock Grid.Row="4" Text="LESSONS / MEMORY" Style="{StaticResource SectionTitle}" Margin="4,12,0,6" />
-                    <Border Grid.Row="5" Style="{StaticResource Card}" Margin="0" Padding="10">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <TextBlock Text="{Binding Brain.LessonsText}" FontFamily="Consolas" FontSize="12"
-                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                        </ScrollViewer>
-                    </Border>
                 </Grid>
             </TabItem>
 
@@ -1710,127 +823,6 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                 </Grid>
             </TabItem>
 
-            <TabItem Header="Optimizer">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Controls -->
-                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
-                        <StackPanel>
-                            <TextBlock Text="STRATEGY OPTIMIZER" Style="{StaticResource SectionTitle}" />
-                            <TextBlock Text="Backtest and optimize brain strategies on historical data." Foreground="{StaticResource TextSecondaryBrush}" />
-                            <WrapPanel Margin="0,10,0,0">
-                                <StackPanel Width="130" Margin="0,0,10,0">
-                                    <TextBlock Text="Strategy" Style="{StaticResource FieldLabel}" />
-                                    <ComboBox ItemsSource="{Binding OptimizerVm.Strategies}" SelectedItem="{Binding OptimizerVm.SelectedStrategy}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Start ($)" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding OptimizerVm.StartBankroll, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Risk %" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding OptimizerVm.RiskFraction, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Max Trades" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding OptimizerVm.MaxTrades, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                                <StackPanel Width="80" Margin="0,0,10,0">
-                                    <TextBlock Text="Iterations" Style="{StaticResource FieldLabel}" />
-                                    <TextBox Text="{Binding OptimizerVm.OptimizationIterations, UpdateSourceTrigger=PropertyChanged}" />
-                                </StackPanel>
-                            </WrapPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <Button Content="▶ Run Backtest" Command="{Binding OptimizerVm.RunBacktestCommand}" />
-                                <Button Content="⚙ Run Optimization" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
-                                        Command="{Binding OptimizerVm.RunOptimizationCommand}" />
-                                <TextBlock Text="{Binding OptimizerVm.StatusMessage}" Margin="12,0,0,0"
-                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Last result -->
-                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10"
-                            Visibility="{Binding OptimizerVm.LastResult, Converter={StaticResource NullToVisibility}}">
-                        <StackPanel>
-                            <TextBlock Text="LAST BACKTEST RESULT" Style="{StaticResource SectionTitle}" />
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="Strategy" Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding OptimizerVm.LastResult.Strategy}" FontWeight="Bold" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Trades" Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding OptimizerVm.LastResult.TotalTrades}" FontWeight="Bold" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="2">
-                                    <TextBlock Text="Win Rate" Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding OptimizerVm.LastResult.WinRate, StringFormat=P0}" FontWeight="Bold" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="3">
-                                    <TextBlock Text="P&amp;L" Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding OptimizerVm.LastResult.TotalProfit, StringFormat=+0.##;-0.##;0}" FontWeight="Bold" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="4">
-                                    <TextBlock Text="Sharpe" Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding OptimizerVm.LastResult.SharpeRatio, StringFormat=F2}" FontWeight="Bold" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="5">
-                                    <TextBlock Text="Max DD" Foreground="{StaticResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding OptimizerVm.LastResult.MaxDrawdown, StringFormat=0.##}" FontWeight="Bold" />
-                                </StackPanel>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Optimization results -->
-                    <TextBlock Grid.Row="2" Text="TOP OPTIMIZATION RESULTS" Style="{StaticResource SectionTitle}" Margin="4,0,0,6"
-                               Visibility="{Binding OptimizerVm.Results.Count, Converter={StaticResource CountToVisibility}}" />
-                    <DataGrid Grid.Row="3" ItemsSource="{Binding OptimizerVm.Results}" AutoGenerateColumns="False"
-                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Parameters" Width="*" Binding="{Binding Parameters}" />
-                            <DataGridTextColumn Header="P&amp;L" Width="90" Binding="{Binding TotalProfit, StringFormat=+0.##;-0.##;0}" />
-                            <DataGridTextColumn Header="Sharpe" Width="80" Binding="{Binding SharpeRatio, StringFormat=F2}" />
-                            <DataGridTextColumn Header="Max DD" Width="80" Binding="{Binding MaxDrawdown, StringFormat=0.##}" />
-                        </DataGrid.Columns>
-                    </DataGrid>
-
-                    <!-- Saved results -->
-                    <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,10,0,6">
-                        <TextBlock Text="PREVIOUS RUNS" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
-                        <Button Content="Load" Style="{StaticResource GhostButton}" Margin="12,0,0,0"
-                                Command="{Binding OptimizerVm.LoadSavedResultsCommand}" />
-                    </StackPanel>
-                    <DataGrid Grid.Row="5" ItemsSource="{Binding OptimizerVm.SavedResults}" AutoGenerateColumns="False"
-                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True"
-                              Visibility="{Binding OptimizerVm.SavedResults.Count, Converter={StaticResource CountToVisibility}}">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Strategy" Width="120" Binding="{Binding Strategy}" />
-                            <DataGridTextColumn Header="Sharpe" Width="80" Binding="{Binding BestSharpe, StringFormat=F2}" />
-                            <DataGridTextColumn Header="P&amp;L" Width="90" Binding="{Binding BestPnl, StringFormat=+0.##;-0.##;0}" />
-                            <DataGridTextColumn Header="Iterations" Width="80" Binding="{Binding Iterations}" />
-                            <DataGridTextColumn Header="Best Params" Width="*" Binding="{Binding BestParams}" />
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </Grid>
-            </TabItem>
-
             <TabItem Header="Updates">
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
@@ -1880,75 +872,6 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                        Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                         </ScrollViewer>
                     </Border>
-                </Grid>
-            </TabItem>
-
-            <TabItem Header="Health">
-                <Grid Margin="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Summary -->
-                    <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
-                        <StackPanel>
-                            <TextBlock Text="SYSTEM HEALTH" Style="{StaticResource SectionTitle}" />
-                            <TextBlock Text="{Binding HealthVm.OverallStatus}" FontSize="16" FontWeight="Bold" />
-                            <WrapPanel Margin="0,8,0,0">
-                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Connected: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                        <TextBlock Text="{Binding HealthVm.ConnectedCount}" FontWeight="Bold" />
-                                        <TextBlock Text="/{Binding HealthVm.TotalAccounts}" Foreground="{StaticResource TextSecondaryBrush}" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Engines: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                        <TextBlock Text="{Binding HealthVm.RunningEngines}" FontWeight="Bold" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Degraded: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                        <TextBlock Text="{Binding HealthVm.DegradedCount}" FontWeight="Bold" Foreground="{StaticResource WarningBrush}" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Paused: " Foreground="{StaticResource TextSecondaryBrush}" />
-                                        <TextBlock Text="{Binding HealthVm.PausedCount}" FontWeight="Bold" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource StatusPill}">
-                                    <TextBlock Text="{Binding HealthVm.CacheStats}" Foreground="{StaticResource TextSecondaryBrush}" />
-                                </Border>
-                            </WrapPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <Button Content="Refresh" Command="{Binding HealthVm.RefreshCommand}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Per-account health -->
-                    <TextBlock Grid.Row="1" Text="ACCOUNT HEALTH" Style="{StaticResource SectionTitle}" Margin="4,0,0,6" />
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding HealthVm.Accounts}" AutoGenerateColumns="False"
-                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Account" Width="120" Binding="{Binding Name}" />
-                            <DataGridTextColumn Header="Login" Width="90" Binding="{Binding LoginId}" />
-                            <DataGridTextColumn Header="Symbol" Width="100" Binding="{Binding Symbol}" />
-                            <DataGridTextColumn Header="Brain" Width="100" Binding="{Binding Brain}" />
-                            <DataGridTextColumn Header="Status" Width="130" Binding="{Binding Status}" />
-                            <DataGridTextColumn Header="Balance" Width="100" Binding="{Binding Balance}" />
-                            <DataGridTextColumn Header="Ticks" Width="80" Binding="{Binding TickBuffer}" />
-                            <DataGridTextColumn Header="Cached" Width="90" Binding="{Binding CachedTicks}" />
-                            <DataGridTextColumn Header="Engine" Width="60" Binding="{Binding HasRunner, Converter={StaticResource NullToVisibility}}" />
-                            <DataGridTextColumn Header="Circuit" Width="130" Binding="{Binding CircuitStatus}" />
-                        </DataGrid.Columns>
-                    </DataGrid>
                 </Grid>
             </TabItem>
         </TabControl>

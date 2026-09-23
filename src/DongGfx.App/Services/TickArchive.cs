@@ -4,8 +4,8 @@ using System.IO;
 namespace DongGfx.App.Services;
 
 /// <summary>
-/// Append-only tick archive: every quote (MT5 bridge and Deriv public feed)
-/// lands as one JSON line under %APPDATA%\tf\data\ticks\{venue}\{symbol}_{date}.jsonl.
+/// Append-only tick archive: every MT5 bridge quote lands as one JSON line
+/// under %APPDATA%\tf\data\ticks\{venue}\{symbol}_{date}.jsonl.
 /// This is the raw material for the tick/microstructure alpha family and for
 /// post-session analysis. Writes happen on ONE background task consuming a
 /// bounded queue — the UI thread never touches the filesystem, and a slow

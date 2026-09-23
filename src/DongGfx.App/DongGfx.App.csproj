@@ -11,7 +11,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DongGfx.Core\DongGfx.Core.csproj" />
-    <ProjectReference Include="..\DongGfx.Deriv\DongGfx.Deriv.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -31,7 +30,7 @@
     <!-- Binary name stays DongGfx for now (scripts/CI reference DongGfx.exe); the
          product identity is the DON G FX rebrand. -->
     <ApplicationIcon>assets\logo.ico</ApplicationIcon>
-    <Product>DON G FX — Deriv Binary-Options Trader</Product>
+    <Product>DON G FX — MT5 / Forex Terminal</Product>
     <!-- Dev fallback. Publish stamps the real identity: scripts/publish_exe.ps1
          and the tag workflow pass -p:InformationalVersion="<tag>+<commit>" (CLI
          properties override the generated one), which the window title and

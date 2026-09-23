@@ -3,7 +3,6 @@ using DongGfx.App.Infrastructure;
 using DongGfx.App.ViewModels;
 using DongGfx.Core.Analytics;
 using DongGfx.Core.Models;
-using DongGfx.Deriv;
 
 namespace DongGfx.App.Tests;
 
@@ -19,10 +18,8 @@ public class MonitoringSettingsTests
     public void DigestToggle_RoundTripsThroughViewModel()
     {
         var settingsService = new SettingsService();
-        var client = new DerivClient();
-        var dashboard = new DashboardViewModel(client);
 
-        var vm = new SettingsViewModel(settingsService, client, dashboard);
+        var vm = new SettingsViewModel(settingsService);
 
         var off = vm.BuildSettings();
         off.MetricsDigestEnabled = false;
@@ -69,7 +66,7 @@ public class MonitoringSettingsTests
     }
 
     private static SettingsViewModel NewSettingsVm() =>
-        new(new SettingsService(), new DerivClient(), new DashboardViewModel(new DerivClient()));
+        new(new SettingsService());
 
     [Fact]
     public void DigestInterval_RoundTripsAndClamps()

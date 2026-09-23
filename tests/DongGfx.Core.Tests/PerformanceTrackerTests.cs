@@ -29,11 +29,14 @@ public class PerformanceTrackerTests : IDisposable
     }
 
     private static Trade MakeTrade(Guid accountId, decimal profit, int minutesOffset) => new(
-        Guid.NewGuid(), "frxEURUSD", Direction.Rise, 1.00m, "USD", 1.17, 1700000000,
-        $"C-{Guid.NewGuid():N}", profit >= 0 ? ContractStatus.Won : ContractStatus.Lost,
-        profit, 1.175, 1700000060,
-        DateTimeOffset.UtcNow.Date.AddMinutes(minutesOffset),
-        accountId, "Acc", TradeSource.Growth);
+        Id: Guid.NewGuid(),
+        Symbol: "EURUSD",
+        Stake: 1.00m,
+        Profit: profit,
+        SettledAt: DateTimeOffset.UtcNow.Date.AddMinutes(minutesOffset),
+        Source: TradeSource.Fx,
+        AccountId: accountId,
+        AccountName: "Acc");
 
     [Fact]
     public void GetIntradayPnl_BuildsCumulativeCurve()

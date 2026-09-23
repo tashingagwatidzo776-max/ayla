@@ -35,8 +35,8 @@ bridge/mt5_sidecar.py  (127.0.0.1:53190)
 MetaTrader 5 terminal → Deriv-Demo / Deriv real MT5 server
 ```
 
-- The sidecar is **optional**: when it is not running, the terminal shows the
-  binary-options surfaces plus a synthetic DOM and a "start bridge" hint.
+- The sidecar is **optional**: when it is not running, the terminal shows a
+  synthetic DOM and a "start bridge" hint (bridge-down state; nothing places).
 - The sidecar binds strictly to `127.0.0.1` and refuses any other bind
   address — no external exposure, ever.
 - MT5 demo/real is resolved from `account_info()` (login prefix / server
@@ -64,5 +64,5 @@ Error model: `{"error": "..."}` with a 4xx/5xx status; `retcode` from
 - Loopback bind only; the C# client refuses any non-loopback base URL.
 - No credentials ever transit the sidecar (the terminal is already logged
   in); the sidecar never writes files and never shells out.
-- Every order from DON G FX passes the same rails as the binary paths:
+- Every order from DON G FX passes the same rails:
   kill switch, real-money gate, `Mt5MaxLots` cap — and is journaled.
