@@ -144,9 +144,12 @@ public class TerminalViewModelTests : IDisposable
     {
         TerminalViewModel.ResetBadgeThrottleForTests();
         var vm = CreateVm();
-        // GitHub tag is "v0.7.0"; the stamp is "0.7.0+<sha>" on published
-        // builds — the normalized comparison must treat these as equal.
-        vm.LatestReleaseProbe = () => Task.FromResult<string?>("v0.7.0");
+        // GitHub tag is "v<major.minor.patch>"; the stamp is
+        // "<major.minor.patch>+<sha>" on published builds — the normalized
+        // comparison must treat these as equal. Derived from the live
+        // VersionInfo so the test survives version bumps.
+        var currentVersion = DongGfx.App.Infrastructure.VersionInfo.FullVersion.Split('+')[0];
+        vm.LatestReleaseProbe = () => Task.FromResult<string?>("v" + currentVersion);
 
         await vm.RefreshBuildBadgeAsync();
 
