@@ -329,6 +329,43 @@ public class AutoUpdaterTests : IDisposable
     }
 
     [Fact]
+    public void InstallUpdate_LockedRunningExe_RenamesAside_AndInstalls()
+    {
+        // A running exe image cannot be opened for writing (the loader maps
+        // it without share-write) but CAN be renamed — the loader's mapping
+        // carries FileShare.Delete. Simulate exactly that sharing and verify
+        // the copy-over fails, the rename-aside dance succeeds.
+        var appDir = AppContext.BaseDirectory;
+        var exePath = Path.Combine(appDir, "lockedapp.exe");
+        var stagedDir = Path.Combine(Path.GetTempPath(), "staged-" + Guid.NewGuid());
+        Directory.CreateDirectory(stagedDir);
+        File.WriteAllText(Path.Combine(stagedDir, "lockedapp.exe"), "new build");
+        File.WriteAllText(exePath, "old build");
+        var messages = new List<string>();
+
+        try
+        {
+            using var held = File.Open(exePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            using var updater = new AutoUpdater("1.0.0");
+            updater.Progress += m => messages.Add(m);
+
+            var result = updater.InstallUpdate(stagedDir);
+
+            Assert.True(result, "progress: " + string.Join(" | ", messages));
+            Assert.Equal("new build", File.ReadAllText(exePath));
+            var asides = Directory.GetFiles(appDir, "lockedapp.exe.old-*");
+            var aside = Assert.Single(asides);
+            Assert.Equal("old build", File.ReadAllText(aside));
+            held.Dispose();
+        }
+        finally
+        {
+            foreach (var f in Directory.GetFiles(appDir, "lockedapp.exe*")) try { File.Delete(f); } catch { }
+            try { Directory.Delete(stagedDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Rollback_Missing_Backup_Dir_Is_Surfaced_Not_Thrown()
     {
         var messages = new List<string>();
