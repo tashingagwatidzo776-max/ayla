@@ -21,6 +21,24 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+try:
+    import MetaTrader5  # noqa: F401
+except ImportError:
+    # CI runners (and any machine without the package): the sidecar only
+    # needs the MT5 constant dicts at import time — the tests inject their
+    # own facade, so a stub carrying the real constant values suffices.
+    # `None` here would make the import raise, which is what we want to
+    # avoid; a SimpleNamespace satisfies the module-level dict builds.
+    sys.modules["MetaTrader5"] = SimpleNamespace(
+        TIMEFRAME_M1=1, TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_M30=30,
+        TIMEFRAME_H1=16385,
+        ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1, ORDER_TYPE_BUY_LIMIT=2,
+        ORDER_TYPE_SELL_LIMIT=3, ORDER_TYPE_BUY_STOP=4, ORDER_TYPE_SELL_STOP=5,
+        ORDER_TYPE_BUY_STOP_LIMIT=6, ORDER_TYPE_SELL_STOP_LIMIT=7,
+        BOOK_TYPE_ASK=1, BOOK_TYPE_BID=2, POSITION_TYPE_BUY=0,
+        TRADE_ACTION_DEAL=1, TRADE_ACTION_PENDING=5, ORDER_FILLING_FOK=0,
+        DEAL_TYPE_BUY=0)
+
 import mt5_sidecar as sidecar  # noqa: E402
 
 
