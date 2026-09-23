@@ -172,6 +172,12 @@ public sealed class AutoUpdater : IDisposable
         {
             Progress?.Invoke("Creating backup...");
 
+            // Best-effort sweep of rename-aside leftovers from earlier hops.
+            foreach (var stale in Directory.GetFiles(appDir, "*.old-*"))
+            {
+                try { File.Delete(stale); } catch { /* still mapped */ }
+            }
+
             // Backup current files
             Directory.CreateDirectory(backupDir);
             foreach (var file in Directory.GetFiles(appDir))
@@ -182,11 +188,14 @@ public sealed class AutoUpdater : IDisposable
 
             Progress?.Invoke("Installing update...");
 
-            // Copy new files
+            // Copy new files. A running exe image cannot be overwritten in
+            // place (the loader maps it without share-write), so an exe that
+            // refuses the copy is renamed aside first — the rename is
+            // permitted while the old process keeps running from it.
             foreach (var file in Directory.GetFiles(stagedDir))
             {
                 var dest = Path.Combine(appDir, Path.GetFileName(file));
-                File.Copy(file, dest, true);
+                CopyOverRunningImage(file, dest);
             }
 
             Progress?.Invoke("Update installed! Restart to apply.");
@@ -197,6 +206,27 @@ public sealed class AutoUpdater : IDisposable
             Progress?.Invoke($"Install failed, rolling back: {ex.Message}");
             RollbackFromBackup(backupDir, appDir);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Copies a staged file over its destination, falling back to the
+    /// rename-aside dance when the destination is a running image that
+    /// cannot be opened for writing.
+    /// </summary>
+    private static void CopyOverRunningImage(string sourceFile, string dest)
+    {
+        try
+        {
+            File.Copy(sourceFile, dest, true);
+        }
+        catch (IOException) when (dest.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            // Timestamped so successive install hops never collide on the
+            // aside name, even while an earlier generation still runs.
+            var aside = dest + ".old-" + DateTime.UtcNow.ToString("HHmmss");
+            File.Move(dest, aside);
+            File.Copy(sourceFile, dest, true);
         }
     }
 
