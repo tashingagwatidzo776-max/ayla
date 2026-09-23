@@ -430,7 +430,7 @@ trap 'rm -f "$body"' EXIT
   echo ""
   echo "Recent scheduled runs: ${server}/${GITHUB_REPOSITORY}/actions/workflows/ci.yml?query=event%3Aschedule"
   echo ""
-  echo "What changed upstream: runner-image releases (actions/runner-images), the .NET 8 SDK patch level on windows-latest, or the Deriv WebSocket API / LLM provider endpoints. Once fixed, the next green scheduled run (or weekly health check) posts a 'went green' note on this issue; the issue stays open for review — that record is deliberately never a closing keyword."
+  echo "What changed upstream: runner-image releases (actions/runner-images), the .NET 8 SDK patch level on windows-latest, or the MT5 bridge / sidecar contract. Once fixed, the next green scheduled run (or weekly health check) posts a 'went green' note on this issue; the issue stays open for review — that record is deliberately never a closing keyword."
   if [ -n "$EXCERPT" ]; then
     echo ""
     echo "### Error summary (from the failing job's log)"

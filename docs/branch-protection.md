@@ -6,8 +6,8 @@ and pull request targeting `main`:
 | Job | What it does |
 |---|---|
 | `unit` | Builds Release and runs `Category=Unit` tests with coverage collection |
-| `integration` | Runs `Category=Integration` fake-server E2E tests with coverage collection |
-| `coverage-report` | Merges both cobertura files, generates the HTML report, and **fails if combined line coverage drops below 60%** |
+| `integration` | Runs the MT5 bridge sidecar contract tests and soak-report verdict tests (Python; no terminal, no network) |
+| `coverage-report` | Merges the unit job's cobertura files, generates the HTML report, and **fails if line coverage drops below 60%** |
 
 To make all three mandatory before anything lands on `main`, enable branch
 protection once (requires an administrator of the repository).
@@ -68,8 +68,8 @@ Merging your own PR as a solo maintainer (GitHub rejects self-approval with
 
 ## Notes
 
-- The `coverage-report` job is the gate: it consumes both test jobs' cobertura
-  artifacts and fails the run on any regression below 60% combined line
+- The `coverage-report` job is the gate: it consumes the unit job's cobertura
+  artifact and fails the run on any regression below 60% line
   coverage (measured at 63.3% when the gate was raised).
 - Status checks only become selectable after each job has completed at least
   once on a commit pushed to the repo, so push once before configuring.
