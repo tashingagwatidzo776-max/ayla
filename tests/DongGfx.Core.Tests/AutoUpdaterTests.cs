@@ -437,4 +437,42 @@ public class AutoUpdaterTests : IDisposable
         }
         return stream.ToArray();
     }
+
+    [Fact]
+    public void BuildRestartScript_QuotesTokensCleanly_ForCmd()
+    {
+        var script = AutoUpdater.BuildRestartScript(
+            @"C:\Program Files\DongGfx\DongGfx.exe", @"C:\Program Files\DongGfx");
+
+        // One clean quoted pair per token — the old verbatim template emitted
+        // tripled quotes, which cmd parsed as a window title plus garbage.
+        Assert.StartsWith("@echo off", script);
+        Assert.Contains("timeout /t 2 /nobreak > nul", script);
+        Assert.Contains("start \"\" /D \"C:\\Program Files\\DongGfx\" \"C:\\Program Files\\DongGfx\\DongGfx.exe\"", script);
+        Assert.Contains("del \"%~f0\"", script);
+        Assert.DoesNotContain("\"\"\"", script);
+    }
+
+    [Fact]
+    public void RestartScript_StartLine_ParsesAsTwoQuotedTokens()
+    {
+        // The old verbatim template emitted tripled quotes; cmd then parsed
+        // the start line as a window title plus a garbage path, launched
+        // nothing, and still self-deleted — leaving the app closed after
+        // install. (Proven live: the fixed script's start line launches the
+        // target under the real cmd parser.) This contract pins the fix
+        // hermetically: the start line must carry exactly two quoted tokens
+        // (the empty title and the app path) and no doubled quotes anywhere.
+        var appPath = @"C:\Program Files\DongGfx\DongGfx.exe";
+        var script = AutoUpdater.BuildRestartScript(appPath, @"C:\Program Files\DongGfx");
+        var startLine = script.Split('\n').Single(l => l.StartsWith("start "));
+
+        var quoted = System.Text.RegularExpressions.Regex.Matches(startLine, "\"[^\"]*\"");
+        Assert.Equal(3, quoted.Count);                     // title, /D dir, app path
+        Assert.Equal("", quoted[0].Value.Trim('"'));       // empty window title
+        Assert.Equal(@"C:\Program Files\DongGfx", quoted[1].Value.Trim('"'));
+        Assert.Equal(appPath, quoted[2].Value.Trim('"'));
+        Assert.DoesNotContain("\"\"\"", startLine);       // the old bug's tripled-quote fingerprint
+        Assert.StartsWith("start \"\" /D ", startLine);   // working dir stays the app dir
+    }
 }

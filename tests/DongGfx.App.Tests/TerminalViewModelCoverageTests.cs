@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using DongGfx.App.Infrastructure;
 using DongGfx.App.Services;
 using DongGfx.App.ViewModels;
 using DongGfx.Core.Logging;
@@ -461,5 +462,77 @@ public class TerminalViewModelCoverageTests : IDisposable
 
         row.UpdateTick(new Tick("XAUUSDmicro", 2651.5, 2651.6, 2651.4, 2, 2));
         Assert.True(row.LastUp!.Value);
+    }
+
+    // ── Build-freshness badge / startup auto-check ────────────────────
+
+    /// <summary>WPF binding surfaces (DispatcherObject) need an STA thread;
+    /// run the body there and rethrow any failure on the test thread.</summary>
+    private static void RunInSta(Action body)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { body(); }
+            catch (Exception ex) { failure = ex; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null) throw failure;
+    }
+
+    [Fact]
+    public void RefreshBuildBadgeAsync_SameVersion_ShowsUpToDate()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var (vm, _) = NewVm();
+        vm.LatestReleaseProbe = () => Task.FromResult<string?>("v" + Infrastructure.VersionInfo.Stamp.Split('+')[0]);
+
+        RunInSta(() => vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult());
+
+        Assert.Contains("up to date", vm.BuildBadge);
+        Assert.Contains(Infrastructure.VersionInfo.Stamp, vm.BuildBadge);
+    }
+
+    [Fact]
+    public void RefreshBuildBadgeAsync_NewerRelease_ShowsUpdateAvailable()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var (vm, _) = NewVm();
+        vm.LatestReleaseProbe = () => Task.FromResult<string?>("v9.9.9");
+
+        RunInSta(() => vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult());
+
+        Assert.Contains("update available: v9.9.9", vm.BuildBadge);
+    }
+
+    [Fact]
+    public void RefreshBuildBadgeAsync_FailingProbe_NeverThrows_KeepsStamp()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var (vm, _) = NewVm();
+        vm.LatestReleaseProbe = () => throw new InvalidOperationException("network down");
+
+        RunInSta(() => vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult());
+
+        Assert.Equal($"build {Infrastructure.VersionInfo.Stamp}", vm.BuildBadge);
+    }
+
+    [Fact]
+    public void RefreshBuildBadgeAsync_ThrottlesRepeatProbes()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var (vm, _) = NewVm();
+        var calls = 0;
+        vm.LatestReleaseProbe = () => { calls++; return Task.FromResult<string?>("v9.9.9"); };
+
+        RunInSta(() =>
+        {
+            vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult();
+            vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult();
+        });
+
+        Assert.Equal(1, calls);
     }
 }
