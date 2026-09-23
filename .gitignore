@@ -27,6 +27,7 @@ coverage/
 # Session logs
 .wraplog.txt
 __pycache__/
+bridge/_sidecar*.log
 
 # Local tool installs and release-verification scratch
 .tools/

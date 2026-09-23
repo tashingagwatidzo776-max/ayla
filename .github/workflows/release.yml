@@ -1,0 +1,75 @@
+name: Release
+
+# Cuts a release when a vX.Y.Z tag is pushed: builds the win-x64
+# self-contained publish, zips it as the exact asset name AutoUpdater
+# looks for (win-x64 .zip), and creates the GitHub release the app's
+# update check and Terminal build-badge read.
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release from (e.g. v0.7.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the release and upload the asset
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # workflow_dispatch releases from an existing tag; tag pushes are
+        # already checked out at the tag.
+        ref: ${{ inputs.tag || github.ref }}
+
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Publish win-x64 (self-contained, single version stamp)
+      shell: pwsh
+      env:
+        # Tag name for both triggers (tag push => github.ref_name, dispatch => input).
+        TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        COMMIT_SHA: ${{ github.sha }}
+      run: |
+        # The publish stamp the running build shows and the update check
+        # compares against: tag without the 'v' + short sha (e.g. 0.7.0+a1b2c3d).
+        $version = $env:TAG_NAME.TrimStart('v')
+        $sha = $env:COMMIT_SHA.Substring(0, 7)
+        dotnet publish src/DongGfx.App/DongGfx.App.csproj `
+          -c Release -r win-x64 --self-contained true `
+          -p:InformationalVersion="$version+$sha" `
+          -o publish
+
+    - name: Verify the stamp landed in the binary
+      shell: pwsh
+      run: |
+        $exe = "publish/DongGfx.dll"  # on windows-latest the slash form resolves fine
+        $info = (Get-Item $exe).VersionInfo
+        Write-Host "InformationalVersion: $($info.InformationalVersion)"
+        if (-not $info.InformationalVersion) { throw "publish stamp missing" }
+
+    - name: Zip as the asset AutoUpdater selects (win-x64.zip)
+      shell: pwsh
+      run: |
+        Compress-Archive -Path publish/* -DestinationPath DongGfx-win-x64.zip
+        Get-Item DongGfx-win-x64.zip | Select-Object Name, Length
+
+    - name: Create the release and upload the asset
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag || github.ref_name }}
+      shell: pwsh
+      run: |
+        gh release create "$env:TAG" DongGfx-win-x64.zip `
+          --title "DON G FX $env:TAG" `
+          --notes "Automated release of $env:TAG. The app's AutoUpdater picks up DongGfx-win-x64.zip; the Terminal build badge flips to 'up to date' once this build is running."
