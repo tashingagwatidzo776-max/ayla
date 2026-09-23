@@ -18,10 +18,36 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
+        var provider = ConfigureServices(new ServiceCollection()).BuildServiceProvider();
+        Ioc.Default.ConfigureServices(provider);
+
+        var settings = provider.GetRequiredService<SettingsService>().Load();
+        ConfigureFromSettings(provider, settings);
+        StartBackgroundServices(provider);
+
+        var window = new MainWindow
+        {
+            DataContext = provider.GetRequiredService<MainViewModel>()
+        };
+        window.Show();
+
+        var mainVm = (MainViewModel)window.DataContext;
+        _ = mainVm.InitializeAsync();
+
+        // Live telemetry panel on the Performance tab (cycles/latency/errors
+        // between exports). The timer is created here so it never runs in
+        // unit tests, which construct the view model directly.
+        provider.GetRequiredService<PerformanceViewModel>().StartTelemetryRefresh();
+    }
+
+    /// <summary>The full DI composition. Static and side-effect-free so the
+    /// startup wiring can be built and resolved in tests: every service the
+    /// app resolves at runtime must come out of this graph.</summary>
+    internal static IServiceCollection ConfigureServices(IServiceCollection services)
+    {
         // MT5/forex-only composition: no Deriv client, no trade store, no
         // multi-account hub, no growth engines — the binary-options
         // integration (and its first-run API-token wizard) was removed.
-        var services = new ServiceCollection();
         services.AddSingleton<SettingsService>();
 
         // Core singletons.
@@ -104,11 +130,15 @@ public partial class App : System.Windows.Application
             sp.GetRequiredService<TerminalViewModel>(),
             sp.GetRequiredService<TradeJournal>()));
 
-        var provider = services.BuildServiceProvider();
-        Ioc.Default.ConfigureServices(provider);
+        return services;
+    }
 
-        var settings = provider.GetRequiredService<SettingsService>().Load();
-
+    /// <summary>Wires persisted settings onto the resolved services (webhook
+    /// endpoint, digest cadence and state providers). Called once after Load.
+    /// Internal so tests can run the real configuration pass against the real
+    /// graph without starting anything.</summary>
+    internal static void ConfigureFromSettings(IServiceProvider provider, AppSettings settings)
+    {
         // Configure webhook from persisted settings.
         if (!string.IsNullOrEmpty(settings.WebhookUrl))
         {
@@ -158,7 +188,11 @@ public partial class App : System.Windows.Application
 
             return parts.Count > 0 ? string.Join(" · ", parts) : null;
         };
+    }
 
+    /// <summary>Starts the fire-and-forget services after configuration.</summary>
+    private static void StartBackgroundServices(IServiceProvider provider)
+    {
         // Scorecard service (nightly 03:00 walk-forward verdicts per family).
         provider.GetRequiredService<FxScorecardService>();   // start the timer
 
@@ -193,26 +227,12 @@ public partial class App : System.Windows.Application
         var settingsFactory = provider.GetRequiredService<Func<AppSettings>>();
         Mt5TerminalLocator.WriteConfig(
             Mt5TerminalLocator.Find(settingsFactory().Mt5TerminalPath));
-        digest.Start();
+        provider.GetRequiredService<MetricsDigestService>().Start();
 
         // Unlock-staleness alert: an armed session unlock past the
         // configured threshold journals REAL_MONEY_UNLOCK_STALE + toast +
         // webhook (the rail the removed hub used to own).
         provider.GetRequiredService<UnlockStalenessMonitor>().Start();
-
-        var window = new MainWindow
-        {
-            DataContext = provider.GetRequiredService<MainViewModel>()
-        };
-        window.Show();
-
-        var mainVm = (MainViewModel)window.DataContext;
-        _ = mainVm.InitializeAsync();
-
-        // Live telemetry panel on the Performance tab (cycles/latency/errors
-        // between exports). The timer is created here so it never runs in
-        // unit tests, which construct the view model directly.
-        provider.GetRequiredService<PerformanceViewModel>().StartTelemetryRefresh();
     }
 
     protected override void OnExit(ExitEventArgs e)
