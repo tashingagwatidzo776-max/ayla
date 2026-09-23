@@ -298,10 +298,13 @@ public sealed class FxEngineHost : IDisposable
             }
         }
 
-        var isDemo = account.Server.Contains("demo", StringComparison.OrdinalIgnoreCase)
-                     || account.Login > 500_000_000;
+        // Same venue verdict as the manual order card: trade_mode from the
+        // bridge, demo-only heuristic fallback (see Mt5Account).
+        var verifiedVirtual = account.GateVerifiedVirtual;
         var unlocked = _realMoneyUnlocked();
-        var gate = RealMoneyGate.Evaluate(isDemo, isDemo ? true : null, unlocked);
+        var gate = RealMoneyGate.Evaluate(configIsDemo: verifiedVirtual is true,
+                                          apiVerifiedVirtual: verifiedVirtual,
+                                          unlockArmed: unlocked);
         if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
         {
             Journal("FX_ORDER", $"refused: real-money gate — {RealMoneyGate.Explain(gate)}", "{}");

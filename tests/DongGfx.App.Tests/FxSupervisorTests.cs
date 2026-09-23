@@ -12,7 +12,6 @@ using DongGfx.App.ViewModels;
 using DongGfx.Core.Fx;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
-using DongGfx.Deriv;
 using Xunit;
 
 namespace DongGfx.App.Tests;
@@ -190,7 +189,8 @@ public class FxSupervisorTests
             {
                 AccountCalls++;
                 r = Json(new { ok = true, login = 201587365, server = "Deriv-Demo", currency = "USD",
-                               balance = 2632.19, equity = 2632.19, margin_free = 2632.19, leverage = 1000 });
+                               balance = 2632.19, equity = 2632.19, margin_free = 2632.19, leverage = 1000,
+                               trade_mode = 0 });
             }
             else if (path.Contains("/candles/"))
             {

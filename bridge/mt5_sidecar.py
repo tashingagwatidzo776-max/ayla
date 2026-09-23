@@ -127,6 +127,10 @@ class BridgeHandlers:
             "margin": acc.margin,
             "margin_free": acc.margin_free,
             "leverage": acc.leverage,
+            # The venue's own demo/real verdict (0=demo, 1=contest, 2=real).
+            # Optional: an older terminal without it must not crash the
+            # payload — the C# gate fails closed when the field is absent.
+            "trade_mode": int(acc.trade_mode) if hasattr(acc, "trade_mode") else None,
         }
 
     def _symbol_or_404(self, symbol: str) -> Any:

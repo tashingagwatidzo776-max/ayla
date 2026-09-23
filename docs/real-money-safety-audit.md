@@ -1,188 +1,129 @@
 # Real-money safety rails — coverage audit
 
-Every code path that can place a Deriv trade, and which guardrails stand in
+Every code path that can place a real trade, and which guardrails stand in
 front of it. The rails are independent layers: a path is safe when *at least
 one* rail can stop it, and every real-money path here is covered by several.
-The single choke point for order execution is `DerivClient.BuyAsync` — it
-takes a proposal id, so every strategy must pass `GetProposalAsync` first.
+The single choke point for order execution is `Mt5BridgeClient.PlaceOrderAsync`
+— it talks only to the loopback sidecar (127.0.0.1), which in turn requires a
+live MetaTrader 5 terminal. The Deriv binary-options integration (and its
+`DerivClient.BuyAsync` choke point) was removed; MT5/forex is the only
+trading surface left.
 
-**Verified 2026-09-16** by grepping all `BuyAsync(` call sites under `src/`.
-CI enforces this continuously: `scripts/check_safety_audit.py` (workflow-lint
-job) fails when a call-site file has no coverage entry here.
+**Verified 2026-09-22** by grepping all `PlaceOrderAsync(` call sites under
+`src/` (2: `TerminalViewModel`, `FxEngineHost`). CI enforces this
+continuously: `scripts/check_safety_audit.py` (workflow-lint job) fails when
+a call-site file has no coverage entry here.
 
 ## The rails
 
 | Rail | Where | What it checks | Failure mode |
 |---|---|---|---|
-| Master kill switch | Dashboard latch, read via `_dashboard.IsKillSwitchEngaged` / hub kill-switch factories | Global engagement halts everything | Fail closed when latched |
-| Portfolio drawdown governor | `MultiAccountHub` settlement handler + journal-restored latch | Combined daily net across all growth accounts breaches the plan's cap → stops every runner, latches until manual re-arm | Fail closed (latch survives restarts) |
-| Real-money gate | `DongGfx.Core.Models.RealMoneyGate.Evaluate` | Config says real **and** Deriv's own verification confirms real **and** the per-session unlock (typed `TRADE REAL MONEY` phrase) is armed. Any mismatch/unknown refuses with a specific reason. The API verdict accepts both platforms: classic `is_virtual` and new-platform discovery `account_type` (DOT/ROT prefix checked as a cross-signal) | Fail closed — unverified counts as demo, never as real |
-| Risk engine | `DongGfx.Core.Brain.RiskEngine.Evaluate` | Per-decision: kill switch, real-money verdict, confidence floor, stake bounds, concurrency limit, daily loss cap, post-loss cooldown | Rejects with a reason |
+| Master kill switch | Dashboard latch, read via `_dashboard.IsKillSwitchEngaged` on every trade path | Global engagement halts everything and cross-venue flattens open MT5 positions (`FxEmergencyFlattenAsync`) | Fail closed when latched |
+| FX supervisor | `FxSupervisor`, constructed by `FxPortfolioHost`, evaluated by `FxEngineHost` **before every cycle and before every order** | Session daily-loss cap (`Mt5DailyLossCap`), absolute equity floor (`Mt5EquityFloor`), kill switch, portfolio governor (`IsGovernorLatched` on the Dashboard), bridge reachability while live | Halts and returns the live engine to paper; halt latches until explicit re-arm |
+| Real-money gate | `DongGfx.Core.Models.RealMoneyGate.Evaluate` (wrapped by the shared `ManualRealMoneyGate` session unlock) | Config says real **and** the account type is verified real **and** the per-session unlock (typed `TRADE REAL MONEY` phrase) is armed. Unknown/unverified refuses with a specific reason | Fail closed — unverified counts as demo, never as real |
+| Lot cap | `Mt5MaxLots` (Settings tab) | Single-order volume ceiling; **0 disables MT5 order placement entirely** | Fail closed by default (fresh install = 1.00 lot, 0 = refused before any bridge call) |
+| Portfolio exposure veto | `FxExposureGuard` inside `FxPortfolioHost` | Total open lots across all FX-brain symbols vs `FxPortfolioMaxLots`; runs as a pre-order veto on every brain order | Refuses the order |
+| News veto | `FxNewsVeto` + `data/news-calendar.json` | Refuses new brain orders inside the `NewsBlackoutMinutes` window around high-impact events | Refuses the order |
+| Unlock staleness watch | `UnlockStalenessMonitor` (1-minute timer) | An armed session unlock older than `ArmStalenessHours` (0 disables) journals `REAL_MONEY_UNLOCK_STALE`, toasts, and posts a risk-rail webhook — repeating every full threshold; repeat unlock clicks cannot reset the clock | Alert-only by design (the gate itself never expires — an expiry would silently re-lock mid-position) |
 
-The real-money gate is enforced at four depths: engine **start**
-(`MultiAccountHub.StartGrowthCore`, every start path including the automatic
-restart ladder), engine **start again inside the runner itself**
-(`GrowthRunner.StartAsync` re-evaluates the gate before anything else — even
-a runner started outside the hub via `ObserveRunner` cannot begin a session
-on a locked real account), engine **cycle** (the runner's per-cycle
-`RiskContext` carries the gate verdict, so the risk engine blocks the trade
-itself), and engine **mid-session** (per-settlement re-check stops the runner
-and the hub drops it without a restart ladder).
+The real-money gate is enforced at three depths: **manual order time**
+(`TerminalViewModel.PlaceMt5Order` evaluates the gate before any bridge
+call — the account's demo/real comes from the MT5 server name / login and a
+real account demands the session unlock), **engine start / cycle / order**
+(the `FxEngineHost` passes `ManualRealMoneyGate.IsUnlocked` into its
+`realMoneyUnlocked` predicate; `FxSupervisor` independently re-runs every
+cycle and again before each order), and **settings fail-closed**
+(`Mt5MaxLots = 0` refuses placement no matter who asks).
 
-## Path 1 — Growth engines (multi-account hub)
+## Path 1 — Terminal manual MT5 order (Terminal tab)
 
-`GrowthViewModel (Start all / Restart) → MultiAccountHub.StartGrowth →
-GrowthRunner → AutonomousScheduler → TradingBrain → DerivClient`
-
-| Rail | Coverage |
-|---|---|
-| Start-time real-money gate | ✅ In `StartGrowthCore`, before any runner is created. Demo accounts pass through; a demo-flagged account the API says is real is refused as a config mismatch (the unlock cannot wave it through). |
-| Runner-level start gate | ✅ `GrowthRunner.StartAsync` re-evaluates the gate first, before even the connection check — structurally closing the old `ObserveRunner` bypass: an externally started runner refuses exactly like a hub-started one. |
-| Session unlock | ✅ In-tab unlock panel on the Growth tab: lists every locked real-money account with its API-verification state; one typed phrase arms all of them plus the manual surfaces for this session. Process-lifetime only, never persisted. |
-| Per-cycle | ✅ `GrowthRunner.BuildRiskContext` evaluates the gate every cycle and the `RiskEngine` blocks on a refusal. |
-| Per-settlement | ✅ `GrowthRunner.EnforceRealMoneyGateAfterSettlement` stops the engine after a settlement that flips the gate; fires a toast + webhook risk-rail alert; the hub drops the runner (`GrowthExitReason.RealMoneyGate`) with **no** restart ladder. |
-| Kill switch | ✅ Scheduler self-exits; risk engine checks per decision. |
-| Governor | ✅ Settlement handler with pre-trip warning; latch restored from the journal on launch. |
-
-## Path 2 — Manual LLM/Brain tab
-
-`BrainViewModel.RunCycle / StartAutonomy → TradingBrain → DerivClient`
-(trading only when autonomy is enabled; otherwise decisions are advice only)
-
-The Accounts tab's "Set as primary" switch re-points this path (and the
-Trades/Dashboard surfaces) at a hub account, persisting its connection
-data into settings. The switch never touches the gate: which account the
-manual surfaces address changes, whether real money can flow does not —
-the gate re-evaluates per decision on whatever account is primary, and a
-real primary stays `BlockedLocked` until the session unlock is armed.
+`TerminalViewModel.PlaceMt5Order → Mt5BridgeClient → loopback sidecar → MetaTrader 5`
 
 | Rail | Coverage |
 |---|---|
-| Real-money gate | ✅ Evaluated before every manual cycle and before autonomy starts (`ManualRealMoneyGate`, which wraps the shared gate and the session unlock). The verdict also flows into `BuildRiskContext`, so even a mid-cycle refusal blocks the trade at the risk engine. |
-| Session unlock | ✅ Shared `ManualRealMoneyGate` unlock, armed by the Growth tab's in-tab unlock panel (same phrase, one pass together with the hub accounts); reset on app shutdown. |
-| Kill switch | ✅ Kill-switch engaged fails the risk context every cycle; the scheduler exits on engagement. |
-| Governor | n/a — this path trades the primary client, not a hub account; the governor watches growth-trade settlements, which this path does not produce. The kill switch + gate + risk engine cover it. |
-
-## Path 3 — Manual demo trade (Trades tab)
-
-`TradesViewModel.PlaceDemoTrade → DerivClient` (single manual trade)
-
-| Rail | Coverage |
-|---|---|
-| Real-money gate | ✅ Evaluated before the connectivity check: demo passes; real needs the session unlock; unverified (never authorized) fails closed. A blocked state also relabels the button ("🔒 Real account locked"). |
-| Session unlock | ✅ Shared `ManualRealMoneyGate` unlock, armed by the Growth tab's in-tab unlock panel. |
-| Kill switch | ✅ Engaged kill switch refuses the trade outright. |
-| Risk engine | ✅ The manual stake is bounded by the user's `ManualMaxStake` ceiling (Settings tab), enforced before any proposal is requested; a blocked real-money state also relabels the trade button. |
-
-## Path 4 — Terminal order ticket (Terminal tab)
-
-`TerminalViewModel.PlaceOrder → connected hub row's client → DerivClient` (single manual trade)
-
-| Rail | Coverage |
-|---|---|
-| Real-money gate | ✅ Evaluated before the connectivity check on the SAME state as the hub: the connected row's config flag, its API verification (`ApiVerifiedVirtual`), and the hub's per-account session unlock. The primary-client fallback uses `ManualRealMoneyGate`. Fail-closed on unverified. |
-| Session unlock | ✅ The hub's per-account unlock (armed by the Growth tab's panel); the primary-client fallback uses the shared `ManualRealMoneyGate` unlock. |
-| Kill switch | ✅ Engaged kill switch refuses the trade outright (checked first). |
-| Risk engine | ✅ The stake is bounded by `ManualMaxStake` before any proposal; exceeded stakes are refused with the cap in the message. |
-| Governor | n/a — single manual trades, not a growth plan; same rationale as Path 3. |
-| Attribution | ✅ Settled trades are written to the shared TradeStore tagged `Manual` with the account's id/name, so per-account views and the weekly P&L stay truthful. |
-
-## Path 5 — MT5 bridge orders (Terminal tab, CFD/forex)
-
-`TerminalViewModel.PlaceMt5Order → Mt5BridgeClient → loopback sidecar → MetaTrader 5 terminal`
-
-The MT5 path never touches `DerivClient.BuyAsync` — it is a separate
-transport into a different broker surface, documented here because it can
-place real orders. The sidecar (bridge/mt5_sidecar.py) binds to 127.0.0.1
-only and refuses any other bind address.
-
-| Rail | Coverage |
-|---|---|
-| Kill switch | ✅ Engaged kill switch refuses the order outright (checked first). |
-| Lot cap | ✅ `Mt5MaxLots` (Settings tab) caps single-order volume; **0 disables MT5 order placement entirely** — fail-closed by default. Lots outside `0 < lots ≤ cap` are refused before any bridge call. |
-| Real-money gate | ✅ The MT5 account's demo/real comes from `account_info()` (server name / login); a real MT5 account requires the same session unlock as every other real-money path. |
-| Journal | ✅ Every order journals `MT5_ORDER` with the retcode, ticket, price, and server. |
+| Kill switch | ✅ Engaged kill switch refuses the order outright (checked first); the same latch triggers the cross-venue flatten. |
+| Lot cap | ✅ `0 < lots ≤ Mt5MaxLots`, checked before the bridge is called; 0 disables placement entirely. |
+| Real-money gate | ✅ The MT5 account's demo/real comes from the venue itself: `account_info().trade_mode` via the bridge (0 = demo → verified virtual, 2 = real → verified real); the server-name/login heuristic is a demo-only fallback for older sidecars and can never verify an account as real. A real account additionally requires the same session unlock as every other real-money path, evaluated before the order is sent. |
+| Journal | ✅ Every order journals `MT5_ORDER` with the retcode, ticket, price and server. |
 | Transport | ✅ Loopback-only sidecar; the C# client refuses non-loopback base addresses by construction (`Mt5BridgeClient` ctor). |
-| FX-brain supervisor | ✅ The autonomous FX brain (`FxEngineHost`) routes its orders through the same ticket path, and an `FxSupervisor` gate runs **before every cycle and before every order**: MT5 daily-loss cap (`Mt5DailyLossCap`, latched until explicitly re-armed), absolute equity floor (`Mt5EquityFloor`), kill switch, and portfolio governor. Any halt returns the live engine to paper automatically. Halt/flatten events journal `FX_RISK` and post to the webhook. |
-| Cross-venue stops | ✅ Kill switch and governor trip both stop the FX brain and flatten every open MT5 position (`FxEmergencyFlattenAsync`) — the MT5 leg is covered by the same emergency stops as the Deriv legs. |
+
+## Path 2 — FX brain autonomous orders
+
+`FxPortfolioHost → FxEngineHost → Mt5BridgeClient → loopback sidecar → MetaTrader 5`
+
+| Rail | Coverage |
+|---|---|
+| FX supervisor | ✅ `FxSupervisor.Evaluate` runs before every cycle **and** before every order: daily-loss cap (latched until re-armed via RE-ARM), equity floor, kill switch, governor, bridge-down. Any halt returns the live engine to paper automatically; halt/flatten events journal `FX_RISK` and post to the webhook. |
+| Real-money gate | ✅ Demo/real is the venue's `account_info().trade_mode` (demo-only heuristic fallback — see Path 1) and the engine's `realMoneyUnlocked` predicate reads the shared `ManualRealMoneyGate`; a locked or unverified real account never passes a cycle. Autonomy off (`AutonomyEnabled` false) journals signals only — nothing is placed. |
+| Exposure + news vetoes | ✅ Pre-order vetoes inside the host (`FxExposureGuard`, `FxNewsVeto`) refuse over-cap or news-blackout entries. |
+| Paper soak | ✅ The brain starts in paper mode; go-live requires the per-symbol paper soak (`PaperSoakComplete`), and PAPER/LIVE are explicit user actions on the account bar. |
+| Attribution | ✅ Settled deals flow into `PerformanceTracker` / `TradeJournal` through `FxTradeFeed` (deduplicated by ticket), tagged `FX` with a deterministic per-login account id. |
+
+## Path 3 — Emergency flatten (order *reduction*, intentionally ungated)
+
+`TerminalViewModel → Mt5BridgeClient.ClosePositionAsync` and
+`DashboardViewModel.FxEmergencyFlattenAsync`
+
+Closing a position reduces risk, so these paths bypass the unlock on
+purpose: refusing to close because the unlock expired could cost real money
+during a kill-switch event. They are still bounded — close-only (the bridge
+has no modify-order endpoint on this path), triggered exclusively by the
+kill switch, a supervisor halt, or an explicit user close click.
 
 ## Residual risks (accepted, documented)
 
-- **Settings still decide `IsDemo` per account.** The gate cross-checks the
-  config against the API verdict, so a wrong config is refused loudly rather
-  than silently traded. The one direction the app can verify — the API says
-  virtual while the config claims real — is fixable with one click from the
-  unlock panel ("✓ Fix flag → demo": re-labels, persists, journals). The
-  opposite direction (config claims demo, API says real) stays a manual fix:
-  re-labelling to real is a human decision by definition.
-- **The manual trade's stake is not bounded by the risk engine.** Closed by
-  the `ManualMaxStake` ceiling (Settings tab): the Trades tab refuses any
-  stake above it before requesting a proposal, so a mistyped stake cannot
-  reach a real account. Ships capped at 10.00 (the risk engine's `MaxStake`),
-  so a fresh install is bounded out of the box; 0/blank is an explicit
-  opt-out that the Growth tab's go-live readiness panel flags red.
-- **Locked-real-account visibility at startup.** Closed by the Growth tab's
-  locked-account banners: session unlocks die with the process, so app start
-  re-locks real accounts — the banners list them (with the API verification
-  state) and carry an unlock affordance instead of leaving the state to be
-  discovered on the next start click.
-- **The first-run wizard replaced settings wholesale.** Closed by the
-  wizard's merge semantics: a completed wizard overwrites exactly its five
-  fields (token, symbol, brain, budget, autonomy/market-hours) into the
-  existing settings and forces `IsDemo` — a pre-configured webhook,
-  `ManualMaxStake`, staleness alert or risk cap survives first-run
-  completion instead of being silently discarded. The wizard's Save also
-  enforces the token floor (an empty token can no longer "complete" setup
-  into a configured-but-token-less app), and both save and skip persist the
-  completion flag so the wizard cannot trap a user in a launch loop.
+- **Demo/real on a legacy sidecar is a heuristic.** With the venue's
+  `trade_mode` (current sidecar) the gate reads the broker's own verdict;
+  only when the field is absent does the server-name/login heuristic step
+  in — and it can verify an account as demo, never as real, so a real
+  account on a stale sidecar fails closed into `BlockedUnverified` until
+  the sidecar is updated. A wrong flag fails toward demanding the unlock,
+  never toward bypassing it.
+- **There is no per-decision confidence engine** (the Deriv-era
+  `RiskEngine` went away with the binary integration). Its jobs are split
+  across rails that fail closed: supervisor caps, lot/exposure caps, the
+  gate, and the kill switch — none of them depend on a decision payload.
+- **Session unlocks are process-lifetime only.** Restart re-locks real
+  trading by design; the digest's arm-state leg and the staleness watch make
+  an armed unlock observable rather than silent.
+- **The sidecar is a trusted local process.** It binds 127.0.0.1 only, but
+  anything on the machine can reach it. The terminal's own risk settings
+  (stop levels in MT5 itself) are the last line beyond this app.
 
 ## Where the alerts go
 
-Every real-money refusal/strip is: journaled (`GROWTH_STATE` /
-`real-money-gate` with the decision), surfaced in the UI (status line +
-activity log), and sent out-of-band as a risk-rail toast and webhook post —
-the same channels the portfolio governor uses.
+Every refusal/strip is journaled (`MT5_ORDER`, `FX_RISK`,
+`REAL_MONEY_UNLOCK_STALE`, `real-money-gate` categories), surfaced in the UI
+(status lines + the Journal tab's dedicated 🔓/⏰ formatters), and sent
+out-of-band as a risk-rail toast and webhook post — the same channels the
+supervisor uses.
 
-Arming is audited as loudly as refusing: the unlock panel's one-pass arm
-writes a single `REAL_MONEY_UNLOCK_ARMED` journal entry (account names,
-count, how many are API-verified real, whether the manual surfaces joined)
-and posts a 🔓 webhook status. The Journal tab renders those entries with a
-dedicated 🔓 line (like settlements), so the audit trail is readable in the
-UI without JSON spelunking. Every metrics digest additionally carries the
-current arm state (`DescribeUnlockState`: who is armed, since when, how many
-growth trades settled inside each unlock window with their net P&L, and the
-manual surfaces) — so monitoring sees real trading re-enabled after a
-restart, and whether real mode was actually used. An unlock left armed past
-the staleness threshold (default 4h) is flagged by the hub — journal
-(`REAL_MONEY_UNLOCK_STALE`), toast, and webhook — repeating every full
-threshold while still armed; repeat unlock clicks cannot reset the clock.
+Arming stays observable: every metrics digest carries the current arm state
+(real-money session unlock `ARMED` / silence = nothing armed), so monitoring
+sees real trading re-enabled after a restart. The staleness watch repeats
+its journal + toast + webhook every full `ArmStalenessHours` threshold while
+the unlock stays armed.
 
 ## Where the drill lives
 
 The gate lifecycle is rehearsed weekly against fake brokers (no network, no
-real funds) by the **Real-money gate drill** workflow
-(`gate-drill.yml`): locked start refused → unlock arms → mid-session stop
-→ hub drop, plus the manual-surface and parse fail-closed matrices. A failing
-rehearsal files a `ci-gate-drill` drift alert; a green one records health.
-PRs additionally get the safety-audit coverage-table diff posted as a comment
-(`safety-audit-diff` job), so rail changes are reviewed before merge.
-
-The classes the drill selects are listed in
-[Test class coverage](#test-class-coverage) below.
+real funds) by the **Real-money gate drill** workflow (`gate-drill.yml`),
+which selects exactly the `[Trait("Category", "RealMoney")]` test classes
+below. A failing rehearsal files a `ci-gate-drill` drift alert; a green one
+records health. PRs additionally get the safety-audit coverage-table diff
+posted as a comment (`safety-audit-diff` job), so rail changes are reviewed
+before merge.
 
 Releases are gated on the drill: every `v*` tag runs it, and the workflow's
 `release-gate` job fails the tag when the rehearsal did not pass on that
-exact commit. The tag workflow's `publish-exe` job then builds the
-self-contained Windows exe (same recipe as the local script) only after
-`release-gate` passes, uploading it as a run artifact — CI cannot produce a
-binary from an unproven gate. The local path enforces the same rule:
-`scripts/publish_exe.ps1` refuses to publish from a release tag until a green
-gate-drill run exists for it, so neither route ships from an unproven gate.
+exact commit. `scripts/publish_exe.ps1` refuses to publish from a release
+tag until a green gate-drill run exists for it, so neither route ships from
+an unproven gate.
 
 ## Test class coverage
 
-The drill selects the rail's own tests by `[Trait("Category", "RealMoney")]`
-(PR #61), so every test class that exercises gate state must carry the trait.
+The drill selects the rail's own tests by `[Trait("Category", "RealMoney")]`,
+so every test class that exercises gate state must carry the trait.
 `scripts/check_rail_traits.py` (workflow-lint job) fails when a gate-touching
 class ships without it, and keeps this table honest in both directions:
 classes listed here must exist on disk, and traited classes must be listed
@@ -190,19 +131,10 @@ here.
 
 | Test class | What it exercises |
 |---|---|
-| `RealMoneyGateTests` (DongGfx.Core) | The gate's decision matrix: demo passthrough; locked, unverified, and config-mismatch refusals; fail-closed on unknown verification. |
-| `RiskEngineRealMoneyTests` (DongGfx.Core) | The risk engine rejecting a decision when the gate refuses. |
-| `AccountBalanceIsVirtualTests` (DongGfx.Core) | Deriv's `is_virtual` verification feeding the gate. |
+| `RealMoneyGateTests` (DongGfx.Core) | The gate's decision matrix: demo passthrough; locked, unverified, virtual-account and config-mismatch refusals; fail-closed on unknown verification; `Explain` never renders an empty refusal. |
+| `Mt5AccountGateVerdictTests` (DongGfx.App) | The bridge's venue-verdict mapping: `trade_mode` → `RealMoneyGate.VerdictFromTradeMode`, demo-contest→true / real→false / absent-or-unknown→null (fail-closed), and the `DetermineApiVerifiedVirtual` demo-heuristic fallback the mapping preserves. |
 | `JournalLoggingSurfaceTests` (DongGfx.Core) | The journal surface the gate writes through, including `REAL_MONEY_UNLOCK_ARMED` entries. |
-| `ManualRealMoneyGateTests` (DongGfx.App) | The manual-surface unlock latch and its refusal matrix (Trades/Brain paths). |
-| `RealMoneyUnlockArmTests` (DongGfx.App) | Unlock-panel arming: journal arm entries, activity logging, staleness. |
-| `GrowthViewModelRestartTests` (DongGfx.App) | The Growth tab's unlock panel arming every listed account at once. |
-| `GrowthViewModelReadinessTests` (DongGfx.App) | The go-live readiness panel's five checks: locked unlock / unverified account / disabled manual cap / absent governor cap / missing webhook each flip exactly the right leg red. |
-| `ManualMaxStakeTests` (DongGfx.App) | The manual stake cap on the Trades tab path. |
-| `FirstRunWizardLogicTests` (DongGfx.App) | The first-run wizard's merge-into-settings rule (only the five wizard fields are written, `IsDemo` forced) and the token floor that keeps setup from completing token-less. |
-| `MetricsDigestServiceTests` (DongGfx.App) | The digest's arm-state leg and rail table. |
-| `NewPlatformDerivClientTests` (DongGfx.Core) | The new-platform (PAT) transport under the same trade paths: OTP connect with no classic authorize, a fresh OTP minted on every reconnect, the `underlying_symbol` rename, and the discovery `account_type` verdict flowing into the same verified-virtual seam the gate reads. |
-| `RealMoneyGateHubTests` (DongGfx.App) | Hub start-time gate: demo passthrough, real/unverified refusals, idempotent refusal under concurrent starts. |
-| `RealMoneyGateMidSessionTests` (DongGfx.App) | Runner-level re-evaluation at start and per-settlement mid-session stop. |
+| `ManualRealMoneyGateTests` (DongGfx.App) | The shared session unlock latch: fresh gate locked, arm/reset round-trip, `ArmedAt` stamped once (repeat arms keep the original staleness clock), and the full refusal matrix (unverified/locked/virtual/mismatch). |
+| `TerminalViewModelTests` (DongGfx.App) | The Terminal tab's MT5 order card rails: kill-switch refusal (manual + emergency stop latching the global switch), zero-lot fail-closed, over-cap refusal, bridge-down hint, bridge-backed account bar and deal history, plus the brain switch's settings persistence and symbol sync. |
 | `JournalFormatterTests` (DongGfx.App) | The Journal tab's dedicated unlock-arm/stale formatting and category filter. |
-| `TerminalViewModelTests` (DongGfx.App) | The Terminal tab's order ticket: the hub's per-account real-money gate (locked real refused, armed real passes to the connectivity check), the manual stake cap, the kill-switch refusal, and a full proposal → buy → settlement flow into the shared TradeStore with account attribution. |
+| `MetricsDigestServiceTests` (DongGfx.App) | The digest's arm-state leg, safety-audit table change detection (post once, then silent), and the FX-brain state line. |

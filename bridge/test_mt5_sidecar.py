@@ -46,7 +46,7 @@ class FakeMT5:
         return SimpleNamespace(
             login=201587365, server="Deriv-Demo", currency="USD",
             balance=2610.55, equity=2610.55, margin=0.0, margin_free=2610.55,
-            leverage=1000)
+            leverage=1000, trade_mode=0)
 
     def terminal_info(self):
         return SimpleNamespace(connected=True, name="MetaTrader 5 Terminal")
@@ -251,6 +251,9 @@ def test_reads_shape():
     h = make_handlers()
     acc = h.account()
     assert acc["login"] == 201587365 and acc["server"] == "Deriv-Demo"
+    # The venue's demo/real verdict rides on /account; the C# real-money
+    # gate maps 0→virtual, 2→real and refuses on anything else.
+    assert acc["trade_mode"] == 0
     assert h.health()["ok"] is True
     tick = h.ticks("XAUUSDmicro")
     assert tick["bid"] == 4347.61 and tick["ask"] == 4347.88

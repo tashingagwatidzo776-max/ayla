@@ -6,10 +6,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DongGfx.App.Infrastructure;
 using DongGfx.App.Services;
-using DongGfx.Core;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
-using DongGfx.Deriv;
 
 namespace DongGfx.App.ViewModels;    /// <summary>One row in the terminal's Market Watch grid.</summary>
 public sealed partial class TerminalSymbolRow : ObservableObject
@@ -61,77 +59,8 @@ public sealed partial class TerminalSymbolRow : ObservableObject
     public override string ToString() => $"{Symbol} — {DisplayName}";
 }
 
-/// <summary>One open or settled contract in the terminal's positions grid.</summary>
-public sealed partial class TerminalPositionRow : ObservableObject
-{
-    public TerminalPositionRow(string contractId, string symbol, Direction direction,
-        decimal stake, double entrySpot, long entryTime)
-    {
-        ContractId = contractId;
-        Symbol = symbol;
-        Direction = direction;
-        Stake = stake;
-        EntrySpot = entrySpot;
-        EntryTime = entryTime;
-    }
-
-    public string ContractId { get; }
-    public string Symbol { get; }
-    public Direction Direction { get; }
-    public decimal Stake { get; }
-    public double EntrySpot { get; }
-    public long EntryTime { get; }
-
-    public string DirectionText => Direction == Direction.Rise ? "RISE ▲" : "FALL ▼";
-
-    [ObservableProperty]
-    private double currentSpot;
-
-    [ObservableProperty]
-    private string status = "open";
-
-    /// <summary>Realized profit once settled; null while open.</summary>
-    [ObservableProperty]
-    private decimal? profit;
-
-    [ObservableProperty]
-    private string exitSpotText = "—";
-
-    /// <summary>Indicative in/out-of-the-money delta while the contract runs.</summary>
-    public string DeltaText
-    {
-        get
-        {
-            if (Profit.HasValue || CurrentSpot <= 0 || EntrySpot <= 0)
-            {
-                return "";
-            }
-
-            var delta = Direction == Direction.Rise
-                ? CurrentSpot - EntrySpot
-                : EntrySpot - CurrentSpot;
-            return $"{(delta >= 0 ? "+" : "")}{delta:0.#####}";
-        }
-    }
-
-    public void Settle(ContractInfo final)
-    {
-        Status = final.Status.ToString().ToLowerInvariant();
-        Profit = final.Profit;
-        ExitSpotText = final.ExitSpot > 0 ? final.ExitSpot.ToString("0.#####") : "—";
-        CurrentSpot = final.ExitSpot;
-        OnPropertyChanged(nameof(DeltaText));
-    }
-
-    public void UpdateSpot(double spot)
-    {
-        CurrentSpot = spot;
-        OnPropertyChanged(nameof(DeltaText));
-    }
-}
-
-/// <summary>One row in the MT5-style Trade tab: an open binary contract or an
-/// MT5 position, normalized to a ticket-like grid with live P/L.</summary>
+/// <summary>One row in the MT5-style Trade tab: an open MT5 position,
+/// normalized to a ticket-like grid with live P/L.</summary>
 public sealed record TerminalTradeRow(
     string Ticket, string Symbol, string Side, double Volume,
     double Entry, double Current, double Profit, string Kind, long? Mt5Ticket = null)
@@ -169,9 +98,9 @@ public sealed partial class TerminalLadderRow : ObservableObject
 /// The DON G FX Terminal — an MT5-style trading workspace: Market Watch over
 /// every tradable symbol, a live candle chart, a four-tab Toolbox (Trade /
 /// Exposure / Account History / Journal), a synthetic price ladder, the
-/// binary order ticket, and the MT5 bridge card for CFD/forex orders routed
-/// to the running MetaTrader 5 terminal. Every order — binary or MT5 — runs
-/// the same rails: kill switch, real-money gate, stake/lot caps. The brain's
+/// MT5 bridge card for CFD/forex orders routed to the running MetaTrader 5
+/// terminal, and the forex brain's paper/live controls. Every MT5 order runs
+/// the same rails: kill switch, real-money gate, lot caps. The brain's
 /// autonomy switch lives here too: one switch governs every surface.
 /// </summary>
 public sealed partial class TerminalViewModel : ObservableObject
@@ -179,23 +108,18 @@ public sealed partial class TerminalViewModel : ObservableObject
     private const int LadderLevels = 6;
     private const int CandleSeconds = 60; // M1 candles built from the tick feed
 
-    private readonly Func<DerivClient> _client;
-    private readonly MultiAccountHub _hub;
-    private readonly TradeStore _store;
     private readonly TradeJournal _journal;
     private readonly Func<AppSettings> _settings;
     private readonly Action _persist;
     private readonly Func<bool> _isRealMoneyUnlocked;
     private readonly DashboardViewModel _dashboard;
-    private readonly PublicMarketDataClient _public;
     private readonly Mt5BridgeClient _mt5;
     private readonly TickArchive _tickArchive;
-    private readonly Func<AccountsViewModel> _accounts;
 
     // ── DON G FX forex brain (C): paper/live engine surfaced in the tab ──
 
     private FxPortfolioHost? _fxHost;
-    private readonly Func<FxPortfolioHost?> _fxHostFactory;
+    private readonly Func<FxPortfolioHost?>? _fxHostFactory;
 
     [ObservableProperty]
     private string fxBadge = "FX BRAIN: OFF";
@@ -305,12 +229,7 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     private void StatusChangedInternal(string message) => OnUiThread(() => FxStatusText = message);
 
-    // ── Terminal sign-in (A2): accounts + PAT/OAuth inside the Terminal ──
-
-    /// <summary>Every hub account as a read-only wrapper row, rebuilt when
-    /// the hub's account set changes. The hub stays the single owner of
-    /// connection state — the Terminal only projects it.</summary>
-    public ObservableCollection<TerminalAccountRow> TerminalAccounts { get; } = new();
+    // ── Terminal sign-in (A2): MT5 bridge status in the sign-in band ──
 
     /// <summary>MT5 bridge status line for the sign-in band (read-only here:
     /// the sidecar is a machine-level process, started by Watchdog/autostart).</summary>
@@ -318,112 +237,6 @@ public sealed partial class TerminalViewModel : ObservableObject
         ? $"MT5 bridge: connected · {(Mt5AccountText ?? "waiting for poll")}"
         : "MT5 bridge: down — auto-restart pending";
 
-    [ObservableProperty]
-    private string terminalTokenInput = "";
-
-    [ObservableProperty]
-    private string terminalSignInStatus = "";
-
-    [ObservableProperty]
-    private bool isTerminalSignInBusy;
-
-    /// <summary>Rebuild the account wrapper rows from the hub. The accounts
-    /// factory is optional at construction (tests, DI ordering) — an unwired
-    /// factory just leaves the sign-in band empty instead of throwing.
-    /// </summary>
-    private void RebuildTerminalAccounts()
-    {
-        OnUiThread(() =>
-        {
-            TerminalAccounts.Clear();
-            try
-            {
-                foreach (var a in _accounts().Hub.Accounts)
-                {
-                    TerminalAccounts.Add(new TerminalAccountRow(a));
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                // no AccountsViewModel wired — sign-in stays unavailable
-            }
-            OnPropertyChanged(nameof(Mt5BridgeLine));
-        });
-    }
-
-    [RelayCommand]
-    private async Task TerminalImportTokenAsync()
-    {
-        if (IsTerminalSignInBusy)
-        {
-            return;
-        }
-
-        var token = TerminalTokenInput.Trim();
-        if (token.Length < 8)
-        {
-            TerminalSignInStatus = "Paste a Deriv token (at least 8 characters).";
-            return;
-        }
-
-        IsTerminalSignInBusy = true;
-        TerminalSignInStatus = "verifying via discovery…";
-        try
-        {
-            var added = await _accounts().ImportTokenFromTerminalAsync(token).ConfigureAwait(true);
-            TerminalTokenInput = "";
-            TerminalSignInStatus = added > 0
-                ? "signed in — account added and connecting."
-                : "that token's account is already signed in.";
-            RebuildTerminalAccounts();
-        }
-        catch (Exception ex)
-        {
-            TerminalSignInStatus = $"sign-in failed: {ex.Message}";
-        }
-        finally
-        {
-            IsTerminalSignInBusy = false;
-        }
-    }
-
-    [RelayCommand]
-    private async Task TerminalSignInOAuthAsync()
-    {
-        if (IsTerminalSignInBusy)
-        {
-            return;
-        }
-
-        IsTerminalSignInBusy = true;
-        TerminalSignInStatus = "browser opening — approve the Deriv consent screen…";
-        try
-        {
-            await _accounts().SignInFromTerminalAsync().ConfigureAwait(true);
-            TerminalSignInStatus = "OAuth sign-in complete — accounts imported.";
-            RebuildTerminalAccounts();
-        }
-        catch (Exception ex)
-        {
-            TerminalSignInStatus = $"OAuth sign-in failed: {ex.Message}";
-        }
-        finally
-        {
-            IsTerminalSignInBusy = false;
-        }
-    }
-
-    [RelayCommand]
-    private void TerminalConnectAccount(TerminalAccountRow? row) => row?.Connect();
-
-    [RelayCommand]
-    private async Task TerminalDisconnectAccountAsync(TerminalAccountRow? row)
-    {
-        if (row is not null)
-        {
-            await row.DisconnectAsync().ConfigureAwait(true);
-        }
-    }
     private readonly Action<bool>? _setAutonomyBound;
     private readonly Action<string>? _setSymbolBound;
     private readonly Dispatcher _dispatcher;
@@ -434,9 +247,6 @@ public sealed partial class TerminalViewModel : ObservableObject
     private int _busy;
 
     public TerminalViewModel(
-        Func<DerivClient> client,
-        MultiAccountHub hub,
-        TradeStore store,
         Func<AppSettings> settings,
         Action persist,
         Func<bool> isRealMoneyUnlocked,
@@ -446,63 +256,26 @@ public sealed partial class TerminalViewModel : ObservableObject
         Action<bool>? setAutonomyBound = null,
         Action<string>? setSymbolBound = null,
         TickArchive? tickArchive = null,
-        Func<AccountsViewModel>? accounts = null,
-        Func<FxPortfolioHost?>? fxHostFactory = null)
-        : this(client, hub, store, settings, persist, isRealMoneyUnlocked, dashboard,
-               journal, mt5, setAutonomyBound, setSymbolBound, new PublicMarketDataClient(), tickArchive, accounts, fxHostFactory)
-    {
-    }
-
-    public TerminalViewModel(
-        Func<DerivClient> client,
-        MultiAccountHub hub,
-        TradeStore store,
-        Func<AppSettings> settings,
-        Action persist,
-        Func<bool> isRealMoneyUnlocked,
-        DashboardViewModel dashboard,
-        TradeJournal? journal,
-        Mt5BridgeClient? mt5,
-        Action<bool>? setAutonomyBound,
-        Action<string>? setSymbolBound,
-        PublicMarketDataClient publicClient,
-        TickArchive? tickArchive = null,
-        Func<AccountsViewModel>? accounts = null,
         Func<FxPortfolioHost?>? fxHostFactory = null)
     {
-        // FIRST: the UI-thread helper is used from the constructor itself
-        // (hub subscription below) — it must never see an unset dispatcher.
+        // FIRST: the UI-thread helper is used from the constructor itself —
+        // it must never see an unset dispatcher.
         _dispatcher = Dispatcher.CurrentDispatcher;
-        _client = client;
-        _hub = hub;
-        _store = store;
         _journal = journal ?? new TradeJournal(
             Path.Combine(Path.GetTempPath(), "dg-terminal-fallback-journal"));
         _settings = settings;
         _persist = persist;
         _isRealMoneyUnlocked = isRealMoneyUnlocked;
         _dashboard = dashboard;
-        _public = publicClient;
         _mt5 = mt5 ?? new Mt5BridgeClient();
         _tickArchive = tickArchive ?? new TickArchive();
-        _accounts = accounts ?? (() => throw new InvalidOperationException(
-            "Terminal sign-in requires the AccountsViewModel (DI wiring)"));
-        _hub.AccountsChanged += RebuildTerminalAccounts;
-        RebuildTerminalAccounts();
         _fxHostFactory = fxHostFactory;
         _setAutonomyBound = setAutonomyBound;
         _setSymbolBound = setSymbolBound;
 
-        _public.TickReceived += OnPublicTick;
-        _store.TradeAdded += OnTradeAdded;
-        Positions.CollectionChanged += (_, e) =>
-        {
-            OnPropertyChanged(nameof(HasPositions));
-            if (e.Action == NotifyCollectionChangedAction.Add)
-            {
-                OnPropertyChanged(nameof(OpenPositionsText));
-            }
-        };
+        // The Toolbox's Journal rows follow the FX engine, the supervisor and
+        // the deal feed live (the journal is the app's single append path).
+        _journal.EntryAdded += _ => OnUiThread(RefreshJournalRows);
 
         // Low-CPU model: one 3 s health/positions poll (was the only timer),
         // a 1 s selected-symbol quote refresh (event-like, single small HTTP
@@ -519,7 +292,7 @@ public sealed partial class TerminalViewModel : ObservableObject
 
         // Seed the ladder so the panel is never empty on first paint.
         RebuildLadder(0);
-        RefreshHistory();
+        _ = RefreshHistoryAsync();
     }
 
     private void OnUiThread(Action action)
@@ -545,15 +318,15 @@ public sealed partial class TerminalViewModel : ObservableObject
         _mt5QuoteTimer.Start();
         _mt5WatchTimer.Start();
         _ = PollMt5Async();
-        RefreshAccountBar();
-        RefreshHistory();
+        _ = RefreshAccountBarAsync();
+        _ = RefreshHistoryAsync();
     }
 
     /// <summary>Test seam: one explicit MT5 poll without the timer.</summary>
     internal Task PollMt5ForTestsAsync() => PollMt5Async();
 
     /// <summary>Test seam: rebuild the history/journal rows on demand.</summary>
-    internal void RefreshHistoryForTests() => RefreshHistory();
+    internal Task RefreshHistoryForTests() => RefreshHistoryAsync();
 
     // ── Account bar ────────────────────────────────────────────────
 
@@ -602,32 +375,26 @@ public sealed partial class TerminalViewModel : ObservableObject
         }
 
         QuoteText = value.Last > 0 ? value.Last.ToString("0.#####") : "—";
-        _ = _public.SubscribeTicksAsync(value.Symbol);
         RebuildLadder(value.Bid > 0 ? value.Bid : value.Last);
         _ = LoadCandlesFromBridgeAsync(value.Symbol);
-    }
 
-    private async void SubscribeSelected()
-    {
-        var symbol = SelectedSymbol?.Symbol;
-        if (string.IsNullOrEmpty(symbol))
+        // Sync the selected symbol into the shared settings so the brain
+        // trades the same instrument the terminal shows. The settings
+        // editor's bound field is the source of truth on save — writing
+        // only the shared snapshot gets clobbered by the next save.
+        var settings = _settings();
+        if (!string.IsNullOrWhiteSpace(value.Symbol)
+            && !string.Equals(settings.FxSymbol, value.Symbol, StringComparison.Ordinal))
         {
-            return;
-        }
-
-        try
-        {
-            await _public.SubscribeTicksAsync(symbol);
-        }
-        catch
-        {
-            // Quotes are best-effort; the order ticket still works.
+            settings.FxSymbol = value.Symbol;
+            _setSymbolBound?.Invoke(value.Symbol);
+            _persist();
         }
     }
 
     private void OnPublicTick(Tick tick)
     {
-        _tickArchive.Add("deriv", tick.Symbol, tick.Bid, tick.Ask, tick.Epoch);
+        _tickArchive.Add("mt5", tick.Symbol, tick.Bid, tick.Ask, tick.Epoch);
 
         var row = Symbols.FirstOrDefault(s => s.Symbol == tick.Symbol)
                   ?? (SelectedSymbol?.Symbol == tick.Symbol ? SelectedSymbol : null);
@@ -641,10 +408,6 @@ public sealed partial class TerminalViewModel : ObservableObject
             QuoteText = tick.Quote.ToString("0.#####");
             RebuildLadder(tick.Bid > 0 ? tick.Bid : tick.Quote);
             AggregateTick(tick);
-            foreach (var p in Positions.Where(p => p.Symbol == tick.Symbol && !p.Profit.HasValue))
-            {
-                p.UpdateSpot(tick.Quote);
-            }
         }
     }
 
@@ -655,9 +418,9 @@ public sealed partial class TerminalViewModel : ObservableObject
         MarketWatchStatus = "loading catalog…";
         try
         {
-            // MT5-native first: the bridge's catalog with live quotes is the
-            // Market Watch source (XAUUSD, EURUSD, …). Deriv's catalog is
-            // only the fallback while the bridge is down.
+            // MT5-native only: the bridge's catalog with live quotes is
+            // the Market Watch source (XAUUSD, EURUSD, …); while the bridge
+            // is down the watch stays empty and the hint below is shown.
             var mt5Symbols = await _mt5.GetSymbolsAsync().ConfigureAwait(true);
             if (mt5Symbols.Count > 0)
             {
@@ -676,17 +439,11 @@ public sealed partial class TerminalViewModel : ObservableObject
             }
             else
             {
-                var symbols = await _public.GetActiveSymbolsAsync();
-                Symbols.Clear();
-                foreach (var s in symbols)
-                {
-                    Symbols.Add(new TerminalSymbolRow(s.Symbol, s.DisplayName, s.ExchangeIsOpen));
-                }
-
-                MarketWatchStatus = $"{Symbols.Count} symbols · Deriv catalog (bridge down)";
+                MarketWatchStatus = "bridge down — run:  python bridge/mt5_sidecar.py";
+                return;
             }
 
-            var preferred = _settings().Symbol;
+            var preferred = _settings().FxSymbols.Split(',')[0].Trim();
             SelectedSymbol = Symbols.FirstOrDefault(s => s.Symbol == preferred)
                              ?? Symbols.FirstOrDefault();
             OnPropertyChanged(nameof(FilteredSymbols));
@@ -701,8 +458,8 @@ public sealed partial class TerminalViewModel : ObservableObject
         }
     }
 
-    /// <summary>Shared quote application for MT5 and Deriv ticks: row state
-    /// + selected-symbol quote text + ladder + P/L spot updates in one place.</summary>
+    /// <summary>Shared quote application for MT5 ticks: row state +
+    /// selected-symbol quote text + ladder + candle aggregation in one place.</summary>
     private void ApplyQuote(TerminalSymbolRow row, double bid, double ask, long epochMs)
     {
         _tickArchive.Add("mt5", row.Symbol, bid, ask, epochMs);
@@ -714,6 +471,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         {
             QuoteText = quote.ToString("0.#####");
             RebuildLadder(bid > 0 ? bid : quote);
+            AggregateTick(new Tick(row.Symbol, quote, ask, bid, epochMs, 0));
         }
     }
 
@@ -743,11 +501,6 @@ public sealed partial class TerminalViewModel : ObservableObject
                 if (row is not null)
                 {
                     ApplyQuote(row, t.Bid, t.Ask, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                }
-
-                foreach (var p in Positions.Where(p => p.Symbol == symbol && !p.Profit.HasValue))
-                {
-                    p.UpdateSpot(t.Bid);
                 }
             }
         }
@@ -881,7 +634,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         }
     }
 
-    // ── Price ladder (synthetic DOM: Deriv streams no depth) ───────
+    // ── Price ladder (synthetic DOM — the bridge's /book is empty on Deriv-Demo) ──
 
     public ObservableCollection<TerminalLadderRow> Ladder { get; } = new();
 
@@ -916,36 +669,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         }
     }
 
-    // ── Binary order ticket ────────────────────────────────────────
-
-    /// <summary>Rise = buy the up contract; Fall = the down contract.</summary>
-    [ObservableProperty]
-    private Direction selectedDirection = Direction.Rise;
-
-    partial void OnSelectedDirectionChanged(Direction value)
-    {
-        OnPropertyChanged(nameof(IsRise));
-        OnPropertyChanged(nameof(IsFall));
-    }
-
-    /// <summary>RadioButton bindings for the direction toggle.</summary>
-    public bool IsRise
-    {
-        get => SelectedDirection == Direction.Rise;
-        set { if (value) { SelectedDirection = Direction.Rise; } }
-    }
-
-    public bool IsFall
-    {
-        get => SelectedDirection == Direction.Fall;
-        set { if (value) { SelectedDirection = Direction.Fall; } }
-    }
-
-    [ObservableProperty]
-    private decimal stake;
-
-    [ObservableProperty]
-    private int durationMinutes;
+    // ── Order ticket status (shared by the brain switch + MT5 card) ───
 
     [ObservableProperty]
     private string ticketStatus = "";
@@ -953,161 +677,7 @@ public sealed partial class TerminalViewModel : ObservableObject
     [ObservableProperty]
     private bool isTicketBusy;
 
-    public string ContractTypeInfo =>
-        "Deriv binary options: Rise (wins if exit > entry) or Fall (wins if exit < entry) " +
-        "at any offered duration. Payout is fixed at entry; the live delta shows " +
-        "in/out-of-the-money while the contract runs.";
-
-    [RelayCommand]
-    private async Task PlaceOrderAsync()
-    {
-        var settings = _settings();
-
-        // Sync the ticket's symbol into the shared settings so the brain,
-        // growth engines and terminal trade the same instrument.
-        if (!string.IsNullOrWhiteSpace(SelectedSymbol?.Symbol)
-            && !string.Equals(settings.Symbol, SelectedSymbol.Symbol, StringComparison.Ordinal))
-        {
-            settings.Symbol = SelectedSymbol.Symbol;
-            // Keep the settings UI's bound field in sync: it is the source of
-            // truth on save — writing only the shared instance gets clobbered
-            // by the next settings save.
-            _setSymbolBound?.Invoke(SelectedSymbol.Symbol);
-            _persist();
-        }
-
-        var stakeUsed = Stake > 0 ? Stake : settings.Stake;
-        var duration = DurationMinutes > 0 ? DurationMinutes : settings.DurationMinutes;
-
-        // ── The same rails as every other trade path ──
-        if (_dashboard.IsKillSwitchEngaged)
-        {
-            TicketStatus = "kill switch is engaged — reset it on the Dashboard first";
-            return;
-        }
-
-        if (settings.ManualMaxStake > 0 && stakeUsed > settings.ManualMaxStake)
-        {
-            TicketStatus = $"stake {stakeUsed:0.##} {settings.Currency} exceeds the manual max " +
-                $"of {settings.ManualMaxStake:0.##} — lower it and retry";
-            return;
-        }
-
-        var connection = _hub.Accounts.FirstOrDefault(a => a.IsConnected);
-        var client = connection is not null ? connection.Client : _client();
-
-        // ── Real-money gate, evaluated on the SAME state as every other
-        // surface: the connected account's config flag, the API's own
-        // verification, and the hub's per-account session unlock. The
-        // fallback (primary client, no hub row) uses the primary gate.
-        RealMoneyDecision gate;
-        if (connection is not null)
-        {
-            gate = RealMoneyGate.Evaluate(
-                connection.Config.IsDemo,
-                connection.ApiVerifiedVirtual,
-                _hub.IsRealMoneyUnlocked(connection.Config.Id));
-        }
-        else
-        {
-            var apiVerifiedVirtual = string.IsNullOrEmpty(client.LoginId)
-                ? (bool?)null : client.Balance.IsVirtual;
-            gate = RealMoneyGate.Evaluate(
-                settings.IsDemo, apiVerifiedVirtual, _isRealMoneyUnlocked?.Invoke() ?? false);
-        }
-
-        if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
-        {
-            TicketStatus = RealMoneyGate.Explain(gate);
-            return;
-        }
-
-        if (!client.IsConnected)
-        {
-            TicketStatus = "not connected — connect an account first (Accounts & Growth tab)";
-            return;
-        }
-
-        IsTicketBusy = true;
-        try
-        {
-            TicketStatus = "requesting proposal…";
-            var proposal = await client.GetProposalAsync(
-                settings.Symbol, SelectedDirection, stakeUsed, settings.Currency, duration);
-
-            TicketStatus = $"buying {SelectedDirection} @ {proposal.Spot:0.#####} (payout {proposal.Payout:0.##} {settings.Currency})…";
-            var buy = await client.BuyAsync(proposal.Id, proposal.Spot);
-
-            var row = new TerminalPositionRow(
-                buy.ContractId, settings.Symbol, SelectedDirection, stakeUsed,
-                proposal.Spot, 0);
-            row.CurrentSpot = proposal.Spot;
-            Positions.Insert(0, row);
-
-            TicketStatus = $"contract {buy.ContractId} open — settling (≤ {duration} min)…";
-
-            // Settle in the background so the terminal stays responsive.
-            // The store write comes FIRST (it must never depend on the UI
-            // dispatcher being pumped); the grid updates are posted after.
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var final = await client.WaitForSettlementAsync(
-                        buy.ContractId, TimeSpan.FromMinutes(duration + 3));
-                    _store.Add(new Trade(
-                        Guid.NewGuid(), settings.Symbol, SelectedDirection, stakeUsed, settings.Currency,
-                        final.EntrySpot, final.EntryTime, final.ContractId, final.Status, final.Profit,
-                        final.ExitSpot > 0 ? final.ExitSpot : null,
-                        final.ExitTime > 0 ? final.ExitTime : null,
-                        DateTimeOffset.UtcNow) with
-                    {
-                        Source = TradeSource.Manual,
-                        AccountId = connection?.Config.Id,
-                        AccountName = connection?.DisplayName,
-                    });
-                    OnUiThread(() =>
-                    {
-                        row.Settle(final);
-                        RefreshHistory();
-                    });
-                }
-                catch
-                {
-                    OnUiThread(() => row.Status = "settlement error");
-                }
-            });
-
-            TicketStatus = $"contract {buy.ContractId} open @ {buy.BuyPrice:0.##}";
-        }
-        catch (DerivApiException ex)
-        {
-            TicketStatus = $"order failed: [{ex.Code}] {ex.Message}";
-        }
-        catch (Exception ex)
-        {
-            TicketStatus = $"order failed: {ex.Message}";
-        }
-        finally
-        {
-            IsTicketBusy = false;
-        }
-    }
-
-    // ── Positions (binary contracts) ───────────────────────────────
-
-    public ObservableCollection<TerminalPositionRow> Positions { get; } = new();
-
-    public bool HasPositions => Positions.Count > 0;
-
-    public string OpenPositionsText
-    {
-        get
-        {
-            var open = Positions.Count(p => !p.Profit.HasValue);
-            return $"{open} open · {Positions.Count} total";
-        }
-    }
+    // ── Positions (MT5) ───────────────────────────────────────
 
     // ── Toolbox: Trade / Exposure / Account History / Journal ──────
 
@@ -1122,13 +692,6 @@ public sealed partial class TerminalViewModel : ObservableObject
     private void RebuildTradeRows()
     {
         TradeRows.Clear();
-        foreach (var p in Positions.Where(p => !p.Profit.HasValue))
-        {
-            TradeRows.Add(new TerminalTradeRow(
-                p.ContractId, p.Symbol, p.DirectionText, 1,
-                p.EntrySpot, p.CurrentSpot, (double)(p.Profit ?? 0), "binary"));
-        }
-
         foreach (var p in _mt5Positions)
         {
             TradeRows.Add(new TerminalTradeRow(
@@ -1149,21 +712,39 @@ public sealed partial class TerminalViewModel : ObservableObject
         }
     }
 
-    private void RefreshHistory()
+    /// <summary>Rebuilds the Toolbox rows: deal history from the bridge
+    /// (settled FX trades) plus the journal's latest entries.</summary>
+    private async Task RefreshHistoryAsync()
     {
-        HistoryRows.Clear();
-        foreach (var t in _store.Trades.OrderByDescending(t => t.SettledAt).Take(50))
+        try
         {
-            HistoryRows.Add(new TerminalHistoryRow(
-                t.SettledAt.LocalDateTime.ToString("MM-dd HH:mm"),
-                t.Symbol,
-                t.Direction.ToString().ToUpperInvariant(),
-                1,
-                t.Outcome.ToString().ToLowerInvariant(),
-                (double)t.Profit,
-                t.Source ?? "—"));
+            var deals = await _mt5.GetDealsAsync(days: 7).ConfigureAwait(true);
+            HistoryRows.Clear();
+            foreach (var d in deals
+                         .Where(d => d.Profit + d.Commission + d.Swap != 0)
+                         .OrderByDescending(d => d.Time)
+                         .Take(50))
+            {
+                HistoryRows.Add(new TerminalHistoryRow(
+                    DateTimeOffset.FromUnixTimeSeconds(d.Time).LocalDateTime.ToString("MM-dd HH:mm"),
+                    d.Symbol,
+                    d.Side.ToUpperInvariant(),
+                    d.Volume,
+                    d.Profit + d.Commission + d.Swap >= 0 ? "win" : "loss",
+                    d.Profit + d.Commission + d.Swap,
+                    "FX"));
+            }
+        }
+        catch
+        {
+            // bridge down — the account-history rows stay as they were
         }
 
+        RefreshJournalRows();
+    }
+
+    private void RefreshJournalRows()
+    {
         JournalRows.Clear();
         foreach (var e in _journal.GetRecent(count: 40))
         {
@@ -1174,11 +755,6 @@ public sealed partial class TerminalViewModel : ObservableObject
                 Details = e.Details,
             });
         }
-    }
-
-    private void OnTradeAdded(Trade trade)
-    {
-        OnUiThread(RefreshHistory);
     }
 
     // ── MT5 bridge card ────────────────────────────────────────────
@@ -1334,11 +910,16 @@ public sealed partial class TerminalViewModel : ObservableObject
             return;
         }
 
-        var isDemo = account.Server.Contains("demo", StringComparison.OrdinalIgnoreCase)
-                     || account.Login > 500000000; // Deriv demo logins are ≥ 5xxxxxxxx
-        var unlocked = (_hub.Accounts.Any(a => !a.Config.IsDemo && _hub.IsRealMoneyUnlocked(a.Config.Id))
-                        || (_isRealMoneyUnlocked?.Invoke() ?? false)) ;
-        var gate = RealMoneyGate.Evaluate(isDemo, isDemo ? true : (bool?)null, unlocked);
+        // Demo/real: the bridge's account_info().trade_mode is the venue's
+        // own verdict (0=demo, 2=real); the server-name heuristic is a
+        // demo-only fallback for older sidecars (see Mt5Account). From one
+        // verdict, config and API verification agree — demo passes through,
+        // real demands the session unlock.
+        var verifiedVirtual = account.GateVerifiedVirtual;
+        var unlocked = _isRealMoneyUnlocked?.Invoke() ?? false;
+        var gate = RealMoneyGate.Evaluate(configIsDemo: verifiedVirtual is true,
+                                          apiVerifiedVirtual: verifiedVirtual,
+                                          unlockArmed: unlocked);
         if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
         {
             Mt5OrderStatus = RealMoneyGate.Explain(gate);
@@ -1462,30 +1043,30 @@ public sealed partial class TerminalViewModel : ObservableObject
         TicketStatus = "KILL SWITCH ENGAGED — everything stopped; reset on the Dashboard";
     }
 
-    /// <summary>Refreshes the account bar. Called on view load and balance events.</summary>
+    /// <summary>Refreshes the account bar from the MT5 bridge (login, server,
+    /// balance). Called on view load and balance events.</summary>
     [RelayCommand]
-    public void RefreshAccountBar()
+    public async Task RefreshAccountBarAsync()
     {
-        var connection = _hub.Accounts.FirstOrDefault(a => a.IsConnected);
-        var client = connection is not null ? connection.Client : _client();
-        if (connection is not null)
+        try
         {
-            AccountText = connection.DisplayName;
-            ConnectionText = connection.StatusText;
-            BalanceText = string.IsNullOrEmpty(connection.BalanceText)
-                ? "—" : connection.BalanceText;
+            var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
+            if (account is null)
+            {
+                AccountText = "not connected";
+                ConnectionText = "bridge offline";
+                BalanceText = "—";
+                return;
+            }
+
+            AccountText = account.Login.ToString();
+            ConnectionText = account.Server;
+            BalanceText = $"{account.Balance:0.##} {account.Currency}";
         }
-        else if (client.IsConnected)
-        {
-            AccountText = string.IsNullOrEmpty(client.LoginId) ? "primary" : client.LoginId;
-            ConnectionText = "connected";
-            BalanceText = client.Balance.Balance > 0
-                ? $"{client.Balance.Balance:0.##} {client.Balance.Currency}" : "—";
-        }
-        else
+        catch
         {
             AccountText = "not connected";
-            ConnectionText = "disconnected";
+            ConnectionText = "bridge offline";
             BalanceText = "—";
         }
     }
@@ -1498,50 +1079,4 @@ internal static class JsonSerializerOps
         System.Text.Json.JsonSerializer.Serialize(value);
 }
 
-/// <summary>One account in the Terminal's sign-in band: a read-only wrapper
-/// over the hub's AccountConnection so the Terminal can list, connect,
-/// disconnect, and monitor every account without owning connection state.</summary>
-public sealed partial class TerminalAccountRow : ObservableObject
-{
-    private readonly AccountConnection _connection;
-    private readonly System.Windows.Threading.Dispatcher _dispatcher;
 
-    public TerminalAccountRow(AccountConnection connection)
-    {
-        _connection = connection;
-        _dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
-        _connection.StateChanged += _ =>
-        {
-            void Refresh()
-            {
-                OnPropertyChanged(nameof(IsConnected));
-                OnPropertyChanged(nameof(StatusText));
-                OnPropertyChanged(nameof(BalanceText));
-                OnPropertyChanged(nameof(VerifiedText));
-            }
-
-            if (_dispatcher.CheckAccess())
-            {
-                Refresh();
-            }
-            else
-            {
-                _dispatcher.BeginInvoke(Refresh);
-            }
-        };
-    }
-
-    public AccountConnection Connection => _connection;
-    public string Label => _connection.DisplayName;
-    public string Kind => _connection.Config.IsDemo ? "DEMO" : "REAL";
-    public bool IsDemo => _connection.Config.IsDemo;
-    public bool IsMt5 => false;
-
-    public bool IsConnected => _connection.IsConnected;
-    public string StatusText => _connection.StatusText;
-    public string BalanceText => string.IsNullOrEmpty(_connection.BalanceText) ? "—" : _connection.BalanceText;
-    public string VerifiedText => _connection.VerifiedText;
-
-    public void Connect() => _ = _connection.ConnectAsync();
-    public Task DisconnectAsync() => _connection.DisconnectAsync();
-}

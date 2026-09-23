@@ -6,8 +6,9 @@ public enum RealMoneyDecision
     /// <summary>Not a real-money request — the demo path proceeds.</summary>
     DemoPassthrough,
 
-    /// <summary>Real money allowed (user config says real, API confirmed
-    /// the account is non-virtual, and the persisted unlock is active).</summary>
+    /// <summary>Real money allowed (user config says real, the venue API
+    /// confirmed the account is non-virtual, and the session unlock is
+    /// armed).</summary>
     Allowed,
 
     /// <summary>Config says real but the API says the account is virtual
@@ -28,12 +29,12 @@ public enum RealMoneyDecision
 }
 
 /// <summary>
-/// Headless gate for starting a growth engine on a real-money account.
-/// Every condition must pass: the account config says real, the Deriv API
-/// itself has verified the authorized account is non-virtual, and the
-/// explicit two-step unlock (user typed the confirmation phrase) is active
-/// for the session. Refusal reasons are specific so the UI can explain
-/// exactly which condition failed. Demo accounts pass through untouched.
+/// Headless gate for placing real-money orders. Every condition must pass:
+/// the account config says real, the venue's own API state has verified the
+/// account is non-virtual, and the explicit two-step unlock (user typed the
+/// confirmation phrase) is active for the session. Refusal reasons are
+/// specific so the UI can explain exactly which condition failed. Demo
+/// accounts pass through untouched.
 /// </summary>
 public static class RealMoneyGate
 {
@@ -41,8 +42,8 @@ public static class RealMoneyGate
     public const string ConfirmationPhrase = "TRADE REAL MONEY";
 
     /// <summary>Evaluates whether a growth engine may start on this account.
-    /// <paramref name="apiVerifiedVirtual"/> is Deriv's own is_virtual from
-    /// the authorize/balance response; null = not verified yet.</summary>
+    /// <paramref name="apiVerifiedVirtual"/> is the venue API's own
+    /// non-virtual verdict; null = not verified yet.</summary>
     public static RealMoneyDecision Evaluate(
         bool configIsDemo, bool? apiVerifiedVirtual, bool unlockArmed)
     {
@@ -76,16 +77,16 @@ public static class RealMoneyGate
         RealMoneyDecision.Allowed => "Real-money trading unlocked.",
         RealMoneyDecision.DemoPassthrough => "",
         RealMoneyDecision.BlockedAccountIsVirtual =>
-            "REFUSED: the Deriv API reports this account is virtual (demo funds). " +
-            "Authorize with a real-account token to trade real money.",
+            "REFUSED: the venue reports this account is virtual (demo funds). " +
+            "Configure a real account to trade real money.",
         RealMoneyDecision.BlockedUnverified =>
-            "REFUSED: the account type has not been verified by the Deriv API yet. " +
-            "Connect and authorize first.",
+            "REFUSED: the account type has not been verified yet. " +
+            "Connect and verify the account type first.",
         RealMoneyDecision.BlockedLocked =>
             $"REFUSED: real-money trading is locked. Type \"{ConfirmationPhrase}\" " +
             "in the unlock dialog to arm it for this session.",
         RealMoneyDecision.BlockedConfigMismatch =>
-            "REFUSED: this account is marked demo in settings but the Deriv API " +
+            "REFUSED: this account is marked demo in settings but the venue " +
             "reports a real account. Fix the account's demo/real flag first.",
         _ => "REFUSED.",
     };
