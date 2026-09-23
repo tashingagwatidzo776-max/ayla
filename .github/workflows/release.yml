@@ -124,10 +124,13 @@ jobs:
         COMMIT_SHA: ${{ github.sha }}
       run: |
         $sha = $env:COMMIT_SHA.Substring(0, 7)
+        $notes = @"
+        Automated release of $env:TAG_NAME (commit $sha).
+
+        - Shipped from a commit whose real-money gate drill passed.
+        - Asset: DongGfx-win-x64.zip (single-file, self-contained - what the app's AutoUpdater installs).
+        - The Terminal build badge flips to 'up to date' once this build is running.
+        "@
         gh release create "$env:TAG_NAME" DongGfx-win-x64.zip `
           --title "DON G FX $env:TAG_NAME" `
-          --notes ("Automated release of {0} (commit {1}).`n`n" +
-                  "- Shipped from a commit whose real-money gate drill passed.`n" +
-                  "- Asset: DongGfx-win-x64.zip (single-file, self-contained — what the app's AutoUpdater installs).`n" +
-                  "- The Terminal build badge flips to 'up to date' once this build is running.") `
-          -f commit=$sha
+          --notes $notes
