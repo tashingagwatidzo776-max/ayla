@@ -233,6 +233,10 @@ public class MetricsDigestServiceTests : IDisposable
         var digest = NewAuditService(markdown, state);
         digest.TryPostDigest();
         await WaitForAsync(() => Count >= 1);
+        // The busy-guard drops overlapping calls: wait until call #1 fully
+        // finished (state hash written is its last audit step) before the
+        // second trigger, or the repost is silently swallowed under load.
+        await WaitForAsync(() => File.Exists(state));
 
         // A rail change (the release scenario): the edited table posts again.
         markdown = AuditMarkdown.Replace("| Kill switch | Dashboard latch |",
