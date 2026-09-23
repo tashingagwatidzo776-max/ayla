@@ -63,7 +63,10 @@ public class WebhookServiceTests : IDisposable
     private int Count { get { lock (_sync) { return _bodies.Count; } } }
     private List<string> Bodies { get { lock (_sync) { return _bodies.ToList(); } } }
 
-    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 5000)
+    // 5s was occasionally exceeded under full-suite load (one random webhook
+    // test failing per run, always passing in isolation): give the default
+    // budget headroom. Explicit short timeouts (negative checks) unchanged.
+    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 30000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
@@ -73,10 +76,16 @@ public class WebhookServiceTests : IDisposable
         }
     }
 
+    // Under full-suite parallel load the loopback POST can exceed the
+    // service's fail-fast 10 s HttpClient timeout (one random test failing
+    // per run, always passing in isolation). Tests use a wider budget; the
+    // production default stays fail-fast.
+    private static readonly TimeSpan HttpBudget = TimeSpan.FromSeconds(60);
+
     [Fact]
     public async Task PostTradeSettled_DiscordFormat_SendsEmbed()
     {
-        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero };
+        using var webhook = new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero };
 
         webhook.PostTradeSettled("Alpha", won: true, profit: 0.9m, symbol: "frxEURUSD",
             direction: "Rise", stake: 1m, bankroll: 5.9m);
@@ -94,7 +103,7 @@ public class WebhookServiceTests : IDisposable
     [Fact]
     public async Task PostTradeSettled_SlackFormat_SendsAttachment()
     {
-        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = false, MinInterval = TimeSpan.Zero };
+        using var webhook = new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = false, MinInterval = TimeSpan.Zero };
 
         webhook.PostTradeSettled("Beta", won: false, profit: -1m, symbol: "frxEURUSD",
             direction: "Fall", stake: 1m, bankroll: 4m);
@@ -138,7 +147,7 @@ public class WebhookServiceTests : IDisposable
     [Fact]
     public async Task PostMilestone_ChoosesColor_ByMilestoneKind()
     {
-        using var webhook = new WebhookService { WebhookUrl = _url, MinInterval = TimeSpan.Zero };
+        using var webhook = new WebhookService(HttpBudget) { WebhookUrl = _url, MinInterval = TimeSpan.Zero };
 
         webhook.PostMilestone("A", "daily target hit", 6.5m);
         await WaitForAsync(() => Count >= 1);
@@ -157,7 +166,7 @@ public class WebhookServiceTests : IDisposable
     [Fact]
     public async Task PostRiskRail_And_PostStatus_SendTitles()
     {
-        using var webhook = new WebhookService { WebhookUrl = _url, MinInterval = TimeSpan.Zero };
+        using var webhook = new WebhookService(HttpBudget) { WebhookUrl = _url, MinInterval = TimeSpan.Zero };
 
         webhook.PostRiskRail("⚠ Risk rail engaged", "governor latched");
         await WaitForAsync(() => Count >= 1);
@@ -174,7 +183,7 @@ public class WebhookServiceTests : IDisposable
     [Fact]
     public async Task TestConnection_Accepted_ReturnsOkWithFormatName()
     {
-        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = true };
+        using var webhook = new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true };
 
         var (ok, message) = await webhook.TestConnectionAsync();
 
@@ -187,11 +196,11 @@ public class WebhookServiceTests : IDisposable
     [Fact]
     public async Task TestConnection_SlackFormat_SendsSlackPayload()
     {
-        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = false };
+        using var webhook = new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = false };
 
-        var (ok, _) = await webhook.TestConnectionAsync();
+        var (ok, message) = await webhook.TestConnectionAsync();
 
-        Assert.True(ok);
+        Assert.True(ok, message);
         await WaitForAsync(() => Count >= 1);
         using var doc = JsonDocument.Parse(Assert.Single(Bodies));
         Assert.Contains("tf webhook test", doc.RootElement.GetProperty("attachments")[0].GetProperty("title").GetString());

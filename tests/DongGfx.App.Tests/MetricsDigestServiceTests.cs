@@ -65,7 +65,16 @@ public class MetricsDigestServiceTests : IDisposable
     private int Count { get { lock (_sync) { return _bodies.Count; } } }
     private List<string> Bodies { get { lock (_sync) { return _bodies.ToList(); } } }
 
-    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 5000)
+    // Under full-suite parallel load the loopback POST can exceed the
+    // service's fail-fast 10 s HttpClient timeout (one random webhook test
+    // failing per run, always passing in isolation). Tests use a wider
+    // budget; the production default stays fail-fast.
+    private static readonly TimeSpan HttpBudget = TimeSpan.FromSeconds(60);
+
+    // 5s was occasionally exceeded under full-suite load (one random webhook
+    // test failing per run, always passing in isolation): give the default
+    // budget headroom. Explicit short timeouts (negative checks) unchanged.
+    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 30000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
@@ -76,7 +85,7 @@ public class MetricsDigestServiceTests : IDisposable
     }
 
     private MetricsDigestService NewService(MetricsCollector collector) =>
-        new(collector, new WebhookService { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero });
+        new(collector, new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero });
 
     [Fact]
     public void ComposeDigest_NoSamples_ReturnsNull()
@@ -179,7 +188,7 @@ public class MetricsDigestServiceTests : IDisposable
         """;
 
     private MetricsDigestService NewAuditService(string markdown, string statePath) =>
-        new(new MetricsCollector(), new WebhookService { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero })
+        new(new MetricsCollector(), new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true, MinInterval = TimeSpan.Zero })
         {
             SafetyAuditPath = "audit.md", // non-null enables the leg; content comes from the override
             SafetyAuditContentOverride = () => markdown,
