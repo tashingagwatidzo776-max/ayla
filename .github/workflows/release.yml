@@ -92,13 +92,23 @@ jobs:
 
     - name: Verify the stamp landed in the exe
       shell: pwsh
+      env:
+        TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        COMMIT_SHA: ${{ github.sha }}
       run: |
-        # Single-file publish: the identity lives in the apphost exe.
+        # Single-file publish: the identity lives in the apphost exe. .NET
+        # surfaces the stamped InformationalVersion through the Win32
+        # ProductVersion field (InformationalVersion itself reads back empty
+        # in some hosts), so assert on that — same metadata the app reads
+        # via AssemblyInformationalVersionAttribute at runtime.
         $exe = "publish/DongGfx.exe"
         if (-not (Test-Path $exe)) { throw "publish/DongGfx.exe missing - unexpected publish layout" }
-        $info = (Get-Item $exe).VersionInfo
-        Write-Host "InformationalVersion: $($info.InformationalVersion)"
-        if (-not $info.InformationalVersion) { throw "publish stamp missing" }
+        $version = $env:TAG_NAME.TrimStart('v')
+        $sha = $env:COMMIT_SHA.Substring(0, 7)
+        $stamp = (Get-Item $exe).VersionInfo.ProductVersion
+        Write-Host "ProductVersion: $stamp"
+        if (-not $stamp.StartsWith("$version+")) { throw "stamp mismatch: expected '$version+<sha>', got '$stamp'" }
+        if (-not $stamp.Contains($sha)) { throw "stamp missing commit sha '$sha': got '$stamp'" }
 
     - name: Zip the exe as the AutoUpdater asset (win-x64.zip)
       shell: pwsh
