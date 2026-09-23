@@ -388,7 +388,14 @@ public sealed partial class TerminalViewModel : ObservableObject
                 return;   // probe found nothing — keep the plain stamp
             }
 
-            BuildBadge = latest.Equals(VersionInfo.Stamp, StringComparison.OrdinalIgnoreCase)
+            // Normalized compare: release tags are "v0.7.0" while the stamp
+            // may be "0.7.0" (dev) or "0.7.0+sha" (published) — compare the
+            // bare version on both sides or every published build would
+            // claim an update exists.
+            var currentBare = VersionInfo.Stamp.Split('+')[0].TrimStart('v', 'V');
+            var latestBare = latest.Split('+')[0].TrimStart('v', 'V');
+
+            BuildBadge = latestBare.Equals(currentBare, StringComparison.OrdinalIgnoreCase)
                 ? $"build {VersionInfo.Stamp} · up to date"
                 : $"build {VersionInfo.Stamp} · update available: {latest}";
         }

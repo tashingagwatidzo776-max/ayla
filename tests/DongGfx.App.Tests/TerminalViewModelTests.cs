@@ -139,6 +139,21 @@ public class TerminalViewModelTests : IDisposable
         Assert.DoesNotContain("update available", vm.BuildBadge);
     }
 
+    [Fact]
+    public async Task BuildBadge_TagVsStamp_Formats_Compare_Equal()
+    {
+        TerminalViewModel.ResetBadgeThrottleForTests();
+        var vm = CreateVm();
+        // GitHub tag is "v0.7.0"; the stamp is "0.7.0+<sha>" on published
+        // builds — the normalized comparison must treat these as equal.
+        vm.LatestReleaseProbe = () => Task.FromResult<string?>("v0.7.0");
+
+        await vm.RefreshBuildBadgeAsync();
+
+        Assert.Contains("up to date", vm.BuildBadge);
+        Assert.DoesNotContain("update available", vm.BuildBadge);
+    }
+
     // ── Brain switch ───────────────────────────────────────────────
 
     [Fact]
