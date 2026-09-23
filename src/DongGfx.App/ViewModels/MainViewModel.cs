@@ -72,9 +72,13 @@ public sealed class MainViewModel
         await Task.CompletedTask;
     }
 
+    /// <summary>Tray-exit and window-close teardown: stop the FX engines
+    /// first so no cycle can fire while the app disposes the bridge client
+    /// and journal they order and log through. Session unlocks are
+    /// session-scoped by design and reset on window close (MainWindow).
+    /// </summary>
     public void Shutdown()
     {
-        // Session unlocks are session-scoped by design and reset on window
-        // close; the bridge client's HttpClient lifetime is DI-managed.
+        TerminalVm.ShutdownFxBrain();
     }
 }

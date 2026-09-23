@@ -223,16 +223,20 @@ public partial class App : System.Windows.Application
         }
 
         // Dispose all IDisposable services to release file handles, timers, etc.
+        // TickArchive closes late on purpose: it flushes buffered ticks, so
+        // every feed that writes it must be gone before this runs.
         IDisposable?[] disposables = [
             Ioc.Default.GetService<AppLogger>(),
             Ioc.Default.GetService<TradeJournal>(),
             Ioc.Default.GetService<NotificationService>(),
             Ioc.Default.GetService<WebhookService>(),
             Ioc.Default.GetService<AutoUpdater>(),
+            Ioc.Default.GetService<FxScorecardService>(),
             Ioc.Default.GetService<Mt5BridgeClient>(),
             Ioc.Default.GetService<FxTradeFeed>(),
             Ioc.Default.GetService<UnlockStalenessMonitor>(),
-            Ioc.Default.GetService<MetricsDigestService>()
+            Ioc.Default.GetService<MetricsDigestService>(),
+            Ioc.Default.GetService<TickArchive>()
         ];
 
         foreach (var d in disposables)

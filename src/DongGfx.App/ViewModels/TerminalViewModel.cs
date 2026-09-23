@@ -173,6 +173,25 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: LIVE";
     }
 
+    /// <summary>Stops and disposes the FX portfolio host (app shutdown
+    /// path): no engine cycle may fire while the app tears down the bridge
+    /// client the engines order through.</summary>
+    public void ShutdownFxBrain()
+    {
+        try
+        {
+            _fxHost?.Stop();
+            _fxHost?.Dispose();
+        }
+        catch
+        {
+            // Teardown must never throw — the rest of shutdown proceeds.
+        }
+
+        _fxHost = null;
+        FxBadge = "FX BRAIN: OFF";
+    }
+
     [RelayCommand]
     private void FxGoPaper()
     {

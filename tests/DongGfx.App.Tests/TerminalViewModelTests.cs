@@ -50,7 +50,8 @@ public class TerminalViewModelTests : IDisposable
     }
 
     private TerminalViewModel CreateVm(DashboardViewModel? dashboard = null,
-        Mt5BridgeClient? mt5Client = null)
+        Mt5BridgeClient? mt5Client = null,
+        Func<FxPortfolioHost?>? fxHostFactory = null)
     {
         return new TerminalViewModel(
             () => _settings,
@@ -60,7 +61,42 @@ public class TerminalViewModelTests : IDisposable
             journal: _journal,
             mt5: mt5Client ?? new Mt5BridgeClient(new StubHandler(), new Uri("http://127.0.0.1:1/")),
             setAutonomyBound: v => _settings.AutonomyEnabled = v,
-            setSymbolBound: s => _settings.FxSymbol = s);
+            setSymbolBound: s => _settings.FxSymbol = s,
+            fxHostFactory: fxHostFactory);
+    }
+
+    // ── Shutdown path ───────────────────────────────────────────────
+
+    private FxPortfolioHost NewFxPortfolio() =>
+        new(
+            new Mt5BridgeClient(new StubHandler(), new Uri("http://127.0.0.1:1/")),
+            _journal,
+            new[] { "XAUUSDmicro" },
+            killSwitchEngaged: () => false,
+            lotsCap: () => 1.00m,
+            realMoneyUnlocked: () => false,
+            governorTripped: () => false,
+            dailyLossCap: () => 5000m,
+            equityFloor: () => 0m,
+            portfolioMaxLots: () => 0.10m,
+            webhook: null,
+            newsCalendarPath: () => Path.Combine(_dir, "news-calendar.json"),
+            newsWindow: () => TimeSpan.FromMinutes(15));
+
+    [Fact]
+    public void ShutdownFxBrain_StopsAndDisposesThePortfolioHost()
+    {
+        var host = NewFxPortfolio();
+        var vm = CreateVm(fxHostFactory: () => host);
+
+        vm.ToggleFxBrainCommand.Execute(null);
+        Assert.True(host.IsRunning);
+
+        vm.ShutdownFxBrain();
+
+        Assert.False(host.IsRunning);
+        Assert.Equal("FX BRAIN: OFF", vm.FxBadge);
+        vm.ShutdownFxBrain();   // idempotent — teardown must never throw
     }
 
     // ── Brain switch ───────────────────────────────────────────────
