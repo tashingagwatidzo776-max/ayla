@@ -87,6 +87,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string mt5TerminalPath = "";
 
+    // Last MT5 login (login-dialog prefill; the password is never persisted).
+    [ObservableProperty]
+    private string mt5LastLogin = "";
+
+    [ObservableProperty]
+    private string mt5LastServer = "";
+
     [ObservableProperty]
     private int logLevel = 1;
 
@@ -153,6 +160,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxPortfolioMaxLots = settings.FxPortfolioMaxLots;
         NewsBlackoutMinutes = settings.NewsBlackoutMinutes;
         Mt5TerminalPath = settings.Mt5TerminalPath;
+        Mt5LastLogin = settings.Mt5LastLogin;
+        Mt5LastServer = settings.Mt5LastServer;
         WebhookUrl = settings.WebhookUrl;
         IsDiscordWebhook = settings.IsDiscordWebhook;
         WebhookOnTrade = settings.WebhookOnTrade;
@@ -179,6 +188,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxPortfolioMaxLots = Math.Max(0m, FxPortfolioMaxLots),
         NewsBlackoutMinutes = Math.Clamp(NewsBlackoutMinutes, 0, 120),
         Mt5TerminalPath = (Mt5TerminalPath ?? "").Trim(),
+        Mt5LastLogin = (Mt5LastLogin ?? "").Trim(),
+        Mt5LastServer = (Mt5LastServer ?? "").Trim(),
         WebhookUrl = WebhookUrl?.Trim() ?? "",
         IsDiscordWebhook = IsDiscordWebhook,
         WebhookOnTrade = WebhookOnTrade,

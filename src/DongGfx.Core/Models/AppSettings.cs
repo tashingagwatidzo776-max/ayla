@@ -57,6 +57,17 @@ public sealed class AppSettings
     /// install locations). Watchdog, sidecar and startup profile all honor it.</summary>
     public string Mt5TerminalPath { get; set; } = "";
 
+    // ── Last MT5 login (dialog prefill) ─────────────────────────────
+    /// <summary>The numeric account id last signed in through the login
+    /// dialog. Prefills the dialog so switching between demo and real is
+    /// two clicks. Deliberately NOT a password field: the password is
+    /// never persisted anywhere.</summary>
+    public string Mt5LastLogin { get; set; } = "";
+
+    /// <summary>The server last signed in through the login dialog
+    /// (prefills the dialog's server field).</summary>
+    public string Mt5LastServer { get; set; } = "";
+
     // ── Webhooks ───────────────────────────────────────────────────
     /// <summary>Discord or Slack webhook URL for trade notifications.</summary>
     public string WebhookUrl { get; set; } = "";
