@@ -136,14 +136,37 @@ public sealed class AutoUpdater : IDisposable
             : FileMode.Create;
 
         using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var file = new FileStream(zipPath, mode, FileAccess.Write, FileShare.None);
-        await stream.CopyToAsync(file, ct);
+
+        // Hardening: a truncated or resume-stitched download must never be
+        // staged — a half package brick-steps the install into a rollback.
+        // When the release declares a size, the byte count must match
+        // exactly (0 = size unknown, skip the check). The count is read
+        // AFTER the stream is closed: NTFS reports a stale (0) length for
+        // a file with unflushed buffered writes.
+        long written;
+        using (var file = new FileStream(zipPath, mode, FileAccess.Write, FileShare.None))
+        {
+            await stream.CopyToAsync(file, ct);
+            await file.FlushAsync(ct);
+            written = file.Length;
+        }
+
+        if (info.FileSize > 0 && written != info.FileSize)
+        {
+            try { File.Delete(zipPath); } catch { /* best effort */ }
+            Progress?.Invoke($"Incomplete download: got {written} bytes, expected {info.FileSize}");
+            throw new InvalidDataException(
+                $"incomplete download: {written} of {info.FileSize} bytes — retry the download");
+        }
 
         Progress?.Invoke($"Download complete: {info.Version}");
         return zipPath;
     }
 
-    /// <summary>Extract and stage update files for installation.</summary>
+    /// <summary>Extract and stage update files for installation. The
+    /// extracted package is validated before anything can be installed:
+    /// a package with no executable (a wrong-asset or junk zip) is refused
+    /// and the stage is removed, so InstallUpdate never runs on it.</summary>
     public async Task<string> StageUpdateAsync(string zipPath, CancellationToken ct = default)
     {
         Progress?.Invoke("Extracting update...");
@@ -153,6 +176,18 @@ public sealed class AutoUpdater : IDisposable
             Directory.Delete(stageDir, recursive: true);
 
         await Task.Run(() => ZipFile.ExtractToDirectory(zipPath, stageDir), ct);
+
+        // Hardening: require at least one executable somewhere in the
+        // package. A zip without one is not a DON G FX update (wrong asset,
+        // truncated-but-valid zip, junk) — refuse and clean up.
+        if (!Directory.GetFiles(stageDir, "*.exe", SearchOption.AllDirectories)
+                .Any())
+        {
+            try { Directory.Delete(stageDir, recursive: true); } catch { /* best effort */ }
+            Progress?.Invoke("Staged package contains no executable — not an update package");
+            throw new InvalidDataException(
+                "staged package contains no executable — refusing to stage it");
+        }
 
         Progress?.Invoke("Update staged successfully");
         return stageDir;
@@ -170,6 +205,17 @@ public sealed class AutoUpdater : IDisposable
 
         try
         {
+            // Hardening: an empty stage means "download first" reached the
+            // install command, or a validated stage was wiped — refusing
+            // here leaves the running app untouched instead of "installing"
+            // nothing and reporting success.
+            if (!Directory.Exists(stagedDir) ||
+                !Directory.GetFiles(stagedDir, "*", SearchOption.AllDirectories).Any())
+            {
+                Progress?.Invoke("No staged update found. Download first.");
+                return false;
+            }
+
             Progress?.Invoke("Creating backup...");
 
             // Best-effort sweep of rename-aside leftovers from earlier hops.
@@ -178,23 +224,34 @@ public sealed class AutoUpdater : IDisposable
                 try { File.Delete(stale); } catch { /* still mapped */ }
             }
 
-            // Backup current files
+            // Backup current files, recursively but never the update dir
+            // itself: backups copying zips/backups into themselves grows
+            // unbounded and can cycle when restoring.
             Directory.CreateDirectory(backupDir);
-            foreach (var file in Directory.GetFiles(appDir))
+            var updateDirRoot = Path.GetFullPath(_updateDir)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            foreach (var file in Directory.GetFiles(appDir, "*", SearchOption.AllDirectories))
             {
+                var full = Path.GetFullPath(file);
+                if (full.StartsWith(updateDirRoot, StringComparison.OrdinalIgnoreCase)) continue;
                 if (Path.GetFileName(file).StartsWith("tf-update-")) continue;
-                File.Copy(file, Path.Combine(backupDir, Path.GetFileName(file)), true);
+                var dest = Path.Combine(backupDir,
+                    Path.GetRelativePath(appDir, full));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(file, dest, true);
             }
 
             Progress?.Invoke("Installing update...");
 
-            // Copy new files. A running exe image cannot be overwritten in
-            // place (the loader maps it without share-write), so an exe that
-            // refuses the copy is renamed aside first — the rename is
-            // permitted while the old process keeps running from it.
-            foreach (var file in Directory.GetFiles(stagedDir))
+            // Copy new files recursively — a staged package may carry
+            // subdirectories (runtimes/, assets/, locales/), and the old
+            // top-level-only walk silently half-installed those.
+            foreach (var file in Directory.GetFiles(stagedDir, "*", SearchOption.AllDirectories))
             {
-                var dest = Path.Combine(appDir, Path.GetFileName(file));
+                var dest = Path.Combine(appDir, Path.GetRelativePath(stagedDir, file));
+                var destDir = Path.GetDirectoryName(dest)!;
+                if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
                 CopyOverRunningImage(file, dest);
             }
 
@@ -243,11 +300,14 @@ public sealed class AutoUpdater : IDisposable
             return;
         }
         var restored = 0;
-        foreach (var file in Directory.GetFiles(backupDir))
+        foreach (var file in Directory.GetFiles(backupDir, "*", SearchOption.AllDirectories))
         {
             try
             {
-                File.Copy(file, Path.Combine(appDir, Path.GetFileName(file)), true);
+                var dest = Path.Combine(appDir, Path.GetRelativePath(backupDir, file));
+                var destDir = Path.GetDirectoryName(dest)!;
+                if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
+                File.Copy(file, dest, true);
                 restored++;
             }
             catch
