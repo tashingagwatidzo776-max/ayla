@@ -657,6 +657,11 @@ public sealed partial class TerminalViewModel : ObservableObject
     [ObservableProperty]
     private string ohlcText = "select a symbol";
 
+    /// <summary>One-line indicator read-out for the chart header
+    /// (EMA value + RSI state), refreshed with the candles.</summary>
+    [ObservableProperty]
+    private string indicatorText = "";
+
     [ObservableProperty]
     private string candleSourceText = "M1 candles · live tick feed";
 
@@ -677,7 +682,8 @@ public sealed partial class TerminalViewModel : ObservableObject
     }
 
     /// <summary>The EMA(20) overlay over the current candle window, aligned
-    /// with Candles (null warm-up renders as gaps).</summary>
+    /// with Candles (null warm-up renders as gaps). Consumed by the chart
+    /// header and any external overlay surface.</summary>
     public System.Collections.Generic.IReadOnlyList<IndicatorPoint> EmaOverlay
     {
         get
@@ -741,8 +747,6 @@ public sealed partial class TerminalViewModel : ObservableObject
 
             CandleSourceText = $"{SelectedTimeframe} candles · MT5 bridge";
             RenderCandles();
-            OnPropertyChanged(nameof(EmaOverlay));
-            OnPropertyChanged(nameof(RsiLast));
         }
     }
 
@@ -767,6 +771,22 @@ public sealed partial class TerminalViewModel : ObservableObject
             var bar = Math.Max(6.0, (c.High - c.Low) / span * 110.0);
             Candles.Add(new CandleDto(t, c.Open, c.High, c.Low, c.Close,
                 bar, c.Close >= c.Open));
+        }
+
+        // Keep the indicator overlays and header read-out in lock-step with
+        // the candles (live ticks re-render through this same path).
+        OnPropertyChanged(nameof(EmaOverlay));
+        OnPropertyChanged(nameof(RsiLast));
+        var closes = Candles.Select(c => c.Close).ToArray();
+        if (closes.Length >= 20 && FxIndicators.Ema(closes, 20)[^1].Value is { } emaValue)
+        {
+            var rsi = closes.Length >= 15 ? FxIndicators.Rsi(closes, 14)[^1].Value : null;
+            IndicatorText = $"EMA(20) {emaValue:0.#####}"
+                + (rsi is { } r ? $" · RSI(14) {r:0.0}" : "");
+        }
+        else
+        {
+            IndicatorText = "";
         }
     }
 
