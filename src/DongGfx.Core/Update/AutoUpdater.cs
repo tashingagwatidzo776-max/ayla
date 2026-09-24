@@ -281,15 +281,31 @@ public sealed class AutoUpdater : IDisposable
     /// Renders the restart script. One clean quoted pair per token: the
     /// previous verbatim-escaped template emitted tripled quotes, which cmd
     /// parsed as a window title plus a garbage path — start failed silently
-    /// and the script still self-deleted, leaving the app closed.
+    /// and the script still self-deleted, leaving the app closed. The script
+    /// now watches its own launch: it confirms the process actually came up
+    /// (tasklist), retries twice, only self-deletes on confirmed success, and
+    /// on total failure appends to restart-failed.log and keeps itself for
+    /// forensics instead of vanishing with the evidence.
     /// </summary>
     public static string BuildRestartScript(string appPath, string appDir)
     {
+        var exe = Path.GetFileName(appPath);
         return string.Join("\r\n",
             "@echo off",
             "timeout /t 2 /nobreak > nul",
+            "set /a tries=0",
+            ":retry",
             "start \"\" /D \"" + appDir + "\" \"" + appPath + "\"",
+            "timeout /t 3 /nobreak > nul",
+            "tasklist /FI \"IMAGENAME eq " + exe + "\" | find /I \"" + exe + "\" > nul",
+            "if not errorlevel 1 goto ok",
+            "set /a tries+=1",
+            "if %tries% lss 3 goto retry",
+            "echo %date% %time% restart failed after 3 tries: " + appPath + " >> \"%~dp0restart-failed.log\"",
+            "exit /b 1",
+            ":ok",
             "del \"%~f0\"",
+            "exit /b 0",
             "");
     }
 
