@@ -22,6 +22,7 @@ public partial class App : System.Windows.Application
         Ioc.Default.ConfigureServices(provider);
 
         var settings = provider.GetRequiredService<SettingsService>().Load();
+        ThemeManager.Apply(settings);   // MT5-classic or modern dark, persisted
         ConfigureFromSettings(provider, settings);
         StartBackgroundServices(provider);
 

@@ -63,8 +63,56 @@
             </Grid>
         </Border>
 
+        <!-- ═══════════ Menu bar (MT5-style) ═══════════ -->
+        <Menu DockPanel.Dock="Top" Background="{StaticResource PanelBrush}"
+              Foreground="{StaticResource TextPrimaryBrush}" FontSize="12" Padding="6,2">
+            <MenuItem Header="_File">
+                <MenuItem Header="_New Order (F9)" Click="OnMenuNewOrder" InputGestureText="F9" />
+                <MenuItem Header="Emergency _Close All" Click="OnMenuCloseAll"
+                          ToolTip="Flatten every open MT5 position — goes through the kill-switch path" />
+                <Separator />
+                <MenuItem Header="E_xit" Click="OnMenuExit" />
+            </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem Header="_Dashboard" Click="OnMenuViewTab" Tag="Dashboard" />
+                <MenuItem Header="_Terminal" Click="OnMenuViewTab" Tag="Terminal" />
+                <MenuItem Header="_Settings" Click="OnMenuViewTab" Tag="Settings" />
+                <Separator />
+                <MenuItem Header="_Refresh Market Watch (F5)" Click="OnMenuRefresh" InputGestureText="F5" />
+            </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="Check for _updates" Click="OnMenuCheckUpdates" />
+                <Separator />
+                <MenuItem Header="_About" Click="OnAbout" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About DON G FX" Click="OnAbout" />
+            </MenuItem>
+        </Menu>
+
+        <!-- ═══════════ Status bar ═══════════ -->
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="10,3">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding TerminalVm.ConnectionText}" FontFamily="Consolas" FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0" />
+                <TextBlock Grid.Column="1" Text="{Binding TerminalVm.AccountText}" FontFamily="Consolas" FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0" />
+                <TextBlock Grid.Column="2" Text="{Binding Dashboard.FxStatusText}" FontFamily="Consolas" FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" Text="{Binding TerminalVm.BuildBadge}" FontFamily="Consolas" FontSize="11"
+                           Foreground="{StaticResource AccentBrush}" />
+            </Grid>
+        </Border>
+
         <!-- ═══════════ Tabs ═══════════ -->
-        <TabControl Margin="0,0,0,0">
+        <TabControl Margin="0,0,0,0" x:Name="MainTabs">
             <TabItem Header="Dashboard">
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
@@ -143,9 +191,14 @@
 
                     <!-- Chart -->
                     <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">
-                        <controls:TickChartControl x:Name="Chart"
-                                                   LineBrush="{StaticResource AccentBrush}"
-                                                   ShowIndicators="True" />
+                        <Grid>
+                            <controls:TickChartControl x:Name="Chart"
+                                                       LineBrush="{StaticResource AccentBrush}"
+                                                       ShowIndicators="True"
+                                                       Visibility="{Binding Dashboard.CandlesPreferred, Converter={StaticResource InverseBoolToVisibility}}" />
+                            <controls:CandleChartControl x:Name="DashboardCandles"
+                                                         Visibility="{Binding Dashboard.CandlesPreferred, Converter={StaticResource BoolToVis}}" />
+                        </Grid>
                     </Border>
 
                     <!-- Footer -->
@@ -159,6 +212,11 @@
                                    Foreground="{StaticResource AccentBrush}" />
                         <TextBlock Grid.Column="1" Text="{Binding Dashboard.TickCountText}"
                                    Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Bottom" />
+                        <Button Grid.Column="1" Command="{Binding Dashboard.ToggleChartStyleCommand}"
+                                Content="⇄ Candles/Line" Style="{StaticResource GhostButton}"
+                                Padding="8,2" FontSize="11" Margin="0,0,140,0"
+                                VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                                ToolTip="Switch the chart between tick line and MT5-style candles" />
                     </Grid>
                 </Grid>
             </TabItem>
@@ -306,6 +364,12 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                         <TextBox Grid.Row="36" Grid.Column="1" Width="220" Margin="0,0,16,10" HorizontalAlignment="Left"
                                  Text="{Binding SettingsVm.Mt5TerminalPath, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center"
                                  ToolTip="C:/Program Files/MetaTrader 5 Terminal/terminal64.exe — leave empty to auto-discover." />
+
+                        <TextBlock Grid.Row="37" Grid.ColumnSpan="2" Text="APPEARANCE" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
+                        <TextBlock Grid.Row="38" Grid.Column="0" Text="Theme" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="Classic mimics the original MetaTrader 5 gray; Dark is the modern default. Applies immediately." />
+                        <ComboBox Grid.Row="38" Grid.Column="1" Margin="0,0,0,10" Width="140" HorizontalAlignment="Left"
+                                  ItemsSource="{Binding SettingsVm.Themes}" SelectedItem="{Binding SettingsVm.Theme}" />
                     </Grid>
                 </ScrollViewer>
             </TabItem>
@@ -651,32 +715,7 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                     <StackPanel>
                                         <TextBlock Text="{Binding OhlcText}" FontFamily="Consolas" FontSize="10"
                                                    Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,6" />
-                                        <ItemsControl ItemsSource="{Binding Candles}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Horizontal" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid Width="6" Height="120" VerticalAlignment="Bottom">
-                                                        <Rectangle Height="{Binding BarHeight}" VerticalAlignment="Bottom"
-                                                                   Margin="0,0,0,6">
-                                                            <Rectangle.Style>
-                                                                <Style TargetType="Rectangle">
-                                                                    <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
-                                                                    <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding Up}" Value="False">
-                                                                            <Setter Property="Fill" Value="{StaticResource DangerBrush}" />
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </Rectangle.Style>
-                                                        </Rectangle>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                        <controls:CandleChartControl x:Name="TerminalCandles" Height="220" />
                                     </StackPanel>
                                 </Border>
                             </Grid>

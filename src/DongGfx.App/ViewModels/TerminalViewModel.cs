@@ -654,6 +654,11 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     public ObservableCollection<CandleDto> Candles { get; } = new();
 
+    /// <summary>Out-of-band outlet for the MT5-style candle chart (assigned
+    /// by MainWindow's code-behind, like Dashboard.Chart). RenderCandles
+    /// feeds it the full bar window.</summary>
+    public Controls.CandleChartControl? CandleChart { get; set; }
+
     [ObservableProperty]
     private string ohlcText = "select a symbol";
 
@@ -759,6 +764,11 @@ public sealed partial class TerminalViewModel : ObservableObject
 
         var last = _candles[^1];
         OhlcText = $"O {last.Open:0.#####}  H {last.High:0.#####}  L {last.Low:0.#####}  C {last.Close:0.#####}";
+
+        // MT5-style candle chart gets the full window (wicks + axes there).
+        CandleChart?.SetBars(_candles.Select(c =>
+            new Core.Fx.FxBar(c.Second, c.Open, c.High, c.Low, c.Close, 0)));
+
         var window = _candles.TakeLast(60).ToList();
         var hi = window.Max(c => c.High);
         var lo = window.Min(c => c.Low);

@@ -12,6 +12,7 @@ public class AppSettingsTests
         var s = new AppSettings();
 
         Assert.True(s.IsDemo);
+        Assert.Equal("Dark", s.Theme);   // modern theme is the default
         Assert.Equal("XAUUSD", s.FxSymbol);
         Assert.False(s.AutonomyEnabled);
         Assert.Equal(1.00m, s.Mt5MaxLots);

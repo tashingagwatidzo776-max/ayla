@@ -324,4 +324,153 @@ public class UnlockAndJournalCoverageTests : IDisposable
             Assert.Equal(5, off.Ticks.Count);
         });
     }
+
+    // ── CandleChartControl (MT5-style candles) ─────────────────────
+
+    private static System.Collections.Generic.IReadOnlyList<DongGfx.Core.Fx.FxBar> Bars(int n)
+    {
+        var list = new System.Collections.Generic.List<DongGfx.Core.Fx.FxBar>();
+        var price = 2650.0;
+        for (var i = 0; i < n; i++)
+        {
+            var open = price;
+            price += (i % 5 - 2) * 0.4;
+            var close = price;
+            list.Add(new DongGfx.Core.Fx.FxBar(
+                1790000000L + i * 60, open, Math.Max(open, close) + 0.8,
+                Math.Min(open, close) - 0.8, close, 100 + i));
+        }
+
+        return list;
+    }
+
+    [Fact]
+    public void CandleChart_SetBars_Upsert_Trims_And_Keeps_View_State()
+    {
+        RunInSta(() =>
+        {
+            var chart = new CandleChartControl();
+            chart.SetBars(Bars(60));
+            Assert.Equal(60, chart.Bars.Count);
+            Assert.True(chart.IsFollowing);
+
+            // Same-second upsert replaces; new second appends.
+            var last = chart.Bars[^1];
+            chart.UpsertBar(last with { Close = last.Close + 1 });
+            Assert.Equal(60, chart.Bars.Count);
+            chart.UpsertBar(last with { Time = last.Time + 60 });
+            Assert.Equal(61, chart.Bars.Count);
+
+            // Trim ceiling.
+            chart.SetBars(Bars(650));
+            Assert.Equal(600, chart.Bars.Count);
+        });
+    }
+
+    [Fact]
+    public void CandleChart_VisibleRange_Follows_Zoom_And_Pan()
+    {
+        RunInSta(() =>
+        {
+            var chart = new CandleChartControl();
+            chart.SetBars(Bars(100));
+
+            // Wide bars → few visible, latest at the right edge.
+            var (s, e) = chart.VisibleRange(400);
+            Assert.Equal(100, e);
+            Assert.True(e > s);
+
+            // Pan back 20 bars → the window slides back in time.
+            typeof(CandleChartControl)
+                .GetField("_panBarsOffset", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(chart, 20);
+            var (s2, e2) = chart.VisibleRange(400);
+            Assert.Equal(80, e2);
+
+            // Clamp: the pan handler allows at most count-10 offset → 10
+            // bars remain visible at the far end of history.
+            typeof(CandleChartControl)
+                .GetField("_panBarsOffset", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(chart, 90);
+            var (s3, e3) = chart.VisibleRange(400);
+            Assert.Equal(10, e3);
+
+            // Defensive: a wild offset (reflection/bypass) never yields a
+            // negative or zero-width window.
+            typeof(CandleChartControl)
+                .GetField("_panBarsOffset", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(chart, 5000);
+            var (s4, e4) = chart.VisibleRange(400);
+            Assert.True(e4 >= 1);
+            Assert.True(s4 >= 0);
+            Assert.True(e4 > s4);
+        });
+    }
+
+    [Fact]
+    public void CandleChart_Renders_Candles_Axes_And_Crosshair_Without_Error()
+    {
+        RunInSta(() =>
+        {
+            var chart = new CandleChartControl();
+            chart.SetBars(Bars(90));
+            chart.Measure(new System.Windows.Size(640, 360));
+            chart.Arrange(new System.Windows.Rect(0, 0, 640, 360));
+            var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(640, 360, 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            rtb.Render(chart);   // full path: grid, candles, overlays, axes, tag
+
+            // Crosshair renders with a synthetic mouse position.
+            typeof(CandleChartControl)
+                .GetField("_mouse", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(chart, (System.Windows.Point?)new System.Windows.Point(300, 180));
+            rtb.Render(chart);
+
+            // Tiny control: the early-return guard holds.
+            var tiny = new CandleChartControl();
+            tiny.SetBars(Bars(10));
+            tiny.Measure(new System.Windows.Size(30, 20));
+            tiny.Arrange(new System.Windows.Rect(0, 0, 30, 20));
+            var rtbTiny = new System.Windows.Media.Imaging.RenderTargetBitmap(30, 20, 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            rtbTiny.Render(tiny);
+        });
+    }
+
+    [Fact]
+    public void Dashboard_CandleToggle_SeedsBars_And_RollsUpTicks()
+    {
+        RunInSta(() =>
+        {
+            var dash = new ViewModels.DashboardViewModel();
+            var chart = new TickChartControl();
+            var candles = new CandleChartControl();
+            dash.Chart = chart;
+            dash.CandleChart = candles;
+
+            chart.AddTicks(Enumerable.Range(0, 30).Select(i => new Tick(
+                "XAUUSDmicro", 2650 + i * 0.1, 2650.2, 2649.8,
+                1_791_000_000_000 + i * 1000, 2)).ToList());
+
+            dash.ToggleChartStyleCommand.Execute(null);
+            Assert.True(dash.CandlesPreferred);
+            Assert.True(candles.Bars.Count > 0);   // seeded from the tick history
+
+            // Live roll-up: a tick inside the newest 5s bucket mutates the
+            // last bar instead of appending one.
+            var before = candles.Bars.Count;
+            var method = typeof(ViewModels.DashboardViewModel).GetMethod("PushCandles",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            method.Invoke(dash, new object[]
+            {
+                (System.Collections.Generic.IReadOnlyList<Tick>)new[]
+                {
+                    new Tick("XAUUSDmicro", candles.Bars[^1].Close + 0.5, 1, 1,
+                        candles.Bars[^1].Time * 1000 + 1500, 2),
+                },
+            });
+            Assert.Equal(before, candles.Bars.Count);
+            Assert.True(candles.Bars[^1].High >= candles.Bars[^1].Close);
+        });
+    }
 }

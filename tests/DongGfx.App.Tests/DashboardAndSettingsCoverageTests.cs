@@ -1,4 +1,6 @@
 using System.IO;
+using System.Threading;
+using System.Windows;
 using DongGfx.App.Infrastructure;
 using DongGfx.App.ViewModels;
 using DongGfx.Core.Models;
@@ -152,5 +154,75 @@ public class DashboardAndSettingsCoverageTests : IDisposable
 
         dashboard.AddHistory(Array.Empty<Tick>());
         Assert.Equal("2650.55000", dashboard.LastPriceText);   // unchanged
+    }
+
+    [Fact]
+    public void ThemeToggle_RoundTrips_And_Persists_BuildSettings()
+    {
+        var svc = new SettingsService();
+        var vm = new SettingsViewModel(svc);
+        vm.Load(svc.Load());
+        Assert.Equal("Dark", vm.Theme);   // default on any machine
+
+        vm.Theme = "Classic";
+        Assert.Equal("Classic", vm.BuildSettings().Theme);
+        svc.Save(vm.BuildSettings());
+
+        var vm2 = new SettingsViewModel(svc);
+        vm2.Load(svc.Load());
+        Assert.Equal("Classic", vm2.Theme);   // round-trips through disk
+
+        // Restore the machine default so other tests/users are unaffected.
+        vm.Theme = "Dark";
+        svc.Save(vm.BuildSettings());
+    }
+
+    [Fact]
+    public void ThemeManager_Normalizes_Unknown_To_Dark()
+    {
+        Assert.Equal("Dark", ThemeManager.Normalize("dark"));
+        Assert.Equal("Classic", ThemeManager.Normalize("CLASSIC"));
+        Assert.Equal("Dark", ThemeManager.Normalize(""));
+        Assert.Equal("Dark", ThemeManager.Normalize(null));
+        Assert.Equal("Dark", ThemeManager.Normalize("neon-pink"));
+    }
+
+    [Fact]
+    public void ThemeDictionaries_Expose_The_Same_Resource_Keys()
+    {
+        // Both themes must declare every key the app binds — a missing key
+        // is a runtime XAML crash on switch, so this is a contract test.
+        // Keys are parsed straight from the theme source files (pack URIs
+        // don't resolve inside the test host).
+        var dir = AppContext.BaseDirectory;
+        string? root = null;
+        var probe = dir;
+        for (var i = 0; i < 8 && probe is not null; i++)
+        {
+            if (File.Exists(Path.Combine(probe, "DongGfx.sln")))
+            {
+                root = probe;
+                break;
+            }
+
+            probe = Path.GetDirectoryName(probe);
+        }
+
+        if (root is null)
+        {
+            return;   // not running from a checkout (published artifacts) — skip
+        }
+
+        static System.Collections.Generic.HashSet<string> Keys(string path) =>
+            System.Text.RegularExpressions.Regex.Matches(
+                File.ReadAllText(path), "x:Key=\"([^\"]+)\"")
+                .Select(m => m.Groups[1].Value)
+                .ToHashSet();
+
+        var dark = Keys(Path.Combine(root, "src", "DongGfx.App", "Theme", "Dark.xaml"));
+        var classic = Keys(Path.Combine(root, "src", "DongGfx.App", "Theme", "Classic.xaml"));
+
+        Assert.NotEmpty(dark);
+        Assert.Equal(dark, classic);
     }
 }

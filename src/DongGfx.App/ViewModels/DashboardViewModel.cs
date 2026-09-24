@@ -73,6 +73,57 @@ public sealed partial class DashboardViewModel : ObservableObject
     /// <summary>The live chart view (attached by MainWindow; VM stays UI-agnostic).</summary>
     public TickChartControl? Chart { get; set; }
 
+    /// <summary>MT5-style candle chart (attached by MainWindow; fed when
+    /// ChartStyle is Candles — ticks aggregate into synthetic 5-second
+    /// bars so zoom/pan work on live data).</summary>
+    public Controls.CandleChartControl? CandleChart { get; set; }
+
+    /// <summary>Dashboard chart style — MT5 shows candles by default.</summary>
+    [ObservableProperty]
+    private bool candlesPreferred;
+
+    [RelayCommand]
+    private void ToggleChartStyle()
+    {
+        CandlesPreferred = !CandlesPreferred;
+        if (CandlesPreferred && CandleChart is not null)
+        {
+            // Seed the candle view from the ticks the line chart already
+            // holds, so the switch isn't an empty chart.
+            CandleChart.SetBars(System.Array.Empty<Core.Fx.FxBar>());
+            PushCandles(Chart?.Ticks ?? new System.Collections.Generic.List<Tick>());
+        }
+    }
+
+    /// <summary>Aggregates ticks into ~5s bars for the candle view
+    /// (called on the UI thread after each feed update).</summary>
+    private void PushCandles(IReadOnlyList<Tick> ticks)
+    {
+        if (!CandlesPreferred || CandleChart is null)
+        {
+            return;
+        }
+
+        foreach (var t in ticks)
+        {
+            var second = t.Epoch / 1000 / 5 * 5;
+            if (CandleChart.Bars.Count > 0 && CandleChart.Bars[^1].Time == second)
+            {
+                var prev = CandleChart.Bars[^1];
+                CandleChart.UpdateLast(prev with
+                {
+                    High = Math.Max(prev.High, t.Quote),
+                    Low = Math.Min(prev.Low, t.Quote),
+                    Close = t.Quote,
+                });
+            }
+            else
+            {
+                CandleChart.UpsertBar(new Core.Fx.FxBar(second, t.Quote, t.Quote, t.Quote, t.Quote, 0));
+            }
+        }
+    }
+
     public DashboardViewModel(
         Infrastructure.NotificationService? notifications = null,
         Infrastructure.WebhookService? webhook = null)
@@ -173,6 +224,7 @@ public sealed partial class DashboardViewModel : ObservableObject
             if (ticks.Count > 0)
             {
                 Chart?.AddTicks(ticks);
+                PushCandles(ticks);
                 LastPriceText = ticks[^1].Quote.ToString("0.00000");
                 TickCountText = $"{ticks.Count} ticks";
             }
