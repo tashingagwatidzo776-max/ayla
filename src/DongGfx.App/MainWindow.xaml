@@ -195,7 +195,7 @@
                             <controls:TickChartControl x:Name="Chart"
                                                        LineBrush="{StaticResource AccentBrush}"
                                                        ShowIndicators="True"
-                                                       Visibility="{Binding Dashboard.CandlesPreferred, Converter={StaticResource InverseBoolToVis}}" />
+                                                       Visibility="{Binding Dashboard.CandlesPreferred, Converter={StaticResource InverseBoolToVisibility}}" />
                             <controls:CandleChartControl x:Name="DashboardCandles"
                                                          Visibility="{Binding Dashboard.CandlesPreferred, Converter={StaticResource BoolToVis}}" />
                         </Grid>
