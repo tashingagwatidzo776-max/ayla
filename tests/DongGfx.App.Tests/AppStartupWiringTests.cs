@@ -24,7 +24,7 @@ namespace DongGfx.App.Tests;
 [Trait("Category", "RealMoney")]
 public class AppStartupWiringTests
 {
-    private static ServiceProvider BuildGraph(AppSettings? settings = null)
+    internal static ServiceProvider BuildGraph(AppSettings? settings = null)
     {
         settings ??= new AppSettings
         {

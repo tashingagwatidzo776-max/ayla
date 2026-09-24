@@ -475,4 +475,27 @@ public class AutoUpdaterTests : IDisposable
         Assert.DoesNotContain("\"\"\"", startLine);       // the old bug's tripled-quote fingerprint
         Assert.StartsWith("start \"\" /D ", startLine);   // working dir stays the app dir
     }
+
+    [Fact]
+    public void BuildRestartScript_WatchesLaunch_Retries_OnlySelfDeletesOnSuccess()
+    {
+        // 0.7.5 hardening after the live incident: start failed silently, the
+        // script still deleted itself, and the app stayed closed with zero
+        // evidence. The script must now verify the process came up (tasklist),
+        // retry before giving up, leave a forensics log on total failure, and
+        // only self-delete after the relaunch is confirmed.
+        var script = AutoUpdater.BuildRestartScript(
+            @"C:\Program Files\DongGfx\DongGfx.exe", @"C:\Program Files\DongGfx");
+
+        Assert.Contains("tasklist /FI \"IMAGENAME eq DongGfx.exe\"", script);
+        Assert.Contains("if not errorlevel 1 goto ok", script);
+        Assert.Contains("if %tries% lss 3 goto retry", script);
+        Assert.Contains("restart-failed.log", script);
+
+        var ok = script.IndexOf(":ok", StringComparison.Ordinal);
+        var del = script.IndexOf("del \"%~f0\"", StringComparison.Ordinal);
+        var fail = script.IndexOf("exit /b 1", StringComparison.Ordinal);
+        Assert.True(ok >= 0 && del > ok, "self-delete must follow the confirmed-success label");
+        Assert.True(fail >= 0 && fail < ok, "the failure path must exit before the success label");
+    }
 }

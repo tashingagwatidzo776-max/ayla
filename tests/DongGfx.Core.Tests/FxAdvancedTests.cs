@@ -314,6 +314,68 @@ public class FxAdvancedTests
         Assert.True(model.PredictProb(new[] { 1.0, 0.0 }) > 0.8);
         Assert.True(model.PredictProb(new[] { -1.0, 0.0 }) < 0.2);
     }
+
+    [Fact]
+    public void OnlineLogistic_Evaluate_ScoresAccuracy_And_HandlesEmptySet()
+    {
+        var model = new OnlineLogistic(2, learningRate: 0.1);
+        foreach (var _ in Enumerable.Range(0, 300))
+        {
+            model.Observe(new[] { 1.0, 0.5 }, label: 1);
+            model.Observe(new[] { -1.0, -0.5 }, label: 0);
+        }
+
+        // Perfectly separable rows must score 1.0 accuracy.
+        var acc = model.Evaluate(new (double, double[])[]
+        {
+            (1, new[] { 1.0, 0.5 }),
+            (0, new[] { -1.0, -0.5 }),
+        });
+        Assert.Equal(1.0, acc, 5);
+
+        // The empty-set guard returns 0 rather than dividing by zero.
+        Assert.Equal(0.0, model.Evaluate(Array.Empty<(double, double[])>()), 5);
+
+        // Weights stay finite under L2 regularisation (no divergence).
+        Assert.All(model.Weights, w => Assert.True(double.IsFinite(w)));
+    }
+
+    [Fact]
+    public void OnlineLogistic_PredictProb_ClampsToValidSigmoid_EvenWithExtremeInputs()
+    {
+        var model = new OnlineLogistic(3);
+
+        // Zero weights → exact 0.5 (bias starts at zero), even for huge
+        // inputs: extreme × 0 weight is still 0.
+        Assert.Equal(0.5, model.PredictProb(new[] { 1e9, 0.0, 0.0 }), 10);
+
+        // With a trained weight, extreme inputs saturate toward the sigmoid
+        // bounds — a valid probability, never NaN.
+        for (var i = 0; i < 50; i++)
+        {
+            model.Observe(new[] { 1.0, 0.0, 0.0 }, label: 1);
+        }
+
+        Assert.True(model.PredictProb(new[] { 1e9, 0.0, 0.0 }) > 0.999);
+        Assert.True(model.PredictProb(new[] { -1e9, 0.0, 0.0 }) < 0.001);
+
+        // Shorter feature vectors than the weight count are tolerated
+        // (the loop caps at x.Count) — no index throw; a fresh model with
+        // untouched bias predicts exactly 0.5 on the empty vector.
+        Assert.Equal(0.5, new OnlineLogistic(3).PredictProb(Array.Empty<double>()), 10);
+    }
+
+    [Fact]
+    public void OnlineLogistic_Observe_ReturnsPreUpdatePrediction()
+    {
+        var model = new OnlineLogistic(1, learningRate: 0.5);
+
+        var before = model.PredictProb(new[] { 2.0 });
+        var observed = model.Observe(new[] { 2.0 }, label: 1);
+
+        Assert.Equal(before, observed, 12);
+        Assert.NotEqual(before, model.PredictProb(new[] { 2.0 }), 10); // weights moved
+    }
 }
 
 internal static class RngExtensions
