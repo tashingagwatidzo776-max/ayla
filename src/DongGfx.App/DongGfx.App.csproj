@@ -36,7 +36,7 @@
          properties override the generated one), which the window title and
          About box read at runtime so shipped binaries identify themselves.
          Keep in sync with the release tag (v0.7.8 → 0.7.8). -->
-    <Version>0.7.9</Version>
+    <Version>0.8.0</Version>
   </PropertyGroup>
 
 </Project>

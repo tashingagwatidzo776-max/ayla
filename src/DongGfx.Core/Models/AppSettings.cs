@@ -14,6 +14,11 @@ public sealed class AppSettings
     /// unlock on every trade path.</summary>
     public bool IsDemo { get; set; } = true;
 
+    /// <summary>UI theme: "Dark" (modern, default) or "Classic" (MT5-gray).
+    /// Swapped at runtime by the ThemeManager; unknown values fall back to
+    /// Dark at load.</summary>
+    public string Theme { get; set; } = "Dark";
+
     /// <summary>Master autonomy switch; when off the FX brain never places
     /// trades (the Terminal tab's brain switch writes this).</summary>
     public bool AutonomyEnabled { get; set; }

@@ -92,6 +92,17 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public IReadOnlyList<string> LogLevels { get; } = new[] { "Debug", "Info", "Warn", "Error" };
 
+    /// <summary>UI theme — "Dark" (modern) or "Classic" (MT5-gray). Applied
+    /// live on change and persisted with the next settings save.</summary>
+    [ObservableProperty]
+    private string theme = Infrastructure.ThemeManager.Dark;
+
+    public System.Collections.Generic.IReadOnlyList<string> Themes { get; } =
+        new[] { Infrastructure.ThemeManager.Dark, Infrastructure.ThemeManager.Classic };
+
+    partial void OnThemeChanged(string value) =>
+        Infrastructure.ThemeManager.Apply(value);
+
     [ObservableProperty]
     private string statusMessage = "Settings load on startup; Save writes them to %APPDATA%\\tf\\data.";
 
@@ -132,6 +143,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public void Load(AppSettings settings)
     {
         IsDemo = settings.IsDemo;
+        Theme = Infrastructure.ThemeManager.Normalize(settings.Theme);
         AutonomyEnabled = settings.AutonomyEnabled;
         Mt5MaxLots = settings.Mt5MaxLots;
         Mt5DailyLossCap = settings.Mt5DailyLossCap;
@@ -157,6 +169,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public AppSettings BuildSettings() => new()
     {
         IsDemo = IsDemo,
+        Theme = Theme,
         AutonomyEnabled = AutonomyEnabled,
         Mt5MaxLots = Math.Max(0m, Mt5MaxLots),
         Mt5DailyLossCap = Math.Max(0m, Mt5DailyLossCap),

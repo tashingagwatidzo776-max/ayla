@@ -21,6 +21,77 @@ public partial class MainWindow : Window
         // builds stay unstamped.
         Title += VersionInfo.TitleSuffix;
         Loaded += OnLoaded;
+
+        // MT5-style function-key shortcuts (preview: fire before focus
+        // owners can swallow them).
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.F9)
+            {
+                OnMenuNewOrder(this, e);
+                e.Handled = true;
+            }
+            else if (e.Key == System.Windows.Input.Key.F5)
+            {
+                OnMenuRefresh(this, e);
+                e.Handled = true;
+            }
+        };
+    }
+
+    // ── Menu bar handlers (MT5 chrome; everything routes through the
+    // existing view-model commands — no new order-path logic here) ──
+
+    private void OnMenuNewOrder(object sender, RoutedEventArgs e)
+    {
+        SelectTab("Terminal");
+    }
+
+    private void OnMenuCloseAll(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            _ = vm.TerminalVm.FxEmergencyFlattenAsync("File menu — emergency close all");
+        }
+    }
+
+    private void OnMenuExit(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
+
+    private void OnMenuViewTab(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.MenuItem mi && mi.Tag is string name)
+        {
+            SelectTab(name);
+        }
+    }
+
+    private void OnMenuRefresh(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            _ = vm.TerminalVm.LoadSymbolsCommand.ExecuteAsync(null);
+        }
+    }
+    private void OnMenuCheckUpdates(object sender, RoutedEventArgs e)
+    {
+        SelectTab("Settings");
+        if (DataContext is MainViewModel vm)
+        {
+            _ = vm.UpdateVm.CheckForUpdateCommand.ExecuteAsync(null);
+        }
+    }
+
+    private void SelectTab(string header)
+    {
+        foreach (var item in MainTabs.Items)
+        {
+            if (item is System.Windows.Controls.TabItem tab &&
+                string.Equals(tab.Header as string, header, StringComparison.Ordinal))
+            {
+                MainTabs.SelectedItem = tab;
+                return;
+            }
+        }
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -28,6 +99,8 @@ public partial class MainWindow : Window
         if (DataContext is MainViewModel vm)
         {
             vm.Dashboard.Chart = Chart;
+            vm.Dashboard.CandleChart = DashboardCandles;
+            vm.TerminalVm.CandleChart = TerminalCandles;
         }
 
         // Initialize tray icon for headless operation.
