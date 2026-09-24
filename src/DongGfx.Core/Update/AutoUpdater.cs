@@ -297,7 +297,7 @@ public sealed class AutoUpdater : IDisposable
             ":retry",
             "start \"\" /D \"" + appDir + "\" \"" + appPath + "\"",
             "timeout /t 3 /nobreak > nul",
-            "tasklist /FI \"IMAGENAME eq " + exe + "\" | find /I \"" + exe + "\" > nul",
+            "tasklist /FI \"IMAGENAME eq " + exe + "\" | \"%SystemRoot%\\System32\\find.exe\" /I \"" + exe + "\" > nul",
             "if not errorlevel 1 goto ok",
             "set /a tries+=1",
             "if %tries% lss 3 goto retry",
