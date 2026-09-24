@@ -487,7 +487,7 @@ public class AutoUpdaterTests : IDisposable
         var script = AutoUpdater.BuildRestartScript(
             @"C:\Program Files\DongGfx\DongGfx.exe", @"C:\Program Files\DongGfx");
 
-        Assert.Contains("tasklist /FI \"IMAGENAME eq DongGfx.exe\"", script);
+        Assert.Contains("tasklist /FI \"IMAGENAME eq DongGfx.exe\" | \"%SystemRoot%\\System32\\find.exe\" /I \"DongGfx.exe\"", script);
         Assert.Contains("if not errorlevel 1 goto ok", script);
         Assert.Contains("if %tries% lss 3 goto retry", script);
         Assert.Contains("restart-failed.log", script);
