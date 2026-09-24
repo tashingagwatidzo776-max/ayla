@@ -81,6 +81,28 @@ public partial class MainWindow : Window
         }
     }
 
+    // File→Login: switch the terminal's signed-in MT5 account through the
+    // sidecar's POST /login (M2). The dialog holds the credentials; on
+    // success the account bar refreshes so the switch is visible at once.
+    private void OnMenuLogin(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        var dialog = new LoginDialog { Owner = this };
+        var loginVm = new LoginViewModel(
+            CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+                .GetRequiredService<Mt5BridgeClient>())
+        {
+            OnSignedIn = () => vm.TerminalVm.RefreshAccountBarCommand.ExecuteAsync(null),
+        };
+        loginVm.SignedIn += () => dialog.Close();
+        dialog.DataContext = loginVm;
+        dialog.ShowDialog();
+    }
+
     private void SelectTab(string header)
     {
         foreach (var item in MainTabs.Items)

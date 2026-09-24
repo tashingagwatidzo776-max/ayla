@@ -67,6 +67,8 @@
         <Menu DockPanel.Dock="Top" Background="{StaticResource PanelBrush}"
               Foreground="{StaticResource TextPrimaryBrush}" FontSize="12" Padding="6,2">
             <MenuItem Header="_File">
+                <MenuItem Header="_Login to MT5 _Account…" Click="OnMenuLogin"
+                           ToolTip="Switch the terminal's signed-in MT5 account (3 attempts/min, loopback only)" />
                 <MenuItem Header="_New Order (F9)" Click="OnMenuNewOrder" InputGestureText="F9" />
                 <MenuItem Header="Emergency _Close All" Click="OnMenuCloseAll"
                           ToolTip="Flatten every open MT5 position — goes through the kill-switch path" />

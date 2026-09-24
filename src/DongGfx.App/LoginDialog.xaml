@@ -1,0 +1,59 @@
+<Window x:Class="DongGfx.App.LoginDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:infra="clr-namespace:DongGfx.App.Infrastructure"
+        Title="Login — MT5 Account"
+        Width="430" SizeToContent="Height"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource CardBrush}">
+
+    <StackPanel Margin="16">
+        <TextBlock Text="Switch the terminal to another MT5 account (File → Login). Credentials go to the local sidecar over loopback only — never logged, never journaled. Limited to 3 attempts per minute."
+                   TextWrapping="Wrap" FontSize="11" Margin="0,0,0,12"
+                   Foreground="{DynamicResource TextSecondaryBrush}" />
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="90" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Account" Margin="0,0,0,8"
+                       VerticalAlignment="Center" FontSize="11"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Padding="4,3" FontSize="12"
+                     Text="{Binding Account, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="Numeric MT5 account id" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Password" Margin="0,0,0,8"
+                       VerticalAlignment="Center" FontSize="11"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <PasswordBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Padding="4,3" FontSize="12"
+                         infra:PasswordBoxHelper.BoundPassword="{Binding Password, UpdateSourceTrigger=PropertyChanged}" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Server" Margin="0,0,0,12"
+                       VerticalAlignment="Center" FontSize="11"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <TextBox Grid.Row="2" Grid.Column="1" Margin="0,0,0,12" Padding="4,3" FontSize="12"
+                     Text="{Binding Server, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="Broker server name, e.g. Deriv-Demo" />
+        </Grid>
+
+        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" MinHeight="18"
+                   Margin="0,0,0,12" FontSize="11"
+                   Foreground="{DynamicResource AccentBrush}" />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Login" Width="88" Margin="0,0,8,0" IsDefault="True"
+                    IsEnabled="{Binding !IsLoggingIn}"
+                    Command="{Binding LoginCommand}" />
+            <Button Content="Cancel" Width="88" IsCancel="True" />
+        </StackPanel>
+    </StackPanel>
+</Window>
