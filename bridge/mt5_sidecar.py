@@ -10,10 +10,14 @@ one) and serves a small JSON API on 127.0.0.1 only:
     GET  /ticks/{symbol}         last bid/ask/time
     GET  /book/{symbol}          DOM levels (Deriv streams none -> client falls back)
     GET  /candles/{symbol}?tf=M1&n=120   OHLC series
+    GET  /orders                 open (pending) orders
     POST /order                  market/limit/stop/stoplimit with SL/TP
     GET  /positions              open positions with live P/L
-    POST /close/{ticket}         close a position
+    POST /close/{ticket}[?lots=] close a position (optionally partially)
+    POST /cancel/{ticket}        delete a pending order
+    POST /modify                 change SL/TP on an open position
     GET  /deals?days=7           recent deal history
+    GET  /deals?from=&to=        deal history over an explicit UTC range
 
 Security: binds strictly to 127.0.0.1 (any other bind address is refused at
 startup), reads no credentials, writes no files, runs no shells.
@@ -35,10 +39,26 @@ import MetaTrader5 as mt5
 DEFAULT_PORT = 53190
 TIMEFRAMES = {
     "M1": mt5.TIMEFRAME_M1,
+    "M2": mt5.TIMEFRAME_M2,
+    "M3": mt5.TIMEFRAME_M3,
+    "M4": mt5.TIMEFRAME_M4,
     "M5": mt5.TIMEFRAME_M5,
+    "M6": mt5.TIMEFRAME_M6,
+    "M10": mt5.TIMEFRAME_M10,
+    "M12": mt5.TIMEFRAME_M12,
     "M15": mt5.TIMEFRAME_M15,
+    "M20": mt5.TIMEFRAME_M20,
     "M30": mt5.TIMEFRAME_M30,
     "H1": mt5.TIMEFRAME_H1,
+    "H2": mt5.TIMEFRAME_H2,
+    "H3": mt5.TIMEFRAME_H3,
+    "H4": mt5.TIMEFRAME_H4,
+    "H6": mt5.TIMEFRAME_H6,
+    "H8": mt5.TIMEFRAME_H8,
+    "H12": mt5.TIMEFRAME_H12,
+    "D1": mt5.TIMEFRAME_D1,
+    "W1": mt5.TIMEFRAME_W1,
+    "MN1": mt5.TIMEFRAME_MN1,
 }
 
 ORDER_TYPES = {
@@ -201,7 +221,7 @@ class BridgeHandlers:
 
     def candles(self, symbol: str, tf: str, n: int) -> list:
         if tf not in TIMEFRAMES:
-            raise OrderError(f"unsupported timeframe {tf!r} (use M1..H1)")
+            raise OrderError(f"unsupported timeframe {tf!r} (use M1..MN1)")
         n = max(1, min(int(n), 500))
         self._symbol_or_404(symbol)
         rates = self._m.copy_rates_from_pos(symbol, TIMEFRAMES[tf], 0, n)
@@ -238,10 +258,28 @@ class BridgeHandlers:
             })
         return out
 
-    def deals(self, days: int) -> list:
-        days = max(1, min(int(days), 90))
-        frm = datetime.now(timezone.utc) - timedelta(days=days)
-        rows = self._m.history_deals_get(frm, datetime.now(timezone.utc) + timedelta(days=1)) or []
+    def deals(self, days: int, date_from: str | None = None, date_to: str | None = None) -> list:
+        """Deal history over an explicit UTC range (ISO 8601 dates or
+        epoch seconds) or, when no range is given, the trailing `days`
+        window (capped at 90 for backward compatibility)."""
+        if date_from is not None or date_to is not None:
+            def _parse(v: str, end_of_day: bool) -> datetime:
+                v = str(v).strip()
+                if v.isdigit():
+                    return datetime.fromtimestamp(int(v), tz=timezone.utc)
+                dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if end_of_day and len(v) <= 10:  # bare date -> include the whole day
+                    dt = dt + timedelta(days=1) - timedelta(seconds=1)
+                return dt
+            frm = _parse(date_from, False) if date_from else datetime(2000, 1, 1, tzinfo=timezone.utc)
+            to = _parse(date_to, True) if date_to else datetime.now(timezone.utc) + timedelta(days=1)
+        else:
+            days = max(1, min(int(days), 90))
+            frm = datetime.now(timezone.utc) - timedelta(days=days)
+            to = datetime.now(timezone.utc) + timedelta(days=1)
+        rows = self._m.history_deals_get(frm, to) or []
         out = []
         for d in rows:
             if getattr(d, "entry", None) not in (None,) and d.entry in (1, 0):
@@ -259,6 +297,98 @@ class BridgeHandlers:
                 "time": d.time,
             })
         return out
+
+    def orders(self) -> list:
+        """Open (pending) orders — MT5's Trade tab keeps them beside
+        positions; until now a placed pending vanished from the app."""
+        rows = self._m.orders_get() or []
+        out = []
+        for o in rows:
+            out.append({
+                "ticket": o.ticket,
+                "symbol": o.symbol,
+                "side": "buy" if o.type in (self._m.ORDER_TYPE_BUY,
+                                            self._m.ORDER_TYPE_BUY_LIMIT,
+                                            self._m.ORDER_TYPE_BUY_STOP,
+                                            self._m.ORDER_TYPE_BUY_STOP_LIMIT) else "sell",
+                "kind": {self._m.ORDER_TYPE_BUY: "market",
+                         self._m.ORDER_TYPE_SELL: "market",
+                         self._m.ORDER_TYPE_BUY_LIMIT: "limit",
+                         self._m.ORDER_TYPE_SELL_LIMIT: "limit",
+                         self._m.ORDER_TYPE_BUY_STOP: "stop",
+                         self._m.ORDER_TYPE_SELL_STOP: "stop",
+                         self._m.ORDER_TYPE_BUY_STOP_LIMIT: "stoplimit",
+                         self._m.ORDER_TYPE_SELL_STOP_LIMIT: "stoplimit"}.get(o.type, "pending"),
+                "volume": o.volume_current,
+                "price": o.price_open,
+                "sl": o.sl,
+                "tp": o.tp,
+                "state": str(o.state),
+                "time_setup": o.time_setup,
+            })
+        return out
+
+    def cancel(self, ticket: int) -> dict:
+        """Delete a pending order (TRADE_ACTION_REMOVE)."""
+        rows = self._m.orders_get(ticket=int(ticket)) or ()
+        if not rows:
+            raise OrderError(f"pending order {ticket} not found")
+        request = {"action": self._m.TRADE_ACTION_REMOVE, "order": int(ticket)}
+        result = self._m.order_send(request)
+        if result is None:
+            raise OrderError(f"order_send returned None ({self._m.last_error()})")
+        retcode = int(result.retcode)
+        return {
+            "retcode": retcode,
+            "retcode_name": RETCODE_NAMES.get(retcode, f"retcode-{retcode}"),
+            "ok": retcode == 10009,
+            "cancelled_ticket": int(ticket),
+        }
+
+    def modify(self, body: dict) -> dict:
+        """Modify SL/TP on an open position (TRADE_ACTION_SLTP), with the
+        broker's stops-level enforced against the live tick."""
+        try:
+            ticket = int(body.get("ticket"))
+        except (TypeError, ValueError):
+            raise OrderError("ticket is required")
+        rows = self._m.positions_get(ticket=ticket) or ()
+        if not rows:
+            raise OrderError(f"position {ticket} not found")
+        p = rows[0]
+        if body.get("sl") is None and body.get("tp") is None:
+            raise OrderError("provide sl and/or tp")
+        sl = float(body["sl"]) if body.get("sl") is not None else p.sl
+        tp = float(body["tp"]) if body.get("tp") is not None else p.tp
+        info = self._symbol_or_404(p.symbol)
+        tick = self._m.symbol_info_tick(p.symbol)
+        if tick is None:
+            raise OrderError(f"no tick for {p.symbol} — market closed?")
+        min_dist = (info.trade_stops_level or 0) * (info.point or 0.0)
+        ref = tick.bid if p.type == self._m.POSITION_TYPE_BUY else tick.ask
+        if sl and abs(ref - sl) < min_dist:
+            raise OrderError(f"sl {sl} within stops level ({min_dist} of {ref})")
+        if tp and abs(tp - ref) < min_dist:
+            raise OrderError(f"tp {tp} within stops level ({min_dist} of {ref})")
+        request = {
+            "action": self._m.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": p.symbol,
+            "sl": sl,
+            "tp": tp,
+        }
+        result = self._m.order_send(request)
+        if result is None:
+            raise OrderError(f"order_send returned None ({self._m.last_error()})")
+        retcode = int(result.retcode)
+        return {
+            "retcode": retcode,
+            "retcode_name": RETCODE_NAMES.get(retcode, f"retcode-{retcode}"),
+            "ok": retcode == 10009,
+            "modified_ticket": ticket,
+            "sl": sl,
+            "tp": tp,
+        }
 
     # ── writes ─────────────────────────────────────────────────────
 
@@ -335,11 +465,22 @@ class BridgeHandlers:
             "comment": getattr(result, "comment", ""),
         }
 
-    def close(self, ticket: int) -> dict:
+    def close(self, ticket: int, lots: float | None = None) -> dict:
+        """Close a position in full, or partially when `lots` is given
+        (volume-geometry validated against the symbol like /order)."""
         rows = self._m.positions_get(ticket=int(ticket)) or ()
         if not rows:
             raise OrderError(f"position {ticket} not found")
         p = rows[0]
+        if lots is not None:
+            info = self._symbol_or_404(p.symbol)
+            step = info.volume_step or 0.01
+            if lots <= 0 or lots > p.volume:
+                raise OrderError(f"lots {lots} outside 0..{p.volume}")
+            if abs(round(lots / step) * step - lots) > 1e-9:
+                raise OrderError(f"lots {lots} not a multiple of {step}")
+            if abs(lots - p.volume) < 1e-9:
+                lots = None  # closing exactly the remaining volume = full close
         tick = self._m.symbol_info_tick(p.symbol)
         if tick is None:
             raise OrderError(f"no tick for {p.symbol} — market closed?")
@@ -348,7 +489,7 @@ class BridgeHandlers:
             "action": self._m.TRADE_ACTION_DEAL,
             "position": int(ticket),
             "symbol": p.symbol,
-            "volume": p.volume,
+            "volume": p.volume if lots is None else lots,
             "type": self._m.ORDER_TYPE_SELL if p.type == self._m.POSITION_TYPE_BUY
             else self._m.ORDER_TYPE_BUY,
             "price": tick.bid if p.type == self._m.POSITION_TYPE_BUY else tick.ask,
@@ -365,6 +506,7 @@ class BridgeHandlers:
             "retcode_name": RETCODE_NAMES.get(retcode, f"retcode-{retcode}"),
             "ok": retcode == 10009,
             "closed_ticket": int(ticket),
+            "closed_volume": p.volume if lots is None else lots,
         }
 
 
@@ -406,8 +548,13 @@ class SidecarServer:
                             sym, (qs.get("tf") or ["M1"])[0], (qs.get("n") or ["120"])[0])})
                     elif path == "/positions":
                         self._send(200, {"positions": h.positions()})
+                    elif path == "/orders":
+                        self._send(200, {"orders": h.orders()})
                     elif path == "/deals":
-                        self._send(200, {"deals": h.deals((qs.get("days") or ["7"])[0])})
+                        self._send(200, {"deals": h.deals(
+                            (qs.get("days") or ["7"])[0],
+                            (qs.get("from") or [None])[0],
+                            (qs.get("to") or [None])[0])})
                     else:
                         self._send(404, {"error": f"no route {path}"})
                 except OrderError as e:
@@ -428,7 +575,15 @@ class SidecarServer:
                     if parsed.path == "/order":
                         self._send(200, outer._handlers.order(body))
                     elif parsed.path.startswith("/close/"):
-                        self._send(200, outer._handlers.close(parsed.path.rsplit("/", 1)[1]))
+                        qs = parse_qs(urlparse(self.path).query)
+                        vol = (qs.get("lots") or [None])[0]
+                        self._send(200, outer._handlers.close(
+                            parsed.path.rsplit("/", 1)[1],
+                            float(vol) if vol is not None else None))
+                    elif parsed.path.startswith("/cancel/"):
+                        self._send(200, outer._handlers.cancel(parsed.path.rsplit("/", 1)[1]))
+                    elif parsed.path == "/modify":
+                        self._send(200, outer._handlers.modify(body))
                     else:
                         self._send(404, {"error": f"no route {parsed.path}"})
                 except OrderError as e:
