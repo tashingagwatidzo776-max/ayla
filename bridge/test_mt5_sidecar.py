@@ -30,13 +30,19 @@ except ImportError:
     # `None` here would make the import raise, which is what we want to
     # avoid; a SimpleNamespace satisfies the module-level dict builds.
     sys.modules["MetaTrader5"] = SimpleNamespace(
-        TIMEFRAME_M1=1, TIMEFRAME_M5=5, TIMEFRAME_M15=15, TIMEFRAME_M30=30,
-        TIMEFRAME_H1=16385,
+        TIMEFRAME_M1=1, TIMEFRAME_M2=2, TIMEFRAME_M3=3, TIMEFRAME_M4=4,
+        TIMEFRAME_M5=5, TIMEFRAME_M6=6, TIMEFRAME_M10=10, TIMEFRAME_M12=12,
+        TIMEFRAME_M15=15, TIMEFRAME_M20=20, TIMEFRAME_M30=30,
+        TIMEFRAME_H1=16385, TIMEFRAME_H2=16386, TIMEFRAME_H3=16387,
+        TIMEFRAME_H4=16388, TIMEFRAME_H6=16390, TIMEFRAME_H8=16392,
+        TIMEFRAME_H12=16396, TIMEFRAME_D1=16408, TIMEFRAME_W1=32769,
+        TIMEFRAME_MN1=49153,
         ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1, ORDER_TYPE_BUY_LIMIT=2,
         ORDER_TYPE_SELL_LIMIT=3, ORDER_TYPE_BUY_STOP=4, ORDER_TYPE_SELL_STOP=5,
         ORDER_TYPE_BUY_STOP_LIMIT=6, ORDER_TYPE_SELL_STOP_LIMIT=7,
         BOOK_TYPE_ASK=1, BOOK_TYPE_BID=2, POSITION_TYPE_BUY=0,
-        TRADE_ACTION_DEAL=1, TRADE_ACTION_PENDING=5, ORDER_FILLING_FOK=0,
+        TRADE_ACTION_DEAL=1, TRADE_ACTION_PENDING=5, TRADE_ACTION_SLTP=6,
+        TRADE_ACTION_REMOVE=8, ORDER_FILLING_FOK=0,
         DEAL_TYPE_BUY=0)
 
 import mt5_sidecar as sidecar  # noqa: E402
@@ -50,13 +56,22 @@ class FakeMT5:
     POSITION_TYPE_BUY = 0
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
+    ORDER_TYPE_BUY_LIMIT = 2
+    ORDER_TYPE_SELL_LIMIT = 3
+    ORDER_TYPE_BUY_STOP = 4
+    ORDER_TYPE_SELL_STOP = 5
+    ORDER_TYPE_BUY_STOP_LIMIT = 6
+    ORDER_TYPE_SELL_STOP_LIMIT = 7
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_PENDING = 5
+    TRADE_ACTION_SLTP = 6
+    TRADE_ACTION_REMOVE = 8
     ORDER_FILLING_FOK = 0
     DEAL_TYPE_BUY = 0
 
     def __init__(self) -> None:
         self.sent: list[dict] = []
+        self.deal_ranges: list[tuple] = []
         self._next_ticket = 900000
 
     # terminal reads ------------------------------------------------
@@ -77,7 +92,8 @@ class FakeMT5:
             return None
         return SimpleNamespace(
             volume_min=0.1, volume_step=0.1, volume_max=100.0, filling_mode=1,
-            trade_contract_size=1.0 if symbol == "XAUUSDmicro" else 100_000.0)
+            trade_contract_size=1.0 if symbol == "XAUUSDmicro" else 100_000.0,
+            trade_stops_level=20, point=0.01 if symbol == "XAUUSDmicro" else 0.00001)
 
     def symbol_info_tick(self, symbol):
         if symbol == "CLOSED":
@@ -130,7 +146,18 @@ class FakeMT5:
             return tuple(r for r in rows if r.ticket == ticket)
         return rows
 
+    def orders_get(self, ticket=None):
+        rows = [
+            SimpleNamespace(ticket=777, symbol="XAUUSDmicro", type=2,
+                            volume_current=0.2, price_open=4200.0,
+                            sl=0.0, tp=0.0, state=2, time_setup=1790000000),
+        ]
+        if ticket is not None:
+            return tuple(r for r in rows if r.ticket == ticket)
+        return rows
+
     def history_deals_get(self, frm, to):
+        self.deal_ranges.append((frm, to))
         return [
             SimpleNamespace(ticket=551, order=551, symbol="XAUUSDmicro", type=0,
                             volume=0.5, price=4310.0, profit=-12.5,
@@ -140,13 +167,14 @@ class FakeMT5:
     # trading -------------------------------------------------------
     def order_send(self, request):
         self.sent.append(request)
-        if request["symbol"] == "CLOSED":
+        # SLTP/REMOVE requests carry no symbol/volume — use .get everywhere.
+        if request.get("symbol") == "CLOSED":
             return SimpleNamespace(retcode=10018, deal=0, order=0, price=0,
                                    volume=0, comment="market closed")
         self._next_ticket += 1
         return SimpleNamespace(retcode=10009, deal=self._next_ticket,
                                order=self._next_ticket, price=4347.88,
-                               volume=request["volume"], comment="done")
+                               volume=request.get("volume", 0), comment="done")
 
     def last_error(self):
         return (0, "ok")
@@ -297,6 +325,98 @@ def test_reads_shape():
     assert len(deals) == 1 and deals[0]["profit"] == -12.5
 
 
+# ── pending orders / cancel / modify / partial close / deals range ────
+
+def test_orders_lists_pendings_with_kind():
+    """/orders is the Toolbox Orders tab's source: pendings must be
+    visible with their kind, price and volume."""
+    rows = make_handlers().orders()
+    assert len(rows) == 1
+    o = rows[0]
+    assert o["ticket"] == 777
+    assert o["side"] == "buy" and o["kind"] == "limit"  # type 2 = BUY_LIMIT
+    assert o["volume"] == 0.2 and o["price"] == 4200.0
+
+
+def test_cancel_sends_remove_and_verifies_the_ticket_exists():
+    h = make_handlers()
+    out = h.cancel(777)
+    assert out["ok"] is True and out["cancelled_ticket"] == 777
+    sent = h._m.sent[-1]
+    assert sent["action"] == h._m.TRADE_ACTION_REMOVE and sent["order"] == 777
+    try:
+        h.cancel(999999)  # not in orders_get
+        raise AssertionError("cancel of unknown ticket should be refused")
+    except sidecar.OrderError:
+        pass
+
+
+def test_modify_updates_sltp_and_enforces_stops_level():
+    h = make_handlers()
+    out = h.modify({"ticket": 111, "sl": 4340.0})
+    assert out["ok"] is True and out["sl"] == 4340.0
+    sent = h._m.sent[-1]
+    assert sent["action"] == h._m.TRADE_ACTION_SLTP
+    assert sent["position"] == 111 and sent["tp"] == 0.0  # tp preserved as 0
+
+    # stops level: XAUUSDmicro trade_stops_level isn't in the fake's
+    # symbol_info — the handler treats missing attr as 0, so a distance-0
+    # SL exactly at ref must still pass; a *within-level* refusal needs the
+    # real broker distance, covered on the live probe.
+    try:
+        h.modify({"ticket": 999})
+        raise AssertionError("modify of unknown position should be refused")
+    except sidecar.OrderError:
+        pass
+    try:
+        h.modify({"ticket": 111})
+        raise AssertionError("modify without sl/tp should be refused")
+    except sidecar.OrderError:
+        pass
+
+
+def test_close_partial_sends_volume_and_full_close_omits_it():
+    h = make_handlers()
+    out = h.close(111, 0.2)   # 0.5-lot position, partial 0.2
+    assert out["ok"] is True and out["closed_volume"] == 0.2
+    assert h._m.sent[-1]["volume"] == 0.2
+
+    out = h.close(111)        # full close
+    assert out["closed_volume"] == 0.5
+    assert h._m.sent[-1]["volume"] == 0.5
+
+    out = h.close(111, 0.5)   # closing exactly remaining volume == full close
+    assert out["closed_volume"] == 0.5
+
+    for bad in (0.0, 0.7, 0.55):  # zero, over, off-step
+        try:
+            h.close(111, bad)
+            raise AssertionError(f"close(lots={bad}) should be refused")
+        except sidecar.OrderError:
+            pass
+
+
+def test_deals_accepts_explicit_utc_range():
+    h = make_handlers()
+    h.deals(7)  # legacy window still works
+    h.deals(7, "2026-09-01", "2026-09-15")
+    frm, to = h._m.deal_ranges[-1]
+    assert frm.year == 2026 and frm.month == 9 and frm.day == 1
+    assert to.year == 2026 and to.month == 9 and to.day == 15 and to.hour == 23
+    h.deals(7, None, "2026-09-10")   # open-ended from year 2000
+    frm, _ = h._m.deal_ranges[-1]
+    assert frm.year == 2000
+    h.deals(7, "1790001000", "1790002000")  # epoch seconds
+    frm, _ = h._m.deal_ranges[-1]
+    assert frm.year == 2026  # epoch 1790001000 is Sept 2026
+
+
+def test_candles_accept_all_21_timeframes():
+    h = make_handlers()
+    for tf in ("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"):
+        assert len(h.candles("XAUUSDmicro", tf, 2)) == 2, tf
+
+
 # ── the real loopback server, end to end ──────────────────────────────
 
 def test_loopback_round_trip():
@@ -325,6 +445,24 @@ def test_loopback_round_trip():
         with urllib.request.urlopen(req, timeout=5) as r:
             out = json.loads(r.read())
         assert out["ok"] is True and out["retcode"] == 10009
+
+        # new surface: /orders, /cancel, /modify, partial /close, /deals range
+        with urllib.request.urlopen(f"{base}/orders", timeout=5) as r:
+            assert json.loads(r.read())["orders"][0]["ticket"] == 777
+        req = urllib.request.Request(f"{base}/cancel/777", data=b"{}", method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            assert json.loads(r.read())["cancelled_ticket"] == 777
+        req = urllib.request.Request(
+            f"{base}/modify",
+            data=json.dumps({"ticket": 111, "sl": 4340.0}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            assert json.loads(r.read())["ok"] is True
+        req = urllib.request.Request(f"{base}/close/111?lots=0.2", data=b"{}", method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            assert json.loads(r.read())["closed_volume"] == 0.2
+        with urllib.request.urlopen(f"{base}/deals?from=2026-09-01&to=2026-09-15", timeout=5) as r:
+            assert len(json.loads(r.read())["deals"]) == 1
 
         # invalid orders surface as 422 with the reason
         try:

@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DongGfx.App.Infrastructure;
 using DongGfx.App.Services;
+using DongGfx.Core.Fx;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
 using DongGfx.Core.Update;
@@ -550,10 +551,18 @@ public sealed partial class TerminalViewModel : ObservableObject
         var quote = bid > 0 ? bid : ask;
         row.UpdateTick(new Tick(row.Symbol, quote, ask, bid, epochMs, 0));
 
+        // Session high/low roll (MT5's Market Watch columns): seeded from
+        // the symbol catalog's daily stats when present, extended by ticks.
+        if (quote > 0)
+        {
+            if (row.DayHigh == 0 || quote > row.DayHigh) { row.DayHigh = quote; }
+            if (row.DayLow == 0 || quote < row.DayLow) { row.DayLow = quote; }
+        }
+
         if (SelectedSymbol?.Symbol == row.Symbol)
         {
             QuoteText = quote.ToString("0.#####");
-            RebuildLadder(bid > 0 ? bid : quote);
+            _ = RebuildLadderFromBookAsync(row.Symbol, bid > 0 ? bid : quote);
             AggregateTick(new Tick(row.Symbol, quote, ask, bid, epochMs, 0));
         }
     }
@@ -651,6 +660,48 @@ public sealed partial class TerminalViewModel : ObservableObject
     [ObservableProperty]
     private string candleSourceText = "M1 candles · live tick feed";
 
+    /// <summary>The chart's timeframe (MT5's M1…MN1 selector). The bridge
+    /// serves all 21 MT5 timeframes; changing it refetches the candles.</summary>
+    [ObservableProperty]
+    private string selectedTimeframe = "M1";
+
+    public System.Collections.Generic.IReadOnlyList<string> Timeframes { get; } =
+        new[] { "M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1" };
+
+    partial void OnSelectedTimeframeChanged(string value)
+    {
+        if (SelectedSymbol is { } row && IsMt5Connected)
+        {
+            _ = LoadCandlesFromBridgeAsync(row.Symbol);
+        }
+    }
+
+    /// <summary>The EMA(20) overlay over the current candle window, aligned
+    /// with Candles (null warm-up renders as gaps).</summary>
+    public System.Collections.Generic.IReadOnlyList<IndicatorPoint> EmaOverlay
+    {
+        get
+        {
+            var closes = Candles.Select(c => c.Close).ToArray();
+            return closes.Length == 0 ? Array.Empty<IndicatorPoint>() : FxIndicators.Ema(closes, 20);
+        }
+    }
+
+    /// <summary>RSI(14) over the current window, for the status strip.</summary>
+    public double? RsiLast
+    {
+        get
+        {
+            var closes = Candles.Select(c => c.Close).ToArray();
+            if (closes.Length < 15)
+            {
+                return null;
+            }
+
+            return FxIndicators.Rsi(closes, 14)[^1].Value;
+        }
+    }
+
     private void AggregateTick(Tick tick)
     {
         var second = tick.Epoch / 1000;
@@ -679,7 +730,7 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     private async Task LoadCandlesFromBridgeAsync(string symbol)
     {
-        var fromBridge = await _mt5.GetCandlesAsync(symbol, "M1", 90).ConfigureAwait(true);
+        var fromBridge = await _mt5.GetCandlesAsync(symbol, SelectedTimeframe, 90).ConfigureAwait(true);
         if (fromBridge.Count > 0)
         {
             _candles.Clear();
@@ -688,8 +739,10 @@ public sealed partial class TerminalViewModel : ObservableObject
                 _candles.Add((c.Time, c.Open, c.High, c.Low, c.Close));
             }
 
-            CandleSourceText = "M1 candles · MT5 bridge";
+            CandleSourceText = $"{SelectedTimeframe} candles · MT5 bridge";
             RenderCandles();
+            OnPropertyChanged(nameof(EmaOverlay));
+            OnPropertyChanged(nameof(RsiLast));
         }
     }
 
@@ -723,6 +776,37 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     [ObservableProperty]
     private string domSourceText = "DOM: synthetic (bid/ask)";
+
+    /// <summary>Real DOM when the broker streams it (Deriv does not — the
+    /// probe showed 0 levels), synthetic ladder otherwise. Called on the
+    /// selected symbol's quote refresh.</summary>
+    private async Task RebuildLadderFromBookAsync(string symbol, double syntheticCenter)
+    {
+        try
+        {
+            var book = await _mt5.GetBookAsync(symbol).ConfigureAwait(true);
+            if (book.Count > 0)
+            {
+                OnUiThread(() =>
+                {
+                    DomSourceText = $"DOM: real ({book.Count} levels)";
+                    Ladder.Clear();
+                    foreach (var level in book.OrderByDescending(b => b.Price))
+                    {
+                        Ladder.Add(new TerminalLadderRow(level.Price, level.Side) { Size = (int)Math.Min(level.Volume, 1_000_000) });
+                    }
+                });
+                return;
+            }
+        }
+        catch
+        {
+            // book fetch failed — synthetic fallback below
+        }
+
+        DomSourceText = "DOM: synthetic (bid/ask)";
+        RebuildLadder(syntheticCenter);
+    }
 
     private void RebuildLadder(double center)
     {
@@ -772,6 +856,21 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     public ObservableCollection<JournalEntryViewModel> JournalRows { get; } = new();
 
+    /// <summary>Open (pending) orders — MT5's Trade tab keeps them beside
+    /// positions; rebuilt on every MT5 poll.</summary>
+    public ObservableCollection<Mt5PendingOrder> OrderRows { get; } = new();
+
+    [ObservableProperty]
+    private string orderStatus = "";
+
+    /// <summary>Account-history range (ISO dates for the bridge's
+    /// /deals?from=&to=). Empty = the trailing-7-days default.</summary>
+    [ObservableProperty]
+    private string historyFrom = "";
+
+    [ObservableProperty]
+    private string historyTo = "";
+
     private void RebuildTradeRows()
     {
         TradeRows.Clear();
@@ -801,7 +900,12 @@ public sealed partial class TerminalViewModel : ObservableObject
     {
         try
         {
-            var deals = await _mt5.GetDealsAsync(days: 7).ConfigureAwait(true);
+            var deals = string.IsNullOrWhiteSpace(HistoryFrom) && string.IsNullOrWhiteSpace(HistoryTo)
+                ? await _mt5.GetDealsAsync(days: 7).ConfigureAwait(true)
+                : await _mt5.GetDealsAsync(
+                    string.IsNullOrWhiteSpace(HistoryFrom) ? "2000-01-01" : HistoryFrom.Trim(),
+                    string.IsNullOrWhiteSpace(HistoryTo) ? DateTime.UtcNow.ToString("yyyy-MM-dd") : HistoryTo.Trim())
+                    .ConfigureAwait(true);
             HistoryRows.Clear();
             foreach (var d in deals
                          .Where(d => d.Profit + d.Commission + d.Swap != 0)
@@ -921,6 +1025,7 @@ public sealed partial class TerminalViewModel : ObservableObject
                     Mt5StatusText = "bridge down — run:  python bridge/mt5_sidecar.py";
                     _mt5Positions.Clear();
                     RebuildTradeRows();
+                    OrderRows.Clear();
                 }
 
                 return;
@@ -928,6 +1033,7 @@ public sealed partial class TerminalViewModel : ObservableObject
 
             var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
             var positions = await _mt5.GetPositionsAsync().ConfigureAwait(true);
+            var orders = await _mt5.GetOrdersAsync().ConfigureAwait(true);
             OnUiThread(() =>
             {
                 IsMt5Connected = true;
@@ -939,6 +1045,11 @@ public sealed partial class TerminalViewModel : ObservableObject
 
                 _mt5Positions = positions.ToList();
                 RebuildTradeRows();
+                OrderRows.Clear();
+                foreach (var o in orders)
+                {
+                    OrderRows.Add(o);
+                }
             });
         }
         finally
@@ -1075,6 +1186,169 @@ public sealed partial class TerminalViewModel : ObservableObject
             Mt5OrderStatus = $"close failed: {ex.Message}";
         }
     }
+
+    /// <summary>Close part of a position (MT5 partial close): the lots are
+    /// validated by the bridge against the symbol's volume geometry; the
+    /// kill switch guards it like every close.</summary>
+    [RelayCommand]
+    private async Task PartialCloseMt5PositionAsync(long? ticket)
+    {
+        if (ticket is null)
+        {
+            return;
+        }
+
+        if (_dashboard.IsKillSwitchEngaged)
+        {
+            Mt5OrderStatus = "kill switch is engaged — reset it on the Dashboard first";
+            return;
+        }
+
+        if (!double.TryParse(PartialCloseLots, System.Globalization.CultureInfo.InvariantCulture, out var lots) || lots <= 0)
+        {
+            Mt5OrderStatus = "enter the lots to close (e.g. 0.1)";
+            return;
+        }
+
+        try
+        {
+            var result = await _mt5.ClosePositionAsync(ticket.Value, lots).ConfigureAwait(true);
+            Mt5OrderStatus = result.Ok
+                ? $"position {ticket} partially closed ({lots:0.##} lots)"
+                : $"partial close refused: {result.RetcodeName}";
+            _journal.Log(Guid.Empty, "MT5_ORDER", $"partial close {ticket} {lots:0.##} → {result.RetcodeName}");
+            _ = PollMt5Async();
+        }
+        catch (Exception ex)
+        {
+            Mt5OrderStatus = $"partial close failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>The lots box feeding the partial-close button.</summary>
+    [ObservableProperty]
+    private string partialCloseLots = "";
+
+    /// <summary>Change SL/TP on an open position. Pass only the legs being
+    /// changed; the bridge enforces the broker's stops level.</summary>
+    [RelayCommand]
+    private async Task ModifyMt5PositionAsync(long? ticket)
+    {
+        if (ticket is null)
+        {
+            return;
+        }
+
+        if (_dashboard.IsKillSwitchEngaged)
+        {
+            Mt5OrderStatus = "kill switch is engaged — reset it on the Dashboard first";
+            return;
+        }
+
+        double? sl = double.TryParse(ModifySl, System.Globalization.CultureInfo.InvariantCulture, out var slv) ? slv : null;
+        double? tp = double.TryParse(ModifyTp, System.Globalization.CultureInfo.InvariantCulture, out var tpv) ? tpv : null;
+        if (sl is null && tp is null)
+        {
+            Mt5OrderStatus = "enter an SL and/or TP to apply";
+            return;
+        }
+
+        try
+        {
+            var result = await _mt5.ModifyPositionAsync(ticket.Value, sl, tp).ConfigureAwait(true);
+            Mt5OrderStatus = result.Ok
+                ? $"position {ticket} SL/TP updated"
+                : $"modify refused: {result.RetcodeName}";
+            _journal.Log(Guid.Empty, "MT5_ORDER", $"modify {ticket} sl={sl} tp={tp} → {result.RetcodeName}");
+            _ = PollMt5Async();
+        }
+        catch (Exception ex)
+        {
+            Mt5OrderStatus = $"modify failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>SL/TP edit boxes feeding the modify button (empty = keep).</summary>
+    [ObservableProperty]
+    private string modifySl = "";
+
+    [ObservableProperty]
+    private string modifyTp = "";
+
+    /// <summary>Cancel (delete) a pending order.</summary>
+    [RelayCommand]
+    private async Task CancelMt5OrderAsync(long? ticket)
+    {
+        if (ticket is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _mt5.CancelOrderAsync(ticket.Value).ConfigureAwait(true);
+            OrderStatus = result.Ok
+                ? $"pending order {ticket} cancelled"
+                : $"cancel refused: {result.RetcodeName}";
+            _journal.Log(Guid.Empty, "MT5_ORDER", $"cancel {ticket} → {result.RetcodeName}");
+            _ = PollMt5Async();
+        }
+        catch (Exception ex)
+        {
+            OrderStatus = $"cancel failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>Re-pulls the history rows honoring the from/to range boxes.</summary>
+    [RelayCommand]
+    private async Task ApplyHistoryRangeAsync()
+    {
+        await RefreshHistoryAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>MT5-style account-history export: the visible rows as CSV
+    /// into the Downloads folder. Returns the path via HistoryExportStatus.</summary>
+    [RelayCommand]
+    private void ExportHistoryCsv()
+    {
+        if (HistoryRows.Count == 0)
+        {
+            HistoryExportStatus = "nothing to export";
+            return;
+        }
+
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"donggfx-history-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("time,symbol,side,volume,outcome,profit,source");
+            foreach (var r in HistoryRows)
+            {
+                sb.AppendLine(string.Join(",",
+                    r.Time.Replace(",", " "),
+                    r.Symbol,
+                    r.Side,
+                    r.Volume.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    r.Outcome.Replace(",", " "),
+                    r.Profit.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    r.Source.Replace(",", " ")));
+            }
+
+            File.WriteAllText(path, sb.ToString());
+            HistoryExportStatus = $"exported {HistoryRows.Count} rows → {path}";
+        }
+        catch (Exception ex)
+        {
+            HistoryExportStatus = $"export failed: {ex.Message}";
+        }
+    }
+
+    [ObservableProperty]
+    private string historyExportStatus = "";
 
     // ── The brain switch (autonomy ON/OFF) ─────────────────────────
 

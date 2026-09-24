@@ -21,6 +21,11 @@ public sealed record Mt5Position(
     long Ticket, string Symbol, string Side, double Volume,
     double PriceOpen, double PriceCurrent, double Profit);
 
+/// <summary>One open (pending) order from the bridge /orders.</summary>
+public sealed record Mt5PendingOrder(
+    long Ticket, string Symbol, string Side, string Kind, double Volume,
+    double Price, double Sl, double Tp, long TimeSetup);
+
 /// <summary>One DOM level (bridge /book — empty on Deriv, kept for real books).</summary>
 public sealed record Mt5BookLevel(string Side, double Price, double Volume);
 
@@ -318,10 +323,14 @@ public sealed class Mt5BridgeClient : IDisposable
         return positions;
     }
 
-    public async Task<Mt5OrderResult> ClosePositionAsync(long ticket, CancellationToken ct = default)
+    public async Task<Mt5OrderResult> ClosePositionAsync(
+        long ticket, double? lots = null, CancellationToken ct = default)
     {
+        var path = lots.HasValue
+            ? $"close/{ticket}?lots={lots.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+            : $"close/{ticket}";
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
-        using var resp = await _http.PostAsync($"close/{ticket}", content, ct).ConfigureAwait(false);
+        using var resp = await _http.PostAsync(path, content, ct).ConfigureAwait(false);
         var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
         {
@@ -335,7 +344,81 @@ public sealed class Mt5BridgeClient : IDisposable
 
         return new Mt5OrderResult(
             r.GetProperty("ok").GetBoolean(), r.GetProperty("retcode").GetInt32(),
+            r.GetProperty("retcode_name").GetString() ?? "", null, ticket, null,
+            r.TryGetProperty("closed_volume", out var cv) && cv.ValueKind == JsonValueKind.Number ? cv.GetDouble() : null, "");
+    }
+
+    /// <summary>Open (pending) orders — the Toolbox Orders tab's source.
+    /// Empty when the bridge is down (degrades like every read).</summary>
+    public async Task<IReadOnlyList<Mt5PendingOrder>> GetOrdersAsync(CancellationToken ct = default)
+    {
+        using var doc = await GetJson("orders", ct).ConfigureAwait(false);
+        if (doc is null || !doc.RootElement.TryGetProperty("orders", out var arr) || arr.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<Mt5PendingOrder>();
+        }
+
+        var orders = new List<Mt5PendingOrder>();
+        foreach (var o in arr.EnumerateArray())
+        {
+            orders.Add(new Mt5PendingOrder(
+                o.GetProperty("ticket").GetInt64(),
+                o.GetProperty("symbol").GetString() ?? "",
+                o.GetProperty("side").GetString() ?? "",
+                o.GetProperty("kind").GetString() ?? "",
+                o.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0,
+                o.TryGetProperty("price", out var pr) && pr.ValueKind == JsonValueKind.Number ? pr.GetDouble() : 0,
+                o.TryGetProperty("sl", out var sl) && sl.ValueKind == JsonValueKind.Number ? sl.GetDouble() : 0,
+                o.TryGetProperty("tp", out var tp) && tp.ValueKind == JsonValueKind.Number ? tp.GetDouble() : 0,
+                o.TryGetProperty("time_setup", out var ts) && ts.ValueKind == JsonValueKind.Number ? ts.GetInt64() : 0));
+        }
+
+        return orders;
+    }
+
+    /// <summary>Delete a pending order (bridge /cancel/{ticket}).</summary>
+    public async Task<Mt5OrderResult> CancelOrderAsync(long ticket, CancellationToken ct = default)
+    {
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
+        using var resp = await _http.PostAsync($"cancel/{ticket}", content, ct).ConfigureAwait(false);
+        var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode)
+        {
+            throw new Mt5BridgeException(TryErrorText(raw) ?? "cancel refused");
+        }
+
+        using var doc = JsonDocument.Parse(raw);
+        var r = doc.RootElement;
+        return new Mt5OrderResult(
+            r.GetProperty("ok").GetBoolean(), r.GetProperty("retcode").GetInt32(),
             r.GetProperty("retcode_name").GetString() ?? "", null, ticket, null, null, "");
+    }
+
+    /// <summary>Change SL/TP on an open position (bridge /modify). Pass
+    /// only the legs being changed; the bridge keeps the other leg.</summary>
+    public async Task<Mt5OrderResult> ModifyPositionAsync(
+        long ticket, double? sl = null, double? tp = null, CancellationToken ct = default)
+    {
+        var body = new Dictionary<string, object?> { ["ticket"] = ticket };
+        if (sl.HasValue) { body["sl"] = sl.Value; }
+        if (tp.HasValue) { body["tp"] = tp.Value; }
+
+        using var content = new StringContent(
+            JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        using var resp = await _http.PostAsync("modify", content, ct).ConfigureAwait(false);
+        var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode)
+        {
+            throw new Mt5BridgeException(TryErrorText(raw) ?? "modify refused");
+        }
+
+        using var doc = JsonDocument.Parse(raw);
+        var r = doc.RootElement;
+        return new Mt5OrderResult(
+            r.GetProperty("ok").GetBoolean(), r.GetProperty("retcode").GetInt32(),
+            r.GetProperty("retcode_name").GetString() ?? "", null, ticket,
+            r.TryGetProperty("sl", out var slv) && slv.ValueKind == JsonValueKind.Number ? slv.GetDouble() : null,
+            r.TryGetProperty("tp", out var tpv) && tpv.ValueKind == JsonValueKind.Number ? tpv.GetDouble() : null, "");
     }
 
     /// <summary>Recent deal history (bridge /deals?days=N): the FX side's
@@ -359,6 +442,38 @@ public sealed class Mt5BridgeClient : IDisposable
                 d.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0,
                 d.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number ? p.GetDouble() : 0,
                 d.TryGetProperty("profit", out var pr) && pr.ValueKind == JsonValueKind.Number ? pr.GetDouble() : 0,
+                d.TryGetProperty("commission", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0,
+                d.TryGetProperty("swap", out var sw) && sw.ValueKind == JsonValueKind.Number ? sw.GetDouble() : 0,
+                d.TryGetProperty("time", out var t) && t.ValueKind == JsonValueKind.Number ? t.GetInt64() : 0));
+        }
+
+        return deals;
+    }
+
+    /// <summary>Deal history over an explicit UTC range (bridge
+    /// /deals?from=&to=; ISO dates or epoch seconds).</summary>
+    public async Task<IReadOnlyList<Mt5Deal>> GetDealsAsync(
+        string from, string to, CancellationToken ct = default)
+    {
+        using var doc = await GetJson(
+            $"deals?from={Uri.EscapeDataString(from)}&to={Uri.EscapeDataString(to)}", ct)
+            .ConfigureAwait(false);
+        if (doc is null || !doc.RootElement.TryGetProperty("deals", out var arr) || arr.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<Mt5Deal>();
+        }
+
+        var deals = new List<Mt5Deal>();
+        foreach (var d in arr.EnumerateArray())
+        {
+            deals.Add(new Mt5Deal(
+                d.GetProperty("ticket").GetInt64(),
+                d.TryGetProperty("order", out var o) && o.ValueKind == JsonValueKind.Number ? o.GetInt64() : 0,
+                d.GetProperty("symbol").GetString() ?? "",
+                d.TryGetProperty("side", out var sd) ? sd.GetString() ?? "" : "",
+                d.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0,
+                d.TryGetProperty("price", out var pr) && pr.ValueKind == JsonValueKind.Number ? pr.GetDouble() : 0,
+                d.TryGetProperty("profit", out var pf) && pf.ValueKind == JsonValueKind.Number ? pf.GetDouble() : 0,
                 d.TryGetProperty("commission", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0,
                 d.TryGetProperty("swap", out var sw) && sw.ValueKind == JsonValueKind.Number ? sw.GetDouble() : 0,
                 d.TryGetProperty("time", out var t) && t.ValueKind == JsonValueKind.Number ? t.GetInt64() : 0));

@@ -382,6 +382,11 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,16,0" />
                                 <TextBlock Text="{Binding CandleSourceText}" FontFamily="Consolas" FontSize="11"
                                            Foreground="{StaticResource TextSecondaryBrush}" />
+                                <ComboBox ItemsSource="{Binding Timeframes}" SelectedItem="{Binding SelectedTimeframe}"
+                                          Width="70" Margin="12,0,0,0" FontSize="11"
+                                          ToolTip="Chart timeframe (M1…MN1)" />
+                                <TextBlock Text="{Binding RsiLast, StringFormat=RSI 0.0, TargetNullValue=''}" FontFamily="Consolas" FontSize="11"
+                                           Foreground="{StaticResource TextSecondaryBrush}" Margin="10,0,0,0" />
                             </StackPanel>
                         </Border>
 
@@ -390,7 +395,29 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                 MaxHeight="260">
                             <TabControl Background="Transparent" BorderThickness="0">
                                 <TabItem Header="Trade">
-                                    <DataGrid ItemsSource="{Binding TradeRows}"
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                                            <TextBlock Text="SL" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="11" />
+                                            <TextBox Text="{Binding ModifySl, UpdateSourceTrigger=PropertyChanged}" Width="80" Padding="4,3"
+                                                     ToolTip="New stop loss (empty = keep)" />
+                                            <TextBlock Text="TP" VerticalAlignment="Center" Margin="8,0,4,0" FontSize="11" />
+                                            <TextBox Text="{Binding ModifyTp, UpdateSourceTrigger=PropertyChanged}" Width="80" Padding="4,3"
+                                                     ToolTip="New take profit (empty = keep)" />
+                                            <Button Content="Modify selected" Command="{Binding ModifyMt5PositionCommand}"
+                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
+                                                    ToolTip="Apply SL/TP to the selected MT5 position" />
+                                            <TextBlock Text="Lots" VerticalAlignment="Center" Margin="16,0,4,0" FontSize="11" />
+                                            <TextBox Text="{Binding PartialCloseLots, UpdateSourceTrigger=PropertyChanged}" Width="70" Padding="4,3"
+                                                     ToolTip="Lots to close partially (e.g. 0.1)" />
+                                            <Button Content="Partial close" Command="{Binding PartialCloseMt5PositionCommand}"
+                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
+                                                    ToolTip="Close part of the selected MT5 position" />
+                                            <TextBlock Text="{Binding Mt5OrderStatus}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                       FontSize="11" Foreground="{StaticResource AccentBrush}" />
+                                        </StackPanel>
+                                        <DataGrid x:Name="TradeGrid" ItemsSource="{Binding TradeRows}"
                                               AutoGenerateColumns="False" IsReadOnly="True"
                                               HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                               HorizontalGridLinesBrush="{StaticResource BorderBrush}"
@@ -416,7 +443,41 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
                                         </DataGrid.Columns>
-                                    </DataGrid>
+                                        </DataGrid>
+                                    </DockPanel>
+                                </TabItem>
+                                <TabItem Header="Orders">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Bottom" Text="{Binding OrderStatus}" FontSize="11"
+                                                   Foreground="{StaticResource AccentBrush}" Margin="4,4,0,0" />
+                                        <DataGrid ItemsSource="{Binding OrderRows}"
+                                                  AutoGenerateColumns="False" IsReadOnly="True"
+                                                  HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                                  HorizontalGridLinesBrush="{StaticResource BorderBrush}"
+                                                  Background="Transparent" RowBackground="Transparent"
+                                                  BorderThickness="0" FontFamily="Consolas" FontSize="11">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Ticket" Binding="{Binding Ticket}" Width="120" />
+                                                <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="110" />
+                                                <DataGridTextColumn Header="Side" Binding="{Binding Side}" Width="60" />
+                                                <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" Width="70" />
+                                                <DataGridTextColumn Header="Vol" Binding="{Binding Volume, StringFormat=0.###}" Width="60" />
+                                                <DataGridTextColumn Header="Price" Binding="{Binding Price, StringFormat=0.#####}" Width="90" />
+                                                <DataGridTextColumn Header="SL" Binding="{Binding Sl, StringFormat=0.#####}" Width="80" />
+                                                <DataGridTextColumn Header="TP" Binding="{Binding Tp, StringFormat=0.#####}" Width="80" />
+                                                <DataGridTemplateColumn Width="70">
+                                                    <DataGridTemplateColumn.CellTemplate>
+                                                        <DataTemplate>
+                                                            <Button Content="✕" Padding="6,0" FontSize="11"
+                                                                    ToolTip="Cancel this pending order"
+                                                                    Command="{Binding DataContext.TerminalVm.CancelMt5OrderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Ticket}" />
+                                                        </DataTemplate>
+                                                    </DataGridTemplateColumn.CellTemplate>
+                                                </DataGridTemplateColumn>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </DockPanel>
                                 </TabItem>
                                 <TabItem Header="Exposure">
                                     <DataGrid ItemsSource="{Binding ExposureRows}"
@@ -433,7 +494,22 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                     </DataGrid>
                                 </TabItem>
                                 <TabItem Header="Account History">
-                                    <DataGrid ItemsSource="{Binding HistoryRows}"
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                                            <TextBlock Text="From" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                            <TextBox Text="{Binding HistoryFrom, UpdateSourceTrigger=PropertyChanged}" Width="100"
+                                                     Padding="4,3" ToolTip="UTC date, e.g. 2026-09-01 (empty = trailing 7 days)" />
+                                            <TextBlock Text="To" VerticalAlignment="Center" Margin="8,0,4,0" />
+                                            <TextBox Text="{Binding HistoryTo, UpdateSourceTrigger=PropertyChanged}" Width="100"
+                                                     Padding="4,3" ToolTip="UTC date, e.g. 2026-09-15 (empty = today)" />
+                                            <Button Content="Apply" Command="{Binding ApplyHistoryRangeCommand}" Margin="8,0,0,0"
+                                                    Style="{StaticResource GhostButton}" Padding="10,3" />
+                                            <Button Content="⇩ Export CSV" Command="{Binding ExportHistoryCsvCommand}" Margin="6,0,0,0"
+                                                    Style="{StaticResource GhostButton}" Padding="10,3" />
+                                            <TextBlock Text="{Binding HistoryExportStatus}" VerticalAlignment="Center" Margin="10,0,0,0"
+                                                       FontSize="11" Foreground="{StaticResource AccentBrush}" />
+                                        </StackPanel>
+                                        <DataGrid ItemsSource="{Binding HistoryRows}"
                                               AutoGenerateColumns="False" IsReadOnly="True"
                                               HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                               HorizontalGridLinesBrush="{StaticResource BorderBrush}"
@@ -448,7 +524,8 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                             <DataGridTextColumn Header="P/L" Binding="{Binding Profit, StringFormat=+0.##;-0.##;0}" Width="80" />
                                             <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="*" />
                                         </DataGrid.Columns>
-                                    </DataGrid>
+                                        </DataGrid>
+                                    </DockPanel>
                                 </TabItem>
                                 <TabItem Header="Journal">
                                     <DataGrid ItemsSource="{Binding JournalRows}"

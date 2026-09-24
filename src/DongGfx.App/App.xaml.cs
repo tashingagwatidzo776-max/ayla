@@ -60,6 +60,7 @@ public partial class App : System.Windows.Application
         services.AddSingleton(_ => new PerformanceTracker(Path.Combine(SettingsService.DataDir, "analytics")));
         services.AddSingleton(_ => new AppLogger(SettingsService.DataDir));
         services.AddSingleton<NotificationService>();
+        services.AddSingleton<PriceAlertEngine>();
         services.AddSingleton<WebhookService>();
         services.AddSingleton<ManualRealMoneyGate>();
         services.AddSingleton<UnlockStalenessMonitor>();
