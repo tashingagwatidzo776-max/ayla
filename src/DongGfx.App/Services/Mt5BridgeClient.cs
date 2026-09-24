@@ -254,6 +254,56 @@ public sealed class Mt5BridgeClient : IDisposable
     /// <summary>Places an order through the bridge. Throws Mt5BridgeException
     /// with the retcode when the terminal refuses (validation errors reach
     /// the caller as Mt5BridgeException too, so the UI shows one message).</summary>
+    /// <summary>Switches the terminal's signed-in account (MT5's
+    /// File→Login, done from inside DON G FX via the sidecar's /login).
+    /// Credentials travel in the POST body over loopback only; they are
+    /// never logged or journaled. Rate-limited to 3 attempts/minute by the
+    /// sidecar. Returns the fresh account verdict so callers can re-run
+    /// the trade-mode gate.</summary>
+    public sealed record Mt5LoginResult(
+        bool Ok, long? Login, string? Server, int? TradeMode,
+        double? Balance, string? Currency, string? Error);
+
+    public async Task<Mt5LoginResult> LoginAsync(
+        long login, string password, string server, CancellationToken ct = default)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["login"] = login,
+            ["password"] = password,
+            ["server"] = server,
+        };
+        using var content = new StringContent(
+            JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        using var resp = await _http.PostAsync("login", content, ct).ConfigureAwait(false);
+        var raw = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode)
+        {
+            return new Mt5LoginResult(false, null, null, null, null, null,
+                TryErrorText(raw) ?? (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests
+                    ? "too many login attempts — wait a minute"
+                    : "login refused"));
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var r = doc.RootElement;
+            return new Mt5LoginResult(
+                r.GetProperty("ok").GetBoolean(),
+                r.TryGetProperty("login", out var lg) && lg.ValueKind == JsonValueKind.Number ? lg.GetInt64() : null,
+                r.TryGetProperty("server", out var sv) ? sv.GetString() : null,
+                r.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number ? tm.GetInt32() : null,
+                r.TryGetProperty("balance", out var bal) && bal.ValueKind == JsonValueKind.Number ? bal.GetDouble() : null,
+                r.TryGetProperty("currency", out var cur) ? cur.GetString() : null,
+                r.TryGetProperty("error", out var err) ? err.GetString() : null);
+        }
+        catch (JsonException)
+        {
+            return new Mt5LoginResult(false, null, null, null, null, null, "malformed login response");
+        }
+    }
+
     public async Task<Mt5OrderResult> PlaceOrderAsync(
         string symbol, string action, string type, double lots,
         double? price = null, double? stopPrice = null, double? sl = null, double? tp = null,
