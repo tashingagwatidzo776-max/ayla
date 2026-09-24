@@ -792,4 +792,63 @@ public class TerminalViewModelCoverageTests : IDisposable
         Assert.Equal(2640.0, row.DayLow);
         Assert.True(row.Spread >= 0);
     }
+
+    // ── Candle chart + indicator read-out ─────────────────────────────
+
+    [Fact]
+    public async Task Candle_Load_Computes_The_Indicator_Header()
+    {
+        var handler = new RouteHandler();
+        var sb = new StringBuilder("{\"candles\": [");
+        for (var i = 0; i < 40; i++)
+        {
+            var p = 2650 + i;
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append($"{{\"time\": {1790000000 + (i * 60)}, \"open\": {p}.0, \"high\": {p + 1}.0, \"low\": {p - 1}.0, \"close\": {p}.5}}");
+        }
+
+        sb.Append("]}");
+        handler.Route("/candles/XAUUSDmicro", sb.ToString());
+        var (vm, _) = NewVm(handler: handler);
+
+        // Drive the load directly — OnSelectedSymbolChanged fire-and-forgets it.
+        var m = typeof(TerminalViewModel).GetMethod("LoadCandlesFromBridgeAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await ((Task)m.Invoke(vm, new object[] { "XAUUSDmicro" })!).ConfigureAwait(true);
+
+        Assert.Equal("M1 candles · MT5 bridge", vm.CandleSourceText);
+        Assert.Equal(40, vm.Candles.Count);
+        Assert.Equal(2689.5, vm.Candles[^1].Close, 5);
+        Assert.StartsWith("O 2689", vm.OhlcText);
+
+        // With 40 closes the EMA(20) is warm and RSI(14) is seeded.
+        Assert.Contains("EMA(20)", vm.IndicatorText);
+        Assert.Contains("RSI(14)", vm.IndicatorText);
+        Assert.NotNull(vm.RsiLast);
+        Assert.Equal(40, vm.EmaOverlay.Count);
+        Assert.NotNull(vm.EmaOverlay[^1].Value);
+    }
+
+    [Fact]
+    public async Task Short_Candle_Window_Leaves_The_Indicator_Header_Cold()
+    {
+        var handler = new RouteHandler();
+        handler.Route("/candles/XAUUSDmicro", "{\"candles\": [" +
+            "{\"time\": 1790000000, \"open\": 2650, \"high\": 2651, \"low\": 2649, \"close\": 2650.5}," +
+            "{\"time\": 1790000060, \"open\": 2650.5, \"high\": 2652, \"low\": 2650, \"close\": 2651.5}" +
+            "]}");
+        var (vm, _) = NewVm(handler: handler);
+
+        var m = typeof(TerminalViewModel).GetMethod("LoadCandlesFromBridgeAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await ((Task)m.Invoke(vm, new object[] { "XAUUSDmicro" })!).ConfigureAwait(true);
+
+        Assert.Equal(2, vm.Candles.Count);
+        Assert.Equal(string.Empty, vm.IndicatorText);   // warm-up: no EMA yet
+        Assert.Null(vm.RsiLast);
+    }
 }

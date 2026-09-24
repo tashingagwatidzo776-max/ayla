@@ -4,6 +4,7 @@ using DongGfx.App.Controls;
 using DongGfx.App.Infrastructure;
 using DongGfx.App.Services;
 using DongGfx.App.ViewModels;
+using DongGfx.Core.Fx;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
 using Xunit;
@@ -263,6 +264,64 @@ public class UnlockAndJournalCoverageTests : IDisposable
 
             chart.Clear();
             Assert.Empty(chart.Ticks);
+        });
+    }
+
+    [Fact]
+    public void TickChart_SelfRendered_Indicators_Draw_Without_Error()
+    {
+        RunInSta(() =>
+        {
+            var chart = new TickChartControl { MaxPoints = 200, ShowIndicators = true };
+            var ticks = Enumerable.Range(0, 60).Select(i => new Tick(
+                "XAUUSDmicro", 2650 + (i % 7) * 0.5 + i * 0.05, 2650.1 + i * 0.05,
+                2649.9 + i * 0.05, 1000 + i, 2)).ToList();
+            chart.AddTicks(ticks);
+
+            // Force a synchronous OnRender through a real bitmap target:
+            // exercises the overlay builder, polylines and legend.
+            chart.Measure(new System.Windows.Size(400, 200));
+            chart.Arrange(new System.Windows.Rect(0, 0, 400, 200));
+            var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(400, 200, 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            rtb.Render(chart);
+
+            Assert.Equal(60, chart.Ticks.Count);
+        });
+    }
+
+    [Fact]
+    public void TickChart_ShortSeries_And_IndicatorOff_Are_Safe()
+    {
+        RunInSta(() =>
+        {
+            // Below the 20-point EMA warm-up → no self overlays, no legend.
+            var cold = new TickChartControl { MaxPoints = 50, ShowIndicators = true };
+            cold.AddTicks(Enumerable.Range(0, 10).Select(i => new Tick(
+                "XAUUSDmicro", 2650 + i, 2650.1, 2649.9, 1000 + i, 2)));
+            cold.Measure(new System.Windows.Size(300, 150));
+            cold.Arrange(new System.Windows.Rect(0, 0, 300, 150));
+            var rtbCold = new System.Windows.Media.Imaging.RenderTargetBitmap(300, 150, 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            rtbCold.Render(cold);
+
+            // Indicators off → the external Overlays path is the only one.
+            var off = new TickChartControl { MaxPoints = 50, ShowIndicators = false };
+            off.Overlays = new[]
+            {
+                new ChartOverlay("test", System.Windows.Media.Brushes.Orange,
+                    new[] { new IndicatorPoint(0, 2650.0), new IndicatorPoint(1, null), new IndicatorPoint(2, 2652.0) }),
+            };
+            off.AddTicks(Enumerable.Range(0, 5).Select(i => new Tick(
+                "XAUUSDmicro", 2650 + i, 2650.1, 2649.9, 1000 + i, 2)));
+            off.Measure(new System.Windows.Size(300, 150));
+            off.Arrange(new System.Windows.Rect(0, 0, 300, 150));
+            var rtbOff = new System.Windows.Media.Imaging.RenderTargetBitmap(300, 150, 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            rtbOff.Render(off);
+
+            // External overlays shorter than the tick series must not throw.
+            Assert.Equal(5, off.Ticks.Count);
         });
     }
 }

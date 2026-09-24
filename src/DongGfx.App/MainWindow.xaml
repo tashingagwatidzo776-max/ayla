@@ -144,7 +144,8 @@
                     <!-- Chart -->
                     <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">
                         <controls:TickChartControl x:Name="Chart"
-                                                   LineBrush="{StaticResource AccentBrush}" />
+                                                   LineBrush="{StaticResource AccentBrush}"
+                                                   ShowIndicators="True" />
                     </Border>
 
                     <!-- Footer -->
@@ -387,6 +388,8 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                           ToolTip="Chart timeframe (M1…MN1)" />
                                 <TextBlock Text="{Binding RsiLast, StringFormat=RSI 0.0, TargetNullValue=''}" FontFamily="Consolas" FontSize="11"
                                            Foreground="{StaticResource TextSecondaryBrush}" Margin="10,0,0,0" />
+                                <TextBlock Text="{Binding IndicatorText}" FontFamily="Consolas" FontSize="11"
+                                           Foreground="{StaticResource AccentBrush}" Margin="10,0,0,0" />
                             </StackPanel>
                         </Border>
 
