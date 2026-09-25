@@ -353,10 +353,15 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     // ── Build-freshness badge ──────────────────────────────────────
 
-    private static DateTimeOffset? _lastBadgeProbe;
+    // Instance-scoped on purpose: the VM is a DI singleton, so per-instance
+    // throttling is behaviorally identical in the app — and it keeps test
+    // resets from crossing class boundaries (a static field was shared by
+    // parallel badge tests, which intermittently suppressed a probe and
+    // failed the assertion).
+    private DateTimeOffset? _lastBadgeProbe;
 
-    /// <summary>Test seam: resets the badge throttle between tests.</summary>
-    internal static void ResetBadgeThrottleForTests() => _lastBadgeProbe = null;
+    /// <summary>Test seam: resets the badge throttle for this instance.</summary>
+    internal void ResetBadgeThrottleForTests() => _lastBadgeProbe = null;
 
     /// <summary>The running build vs the latest published release, shown on
     /// the account bar so a stale binary is visible in-app instead of only
