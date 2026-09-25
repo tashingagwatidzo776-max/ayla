@@ -104,12 +104,18 @@ public class AutoUpdaterTests : IDisposable
         };
     }
 
-    private void ServeRelease(string tagName, string assetName = "tf-1.2.0-win-x64.zip", long? size = null)
+    private void ServeRelease(string tagName, string assetName = "tf-1.2.0-win-x64.zip",
+                              long? size = null, string? checksum = null)
     {
+        var body = "release notes body";
+        if (checksum is not null)
+        {
+            body += $"\n\nsha256: {checksum}";
+        }
         var json = JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["tag_name"] = tagName,
-            ["body"] = "release notes body",
+            ["body"] = body,
             ["assets"] = new[]
             {
                 new Dictionary<string, object?>
@@ -244,6 +250,69 @@ public class AutoUpdaterTests : IDisposable
         Assert.Contains("incomplete download", ex.Message);
         Assert.False(File.Exists(Path.Combine(AppContext.BaseDirectory, "updates", "tf-update-1.2.0.zip")),
             "the partial zip must be deleted after the size mismatch");
+    }
+
+    [Fact]
+    public async Task Download_Right_Size_Wrong_Bytes_Is_Deleted_When_Checksum_Announced()
+    {
+        // Announce the sha256 of a body we are NOT serving: the download
+        // arrives with the right byte count but wrong content — exactly
+        // the corruption the size check cannot see. It must be deleted.
+        var served = Encoding.UTF8.GetBytes("corrupted package body, same length as announced");
+        var realHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                Encoding.UTF8.GetBytes("the real package bytes")));
+        ServeRelease("v1.2.0", size: served.Length, checksum: realHash);
+        Serve(served, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
+        using var updater = CreateUpdater();
+
+        var info = await updater.CheckForUpdateAsync(Url);
+        Assert.NotNull(info);
+        Assert.Equal(realHash, info!.ChecksumSha256);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => updater.DownloadUpdateAsync(info));
+        Assert.Contains("checksum mismatch", ex.Message);
+        Assert.False(File.Exists(Path.Combine(AppContext.BaseDirectory, "updates", "tf-update-1.2.0.zip")),
+            "a checksum-mismatched package must be deleted");
+    }
+
+    [Fact]
+    public async Task Download_Matching_Checksum_Is_Kept_For_Staging()
+    {
+        var package = CreateZip(new Dictionary<string, string>
+        {
+            ["DongGfx.exe"] = "fake exe image",
+            ["DongGfx.dll"] = "fake assembly",
+        });
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(package));
+        ServeRelease("v1.2.0", size: package.Length, checksum: hash);
+        Serve(package, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
+        using var updater = CreateUpdater();
+
+        var info = await updater.CheckForUpdateAsync(Url);
+        Assert.NotNull(info);
+
+        var zipPath = await updater.DownloadUpdateAsync(info!);
+        Assert.True(File.Exists(zipPath), "an intact package must survive the checksum verdict");
+        var stagedDir = await updater.StageUpdateAsync(zipPath);
+        Assert.True(Directory.Exists(stagedDir));
+    }
+
+    [Fact]
+    public async Task Download_No_Checksum_Announced_Falls_Back_To_Size_Check()
+    {
+        var package = CreateZip(new Dictionary<string, string> { ["DongGfx.exe"] = "exe" });
+        ServeRelease("v1.2.0", size: package.Length, checksum: null);   // nothing announced
+        Serve(package, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
+        using var updater = CreateUpdater();
+
+        var info = await updater.CheckForUpdateAsync(Url);
+        Assert.NotNull(info);
+        Assert.Equal("", info!.ChecksumSha256);
+
+        var zipPath = await updater.DownloadUpdateAsync(info!);
+        Assert.True(File.Exists(zipPath));
     }
 
     [Fact]

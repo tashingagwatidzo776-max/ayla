@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace DongGfx.Core.Update;
 
@@ -97,7 +99,8 @@ public sealed class AutoUpdater : IDisposable
                 Version = remoteVersion,
                 ReleaseNotes = release.Body ?? "",
                 DownloadUrl = asset.BrowserDownloadUrl,
-                FileSize = asset.Size
+                FileSize = asset.Size,
+                ChecksumSha256 = ExtractChecksumFromNotes(release.Body ?? "", asset.Name) ?? "",
             };
         }
         catch (Exception ex)
@@ -159,8 +162,70 @@ public sealed class AutoUpdater : IDisposable
                 $"incomplete download: {written} of {info.FileSize} bytes — retry the download");
         }
 
+        // Hardening: an announced SHA-256 turns "right size" into "right
+        // bytes" — a corrupted-but-complete download is caught here
+        // instead of bricking the install into a rollback.
+        if (!string.IsNullOrWhiteSpace(info.ChecksumSha256))
+        {
+            var actualHash = await ComputeSha256Async(zipPath, ct).ConfigureAwait(false);
+            if (!string.Equals(actualHash, info.ChecksumSha256.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                try { File.Delete(zipPath); } catch { /* best effort */ }
+                Progress?.Invoke($"Checksum mismatch: got {actualHash}, release announced {info.ChecksumSha256}");
+                throw new InvalidDataException(
+                    $"checksum mismatch — downloaded {actualHash}, release announced {info.ChecksumSha256}; download deleted");
+            }
+        }
+
         Progress?.Invoke($"Download complete: {info.Version}");
         return zipPath;
+    }
+
+    /// <summary>Extracts the announced SHA-256 for `assetName` from the
+    /// release notes. Two formats are recognized: the sha256sum line
+    /// ("<64-hex>  <asset-name>") and a labeled line ("sha256: <hex>",
+    /// "SHA256 = <hex>"). A hex line naming a DIFFERENT file is ignored, so
+    /// multi-asset releases cannot poison the verdict. No announcement →
+    /// null → the download falls back to the size check alone.</summary>
+    public static string? ExtractChecksumFromNotes(string releaseBody, string assetName)
+    {
+        if (string.IsNullOrWhiteSpace(releaseBody) || string.IsNullOrWhiteSpace(assetName))
+        {
+            return null;
+        }
+
+        foreach (var rawLine in releaseBody.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            var hex = FindHex64(line);
+            if (hex is null)
+            {
+                continue;
+            }
+
+            var namesAsset = line.Contains(assetName, StringComparison.OrdinalIgnoreCase);
+            var lineLower = line.ToLowerInvariant();
+            var labeled = lineLower.Contains("sha256") || lineLower.Contains("sha-256");
+            if (namesAsset || labeled)
+            {
+                return hex;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindHex64(string line)
+    {
+        var match = Regex.Match(line, @"\b[0-9a-fA-F]{64}\b");
+        return match.Success ? match.Value : null;
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)
+    {
+        await using var file = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(file, ct).ConfigureAwait(false);
+        return Convert.ToHexString(hash);
     }
 
     /// <summary>Extract and stage update files for installation. The
@@ -401,6 +466,10 @@ public sealed class UpdateInfo
     public string ReleaseNotes { get; set; } = "";
     public string DownloadUrl { get; set; } = "";
     public long FileSize { get; set; }
+
+    /// <summary>SHA-256 announced in the release notes (empty = none
+    /// announced; the download then relies on the size check alone).</summary>
+    public string ChecksumSha256 { get; set; } = "";
 }
 
 internal sealed class GitHubRelease
