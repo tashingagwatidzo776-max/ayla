@@ -94,6 +94,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string mt5LastServer = "";
 
+    // Second slot of the dialog's Recent picker (previous successful switch).
+    [ObservableProperty]
+    private string mt5PrevLogin = "";
+
+    [ObservableProperty]
+    private string mt5PrevServer = "";
+
     [ObservableProperty]
     private int logLevel = 1;
 
@@ -162,6 +169,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         Mt5TerminalPath = settings.Mt5TerminalPath;
         Mt5LastLogin = settings.Mt5LastLogin;
         Mt5LastServer = settings.Mt5LastServer;
+        Mt5PrevLogin = settings.Mt5PrevLogin;
+        Mt5PrevServer = settings.Mt5PrevServer;
         WebhookUrl = settings.WebhookUrl;
         IsDiscordWebhook = settings.IsDiscordWebhook;
         WebhookOnTrade = settings.WebhookOnTrade;
@@ -190,6 +199,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         Mt5TerminalPath = (Mt5TerminalPath ?? "").Trim(),
         Mt5LastLogin = (Mt5LastLogin ?? "").Trim(),
         Mt5LastServer = (Mt5LastServer ?? "").Trim(),
+        Mt5PrevLogin = (Mt5PrevLogin ?? "").Trim(),
+        Mt5PrevServer = (Mt5PrevServer ?? "").Trim(),
         WebhookUrl = WebhookUrl?.Trim() ?? "",
         IsDiscordWebhook = IsDiscordWebhook,
         WebhookOnTrade = WebhookOnTrade,
@@ -200,6 +211,31 @@ public sealed partial class SettingsViewModel : ObservableObject
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         LogLevel = LogLevel
     };
+
+    /// <summary>Records a successful account switch for the dialog's
+    /// Recent picker: the previous last becomes prev (two slots), the
+    /// typed account becomes last. Signing into the same account again is
+    /// a no-op — repeat logins must not push the two-slot history forward
+    /// (A→B→A→A would otherwise forget B). Blanks are ignored. The
+    /// password is never passed here, never stored.</summary>
+    public void RecordMt5Login(string account, string server)
+    {
+        account = (account ?? "").Trim();
+        server = (server ?? "").Trim();
+        if (account.Length == 0 || server.Length == 0)
+        {
+            return;
+        }
+        if (account == Mt5LastLogin && server == Mt5LastServer)
+        {
+            return;
+        }
+
+        Mt5PrevLogin = Mt5LastLogin;
+        Mt5PrevServer = Mt5LastServer;
+        Mt5LastLogin = account;
+        Mt5LastServer = server;
+    }
 
     [RelayCommand]
     /// <summary>Programmatic save used by the Terminal's switches (FX brain

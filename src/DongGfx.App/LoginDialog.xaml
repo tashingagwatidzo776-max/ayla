@@ -22,25 +22,35 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="Account" Margin="0,0,0,8"
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Recent" Margin="0,0,0,8"
                        VerticalAlignment="Center" FontSize="11"
                        Foreground="{DynamicResource TextSecondaryBrush}" />
-            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Padding="4,3" FontSize="12"
+            <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Padding="4,3" FontSize="12"
+                      ItemsSource="{Binding RecentAccounts}" SelectedItem="{Binding SelectedRecent}"
+                      DisplayMemberPath="Label"
+                      Visibility="{Binding RecentAccounts.Count, Converter={StaticResource CountToVisibility}}"
+                      ToolTip="Accounts you signed into before — picking one fills the fields below" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Account" Margin="0,0,0,8"
+                       VerticalAlignment="Center" FontSize="11"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Padding="4,3" FontSize="12"
                      Text="{Binding Account, UpdateSourceTrigger=PropertyChanged}"
                      ToolTip="Numeric MT5 account id" />
 
-            <TextBlock Grid.Row="1" Grid.Column="0" Text="Password" Margin="0,0,0,8"
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Password" Margin="0,0,0,8"
                        VerticalAlignment="Center" FontSize="11"
                        Foreground="{DynamicResource TextSecondaryBrush}" />
-            <PasswordBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Padding="4,3" FontSize="12"
+            <PasswordBox Grid.Row="2" Grid.Column="1" Margin="0,0,0,8" Padding="4,3" FontSize="12"
                          infra:PasswordBoxHelper.BoundPassword="{Binding Password, UpdateSourceTrigger=PropertyChanged}" />
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="Server" Margin="0,0,0,12"
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="Server" Margin="0,0,0,12"
                        VerticalAlignment="Center" FontSize="11"
                        Foreground="{DynamicResource TextSecondaryBrush}" />
-            <TextBox Grid.Row="2" Grid.Column="1" Margin="0,0,0,12" Padding="4,3" FontSize="12"
+            <TextBox Grid.Row="3" Grid.Column="1" Margin="0,0,0,12" Padding="4,3" FontSize="12"
                      Text="{Binding Server, UpdateSourceTrigger=PropertyChanged}"
                      ToolTip="Broker server name, e.g. Deriv-Demo" />
         </Grid>

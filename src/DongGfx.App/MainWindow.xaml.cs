@@ -101,13 +101,17 @@ public partial class MainWindow : Window
             Account = vm.SettingsVm.Mt5LastLogin,
             Server = vm.SettingsVm.Mt5LastServer,
         };
+        // Recent picker: last + previous successful switches (two slots).
+        loginVm.SetRecentAccounts(
+            vm.SettingsVm.Mt5LastLogin, vm.SettingsVm.Mt5LastServer,
+            vm.SettingsVm.Mt5PrevLogin, vm.SettingsVm.Mt5PrevServer);
         loginVm.OnSignedIn = () =>
         {
-            // Persist the last login (never the password) so the next
-            // dialog opens prefilled; the account-bar refresh rides
-            // behind it so the switch shows immediately.
-            vm.SettingsVm.Mt5LastLogin = loginVm.Account.Trim();
-            vm.SettingsVm.Mt5LastServer = loginVm.Server.Trim();
+            // Persist the switch through the two-slot Recent history (never
+            // the password) so the next dialog opens prefilled; the
+            // account-bar refresh rides behind it so the switch shows at
+            // once.
+            vm.SettingsVm.RecordMt5Login(loginVm.Account, loginVm.Server);
             _ = vm.SettingsVm.SaveSettingsQuietAsync();
             return vm.TerminalVm.RefreshAccountBarCommand.ExecuteAsync(null);
         };

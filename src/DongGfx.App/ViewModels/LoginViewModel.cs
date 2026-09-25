@@ -18,6 +18,14 @@ public partial class LoginViewModel : ObservableObject
 {
     private readonly Mt5BridgeClient _mt5;
 
+    /// <summary>One entry of the dialog's Recent picker: "login · server".
+    /// Built from the two persisted slots (last + previous successful
+    /// switches); passwords are never persisted, so nothing to hide here.</summary>
+    public sealed record RecentAccount(string Login, string Server)
+    {
+        public string Label => $"{Login} · {Server}";
+    }
+
     [ObservableProperty]
     private string account = "";
 
@@ -33,6 +41,25 @@ public partial class LoginViewModel : ObservableObject
     [ObservableProperty]
     private bool isLoggingIn;
 
+    /// <summary>The two persisted accounts (last, then previous) for the
+    /// Recent dropdown; choosing an entry fills Account and Server.
+    /// De-duplicated and blank-free.</summary>
+    public IReadOnlyList<RecentAccount> RecentAccounts { get; private set; } =
+        Array.Empty<RecentAccount>();
+
+    [ObservableProperty]
+    private RecentAccount? selectedRecent;
+
+    partial void OnSelectedRecentChanged(RecentAccount? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+        Account = value.Login;
+        Server = value.Server;
+    }
+
     public LoginViewModel(Mt5BridgeClient mt5) => _mt5 = mt5;
 
     /// <summary>Raised after a successful switch (UI thread) — the dialog
@@ -42,6 +69,29 @@ public partial class LoginViewModel : ObservableObject
     /// <summary>Post-login refresh (the Terminal account bar), invoked
     /// best-effort so a refresh failure never masks the successful login.</summary>
     public Func<Task>? OnSignedIn { get; set; }
+
+    /// <summary>Seeds the Recent picker. Called by the dialog's owner with
+    /// (last, server, prev, server) before ShowDialog — the picker then
+    /// fills Account/Server when an entry is chosen.</summary>
+    public void SetRecentAccounts(
+        string lastLogin, string lastServer, string prevLogin, string prevServer)
+    {
+        var list = new List<RecentAccount>(2);
+        if (!string.IsNullOrWhiteSpace(lastLogin) && !string.IsNullOrWhiteSpace(lastServer))
+        {
+            list.Add(new RecentAccount(lastLogin.Trim(), lastServer.Trim()));
+        }
+        if (!string.IsNullOrWhiteSpace(prevLogin) && !string.IsNullOrWhiteSpace(prevServer))
+        {
+            var prev = new RecentAccount(prevLogin.Trim(), prevServer.Trim());
+            if (!list.Any(r => r.Login == prev.Login && r.Server == prev.Server))
+            {
+                list.Add(prev);
+            }
+        }
+        RecentAccounts = list;
+        OnPropertyChanged(nameof(RecentAccounts));
+    }
 
     [RelayCommand]
     private async Task LoginAsync()

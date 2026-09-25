@@ -68,6 +68,14 @@ public sealed class AppSettings
     /// (prefills the dialog's server field).</summary>
     public string Mt5LastServer { get; set; } = "";
 
+    /// <summary>The account before the last one (second slot of the
+    /// dialog's Recent picker — handy when flipping demo ↔ real).
+    /// Passwords are never persisted, in either slot.</summary>
+    public string Mt5PrevLogin { get; set; } = "";
+
+    /// <summary>The server belonging to <see cref="Mt5PrevLogin"/>.</summary>
+    public string Mt5PrevServer { get; set; } = "";
+
     // ── Webhooks ───────────────────────────────────────────────────
     /// <summary>Discord or Slack webhook URL for trade notifications.</summary>
     public string WebhookUrl { get; set; } = "";

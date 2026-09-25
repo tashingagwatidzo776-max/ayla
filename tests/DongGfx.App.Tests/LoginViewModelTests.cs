@@ -159,4 +159,32 @@ public class LoginViewModelTests
         Assert.Contains("bridge unreachable", vm.StatusMessage);
         Assert.False(vm.IsLoggingIn);
     }
+
+    // ── Recent picker (two persisted slots) ───────────────────────────
+
+    [Fact]
+    public void Recent_Picker_Seeds_Both_Slots_And_Selection_Fills_Fields()
+    {
+        var (vm, _) = NewVm(OkBody);
+        vm.SetRecentAccounts("201587365", "Deriv-Demo", "42", "Deriv-Real");
+
+        Assert.Equal(2, vm.RecentAccounts.Count);
+        Assert.Equal("201587365 · Deriv-Demo", vm.RecentAccounts[0].Label);
+        Assert.Equal("42 · Deriv-Real", vm.RecentAccounts[1].Label);
+
+        vm.SelectedRecent = vm.RecentAccounts[1];   // pick the old account
+        Assert.Equal("42", vm.Account);
+        Assert.Equal("Deriv-Real", vm.Server);
+    }
+
+    [Fact]
+    public void Recent_Picker_Blanks_And_Duplicates_Are_Dropped()
+    {
+        var (vm, _) = NewVm(OkBody);
+        vm.SetRecentAccounts("", "Deriv-Demo", "201587365", "");
+        Assert.Empty(vm.RecentAccounts);   // no complete slot → empty picker
+
+        vm.SetRecentAccounts("201587365", "Deriv-Demo", "201587365", "Deriv-Demo");
+        Assert.Single(vm.RecentAccounts);  // same account twice → one entry
+    }
 }
