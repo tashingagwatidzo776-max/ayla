@@ -19,6 +19,7 @@ namespace DongGfx.App.Tests;
 /// selected symbol, and every command tolerates a null row.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class TerminalContextCommandsTests : IDisposable
 {
     private readonly string _dir;

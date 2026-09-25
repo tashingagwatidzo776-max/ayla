@@ -21,6 +21,7 @@ namespace DongGfx.App.Tests;
 /// the selected symbol's positions/orders on every poll.
 /// </summary>
 [Trait("Category", "Unit")]
+[Trait("Category", "RealMoney")]
 public class TerminalChartTradingTests : IDisposable
 {
     private readonly string _dir;
