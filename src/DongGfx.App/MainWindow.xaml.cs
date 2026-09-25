@@ -159,12 +159,33 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>Instance wrapper: opens the chart trading menu through the
+    /// dispatcher queue. See the static core for why the open must be
+    /// deferred.</summary>
+    private void WireChartTrading(
+        ViewModels.TerminalViewModel terminal,
+        Controls.CandleChartControl chart)
+    {
+        WireChartTradingCore(terminal, chart,
+            menu => Dispatcher.BeginInvoke(() => menu.IsOpen = true));
+    }
+
     /// <summary>Chart trading + drawing menu wiring: right-click offers
     /// market buy/sell (the ticket's guards apply — the chart is a
     /// shortcut, never a bypass), a horizontal level at the clicked price,
     /// and drawing cleanup; a dragged SL/TP line maps onto the position
-    /// modify (journaled, kill-switched) via the view model.</summary>
-    private void WireChartTrading(ViewModels.TerminalViewModel terminal, Controls.CandleChartControl chart)
+    /// modify (journaled, kill-switched) via the view model.
+    ///
+    /// The <paramref name="openMenu"/> callback owns WHEN the menu opens:
+    /// the live window defers to the dispatcher queue because a
+    /// synchronous IsOpen inside the right-button-up route is dismissed by
+    /// that same input sequence (the context-menu service closes what it
+    /// just opened) — the menu flashed and never showed. The regression
+    /// test asserts the deferral; do not inline a synchronous open.</summary>
+    internal static void WireChartTradingCore(
+        ViewModels.TerminalViewModel terminal,
+        Controls.CandleChartControl chart,
+        Action<System.Windows.Controls.ContextMenu> openMenu)
     {
         chart.ChartContextMenuRequested += (_, price, _) =>
         {
@@ -199,13 +220,9 @@ public partial class MainWindow : Window
             clear.Click += (_, _) => chart.ClearDrawings();
             menu.Items.Add(clear);
 
-            // Defer the open: raising IsOpen synchronously inside the
-            // right-button-up route gets the menu dismissed by that same
-            // input sequence (the context-menu service sees the button-up
-            // and closes what it just opened) — the menu flashes and
-            // never shows. Queued to the dispatcher, it opens cleanly
-            // after the click route completes.
-            Dispatcher.BeginInvoke(() => menu.IsOpen = true);
+            // The openMenu callback owns WHEN the menu opens — the live
+            // window defers to the dispatcher queue (see the method doc).
+            openMenu(menu);
         };
 
         chart.PriceLineDragged += (line, newPrice) =>

@@ -54,6 +54,8 @@ MetaTrader 5 terminal → Deriv-Demo / Deriv real MT5 server
 | `POST /order` | `{action: buy\|sell, type: market\|limit\|stop\|stoplimit, symbol, lots, price?, sl?, tp?}` → deal/retcode |
 | `GET /positions` | open positions with live P/L |
 | `POST /close/{ticket}` | close a position |
+| `POST /modify` | `{ticket, sl?, tp?}` — change SL/TP on an open position (the chart's drag-to-modify maps onto this) |
+| `POST /login` | `{login, password, server}` — switch the terminal's signed-in account; rate-limited to 3 attempts/min (422/429 on excess, surfaced verbatim in the login dialog). Body-only: credentials are never logged, journaled or persisted — the password field clears on success and only login+server feed the two-slot Recent picker |
 | `GET /deals?days=7` | recent deal history |
 
 Error model: `{"error": "..."}` with a 4xx/5xx status; `retcode` from
@@ -66,3 +68,25 @@ Error model: `{"error": "..."}` with a 4xx/5xx status; `retcode` from
   in); the sidecar never writes files and never shells out.
 - Every order from DON G FX passes the same rails:
   kill switch, real-money gate, `Mt5MaxLots` cap — and is journaled.
+
+## Account switching (POST /login)
+
+File → Login in the app switches the sidecar's attached account. The
+switch itself is only half the story — the session state that belonged to
+the old account must not leak into the new one:
+
+- **FX brain stop** — after a *successful* switch the app stops the FX
+  portfolio brain (`MainViewModel.OnMt5AccountSwitched` →
+  `TerminalViewModel.ShutdownFxBrain`): its open positions, exposure cap
+  and supervisor baseline belong to the signed-out account, and an engine
+  cycle must never fire against the new one.
+- **Real-money unlock reset** — the manual session unlock
+  (`ManualRealMoneyGate`) is armed per account; a switch resets it so the
+  new account starts locked (before this guard, only app close reset it).
+- Both guards run in the login dialog's OnSignedIn continuation (refused
+  logins change nothing), journal `MT5_SESSION`, and are best-effort —
+  they can never mask the login result. Coverage:
+  `AccountSwitchGuardTests`; rails table:
+  `docs/real-money-safety-audit.md` ("Account-switch guards").
+- The 3/min sidecar rate limit and body-only credential handling are the
+  transport-side rails for the same surface (see `POST /login` above).
