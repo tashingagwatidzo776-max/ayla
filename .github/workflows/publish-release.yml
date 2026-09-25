@@ -159,9 +159,11 @@ jobs:
         # contains "win-x64" and ends in ".zip", and its hardened download
         # path verifies the package against a sha256 line announced in the
         # release notes. Zip the exe, attach that package, and PATCH the
-        # body with the announcement — without this the checksum check can
-        # never fire in production.
-        ZIP_NAME="DongGfx-$TAG-win-x64.zip"
+        # body with the announcement. The name MUST stay the canonical
+        # DongGfx-win-x64.zip the tag-triggered release.yml ships — a
+        # second, differently-named zip would give the updater's
+        # first-match filter two candidates on the same release.
+        ZIP_NAME="DongGfx-win-x64.zip"
         zip -j -q "dist/$ZIP_NAME" dist/DongGfx.exe
         ZIP_SHA256=$(sha256sum "dist/$ZIP_NAME" | awk '{print $1}')
         echo "package: $ZIP_NAME (sha256 $ZIP_SHA256)"

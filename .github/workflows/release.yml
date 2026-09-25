@@ -125,11 +125,15 @@ jobs:
       run: |
         # Same rule as the publish step: name the commit that was built.
         $sha = (git rev-parse HEAD).Substring(0, 7)
+        # Announce the package hash so the app's AutoUpdater verifies the
+        # download (size + sha256) instead of trusting the byte count alone.
+        $zipHash = (Get-FileHash DongGfx-win-x64.zip -Algorithm SHA256).Hash.ToLower()
         $notes = @"
         Automated release of $env:TAG_NAME (commit $sha).
 
         - Shipped from a commit whose real-money gate drill passed.
         - Asset: DongGfx-win-x64.zip (single-file, self-contained - what the app's AutoUpdater installs).
+        - sha256: $zipHash  DongGfx-win-x64.zip
         - The Terminal build badge flips to 'up to date' once this build is running.
         "@
         gh release create "$env:TAG_NAME" DongGfx-win-x64.zip `
