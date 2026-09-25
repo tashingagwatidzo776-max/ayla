@@ -175,9 +175,11 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: LIVE";
     }
 
-    /// <summary>Stops and disposes the FX portfolio host (app shutdown
-    /// path): no engine cycle may fire while the app tears down the bridge
-    /// client the engines order through.</summary>
+    /// <summary>Stops and disposes the FX portfolio host (account switch and
+    /// app shutdown paths): no engine cycle may fire against an MT5 account
+    /// the engines were not sized and authorized for — after a switch the
+    /// brain's open positions, exposure cap and real-money authorization
+    /// all belong to the previous login.</summary>
     public void ShutdownFxBrain()
     {
         try

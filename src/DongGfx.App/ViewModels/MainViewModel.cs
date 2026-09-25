@@ -1,5 +1,6 @@
 using DongGfx.App.Infrastructure;
 using DongGfx.Core.Logging;
+using DongGfx.App.Services;
 
 namespace DongGfx.App.ViewModels;
 
@@ -13,6 +14,7 @@ public sealed class MainViewModel
 {
     private readonly SettingsService _settingsService;
     private readonly TradeJournal _journal;
+    private readonly ManualRealMoneyGate? _gate;
 
     public DashboardViewModel Dashboard { get; }
     public SettingsViewModel SettingsVm { get; }
@@ -29,10 +31,12 @@ public sealed class MainViewModel
         UpdateViewModel updateVm,
         PerformanceViewModel performanceVm,
         TerminalViewModel terminalVm,
-        TradeJournal? journal = null)
+        TradeJournal? journal = null,
+        ManualRealMoneyGate? gate = null)
     {
         _settingsService = settingsService;
         _journal = journal!;
+        _gate = gate;
         Dashboard = dashboard;
         SettingsVm = settingsVm;
         JournalVm = journalVm;
@@ -74,11 +78,37 @@ public sealed class MainViewModel
 
     /// <summary>Tray-exit and window-close teardown: stop the FX engines
     /// first so no cycle can fire while the app disposes the bridge client
-    /// and journal they order and log through. Session unlocks are
-    /// session-scoped by design and reset on window close (MainWindow).
-    /// </summary>
+    /// the engines order through. Session unlocks are session-scoped by
+    /// design and reset on window close (MainWindow).</summary>
     public void Shutdown()
     {
         TerminalVm.ShutdownFxBrain();
+    }
+
+    /// <summary>Account-switch safety guards, run after every successful MT5
+    /// login: (1) stop the FX brain — its open positions, exposure cap and
+    /// supervisor baseline all belong to the account that was just signed
+    /// out, so an engine cycle must never fire against the new one; (2)
+    /// reset the manual real-money unlock, which was armed for the previous
+    /// account and must not carry across a switch (session-scoped by
+    /// design: a fresh account starts locked). Both best-effort: the guards
+    /// must never mask the successful login.</summary>
+    public void OnMt5AccountSwitched(string login, string server)
+    {
+        TerminalVm.ShutdownFxBrain();
+        try
+        {
+            // A fresh account starts locked: the unlock was armed for the
+            // previous account's manual surfaces.
+            _gate?.Reset();
+            _journal?.Log(Guid.Empty, "MT5_SESSION",
+                $"account switched to {login} @ {server} — FX brain stopped, " +
+                "real-money unlock reset (guards: docs/real-money-safety-audit.md)");
+        }
+        catch
+        {
+            // The switch itself already succeeded; a journal hiccup must
+            // never surface as a failed login or crash the dialog close.
+        }
     }
 }
