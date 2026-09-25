@@ -15,6 +15,12 @@ public sealed class AppLogger : IDisposable
     private readonly Timer _flushTimer;
     private readonly object _writeLock = new();
     private bool _disposed;
+    private readonly bool _logUsable;
+
+    /// <summary>The error the constructor hit while preparing the log
+    /// directory; null when the directory was usable (or null on purpose —
+    /// see the ctor). Memory-only when set.</summary>
+    public Exception? DirectoryError { get; private set; }
 
     /// <summary>Minimum log level to persist. Default: Info.</summary>
     public LogLevel MinLevel { get; set; } = LogLevel.Info;
@@ -22,8 +28,32 @@ public sealed class AppLogger : IDisposable
     public AppLogger(string dataDirectory)
     {
         _logDir = Path.Combine(dataDirectory, "logs");
-        Directory.CreateDirectory(_logDir);
+        // Same rule as TradeJournal: this is resolved eagerly from the DI
+        // graph at startup, so the constructor must not throw — degrade to
+        // memory-only (queue drains and drops on flush, reads start empty).
+        _logUsable = TryPrepareDirectory(_logDir, out var error);
+        DirectoryError = error;
         _flushTimer = new Timer(_ => Flush(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>Create the directory and prove it is writable with a probe
+    /// file (CreateDirectory alone succeeds on an existing read-only dir).</summary>
+    private static bool TryPrepareDirectory(string dir, out Exception? error)
+    {
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, ".log_probe");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+            return false;
+        }
     }
 
     public void Debug(string message, string? category = null, Dictionary<string, object>? properties = null)
@@ -107,6 +137,7 @@ public sealed class AppLogger : IDisposable
     private void Flush()
     {
         if (_queue.IsEmpty) return;
+        if (!_logUsable) { _queue.Clear(); return; }   // memory-only: drain and drop
 
         var fileName = $"log_{DateTime.UtcNow:yyyyMMdd}.jsonl";
         var filePath = Path.Combine(_logDir, fileName);

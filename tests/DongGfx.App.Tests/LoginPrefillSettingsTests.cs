@@ -13,6 +13,10 @@ namespace DongGfx.App.Tests;
 /// part of any of this — it must never be persisted anywhere.
 /// </summary>
 [Trait("Category", "Unit")]
+// Serialized against the other DataDir-touching suites (see
+// SharedDataDirCollection.cs): the teardown deletes the real %APPDATA% data
+// dir, which must not race a parallel class's directory creation.
+[Collection("Shared-DataDir-Directory")]
 public class LoginPrefillSettingsTests
 {
     private static (SettingsViewModel Vm, SettingsService Service) NewVm()

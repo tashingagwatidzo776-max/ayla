@@ -19,12 +19,47 @@ public sealed class TickArchive : IDisposable
     private readonly Task _writer;
     private readonly Dictionary<string, StreamWriter> _open = new();
     private bool _disposed;
+    private readonly bool _archiveUsable;
+
+    /// <summary>The error the constructor hit while preparing the archive
+    /// root; null when the directory was usable. Memory-only (drops ticks)
+    /// when set.</summary>
+    public Exception? DirectoryError { get; private set; }
+
+    /// <summary>The last error the writer loop hit; null when every write
+    /// succeeded. Kept so a dead-write surface is diagnosable (tests assert
+    /// on it when a timeout would otherwise just say "file missing").</summary>
+    public Exception? WriterError { get; private set; }
 
     public TickArchive(string? root = null)
     {
         _root = root ?? Path.Combine(DongGfx.App.Infrastructure.SettingsService.DataDir, "ticks");
-        Directory.CreateDirectory(_root);
+        // Same rule as TradeJournal: resolved eagerly from the DI graph at
+        // startup, so the constructor must not throw — degrade to a sink
+        // that drops ticks instead.
+        _archiveUsable = TryPrepareDirectory(_root, out var error);
+        DirectoryError = error;
         _writer = Task.Run(WriterLoop);
+    }
+
+    /// <summary>Create the directory and prove it is writable with a probe
+    /// file (CreateDirectory alone succeeds on an existing read-only dir).</summary>
+    private static bool TryPrepareDirectory(string dir, out Exception? error)
+    {
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, ".archive_probe");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+            return false;
+        }
     }
 
     /// <summary>Enqueue one tick. Fire-and-forget: never throws, never blocks;
@@ -46,6 +81,11 @@ public sealed class TickArchive : IDisposable
     {
         foreach (var (venue, symbol, line) in _queue.GetConsumingEnumerable())
         {
+            if (!_archiveUsable)
+            {
+                continue;   // memory-only: the queue drains, the ticks drop
+            }
+
             try
             {
                 var path = Path.Combine(_root, venue, $"{symbol}_{DateTime.UtcNow:yyyyMMdd}.jsonl");
@@ -60,13 +100,17 @@ public sealed class TickArchive : IDisposable
                 w.WriteLine(line);
                 w.Flush();
             }
-            catch (IOException)
-            {
-                // transient disk trouble — drop this tick, keep the loop alive
-            }
             catch (ObjectDisposedException)
             {
                 return;
+            }
+            catch (Exception ex)
+            {
+                // Transient disk trouble (IOException etc.) or anything
+                // unexpected: drop this tick and keep the loop alive. A
+                // dead writer task would silently swallow every later tick
+                // while Add keeps accepting them into a queue nobody drains.
+                WriterError = ex;
             }
         }
     }
@@ -80,7 +124,11 @@ public sealed class TickArchive : IDisposable
 
         _disposed = true;
         _queue.CompleteAdding();
-        try { _writer.Wait(2000); } catch { /* flush deadline — files close below */ }
+        // CompleteAdding guarantees the loop terminates once the queue
+        // drains — wait for that instead of a fixed 2s deadline so a slow
+        // disk flushes rather than silently dropping (the writers below
+        // close whatever made it).
+        try { _writer.Wait(TimeSpan.FromSeconds(10)); } catch { /* flush deadline — files close below */ }
         foreach (var w in _open.Values)
         {
             try { w.Dispose(); } catch { }

@@ -14,12 +14,66 @@ public sealed class TradeJournal : IDisposable
     private readonly Timer _flushTimer;
     private readonly object _writeLock = new();
     private bool _disposed;
+    private readonly bool _journalUsable;
 
-    public TradeJournal(string journalDir)
+    /// <summary>The last error the constructor hit while resolving the
+    /// journal directory; null when the requested directory was usable.</summary>
+    public Exception? DirectoryError { get; }
+
+    public TradeJournal(string journalDir, string? fallbackDir = null)
     {
-        _journalDir = journalDir;
-        Directory.CreateDirectory(journalDir);
+        // Journaling is best-effort end to end — the flush path already
+        // drops entries rather than throwing when the directory vanishes —
+        // so the constructor must not throw either: the DI graph resolves
+        // this eagerly at startup, and a throwing ctor would kill the app
+        // (observed on CI: a concurrent directory deletion between the
+        // existence check and CreateDirectory threw DirectoryNotFoundException
+        // out of service resolution). Sequence: create the requested
+        // directory (retry once — the failure is usually a transient race),
+        // then fall back to a fresh temp directory, then run memory-only.
+        if (TryPrepareDirectory(journalDir, out var resolved, out var primaryError) ||
+            TryPrepareDirectory(journalDir, out resolved, out primaryError))
+        {
+            _journalUsable = true;
+        }
+        else if (TryPrepareDirectory(
+                     fallbackDir ?? Path.Combine(Path.GetTempPath(), "tf_journal_fallback", Guid.NewGuid().ToString("N")),
+                     out resolved, out _))
+        {
+            // The fallback landing succeeded; DirectoryError still reports
+            // why the requested directory failed.
+            _journalUsable = true;
+        }
+        else
+        {
+            resolved = journalDir;   // memory-only: never touch disk
+            _journalUsable = false;
+        }
+
+        DirectoryError = primaryError;
+        _journalDir = resolved;
         _flushTimer = new Timer(_ => Flush(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>Create the directory and prove it is writable with a probe
+    /// file (CreateDirectory alone succeeds on an existing read-only dir).</summary>
+    private static bool TryPrepareDirectory(string dir, out string resolved, out Exception? error)
+    {
+        resolved = dir;
+        error = null;
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, ".journal_probe");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+            return false;
+        }
     }
 
     /// <summary>Log a brain decision.</summary>
@@ -166,35 +220,45 @@ public sealed class TradeJournal : IDisposable
     public IReadOnlyList<JournalEntry> GetRecent(Guid? accountId = null, int count = 100)
     {
         var entries = new List<JournalEntry>();
-        var files = Directory.GetFiles(_journalDir, "journal_*.jsonl")
-            .OrderByDescending(f => f)
-            .Take(10);
-
-        foreach (var file in files)
+        if (!_journalUsable) return entries;   // memory-only: nothing on disk to read
+        try
         {
-            // Read under the write lock: the flush timer may append to the
-            // newest file while we read it, and Windows forbids concurrent
-            // openers regardless of share mode (IOException).
-            string[] lines;
-            lock (_writeLock)
+            var files = Directory.GetFiles(_journalDir, "journal_*.jsonl")
+                .OrderByDescending(f => f)
+                .Take(10);
+
+            foreach (var file in files)
             {
-                lines = File.ReadAllLines(file);
-            }
-            foreach (var line in lines.Reverse())
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
+                // Read under the write lock: the flush timer may append to the
+                // newest file while we read it, and Windows forbids concurrent
+                // openers regardless of share mode (IOException).
+                string[] lines;
+                lock (_writeLock)
                 {
-                    var entry = JsonSerializer.Deserialize<JournalEntry>(line);
-                    if (entry != null && (accountId == null || entry.AccountId == accountId))
-                    {
-                        entries.Add(entry);
-                        if (entries.Count >= count) break;
-                    }
+                    lines = File.ReadAllLines(file);
                 }
-                catch { /* skip malformed lines */ }
+                foreach (var line in lines.Reverse())
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    try
+                    {
+                        var entry = JsonSerializer.Deserialize<JournalEntry>(line);
+                        if (entry != null && (accountId == null || entry.AccountId == accountId))
+                        {
+                            entries.Add(entry);
+                            if (entries.Count >= count) break;
+                        }
+                    }
+                    catch { /* skip malformed lines */ }
+                }
+                if (entries.Count >= count) break;
             }
-            if (entries.Count >= count) break;
+        }
+        catch
+        {
+            // The directory vanished mid-read (parallel cleanup, a wipe,
+            // a broken drive). Journaling is best-effort: return what we
+            // have rather than throwing out of a read path.
         }
 
         return entries;
@@ -260,6 +324,7 @@ public sealed class TradeJournal : IDisposable
     public void Flush()
     {
         if (_pending.IsEmpty) return;
+        if (!_journalUsable) { _pending.Clear(); return; }   // memory-only: drain and drop
 
         var fileName = $"journal_{DateTime.UtcNow:yyyyMMdd}.jsonl";
         var filePath = Path.Combine(_journalDir, fileName);

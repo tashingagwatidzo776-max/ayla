@@ -210,7 +210,10 @@ public class WebhookServiceTests : IDisposable
     public async Task TestConnection_ServerError_SurfacesStatusCode()
     {
         _statusCode = 500;
-        using var webhook = new WebhookService { WebhookUrl = _url, IsDiscord = true };
+        // HttpBudget, not the 10 s default: this awaits the response, and
+        // under full-suite parallel load the loopback POST can exceed the
+        // fail-fast budget (cancelled instead of 500 — seen twice locally).
+        using var webhook = new WebhookService(HttpBudget) { WebhookUrl = _url, IsDiscord = true };
 
         var (ok, message) = await webhook.TestConnectionAsync();
 

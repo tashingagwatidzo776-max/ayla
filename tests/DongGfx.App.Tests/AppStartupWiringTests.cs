@@ -22,6 +22,11 @@ namespace DongGfx.App.Tests;
 /// </summary>
 [Trait("Category", "Unit")]
 [Trait("Category", "RealMoney")]
+// Serialized against the other DataDir-touching suites (see
+// SharedDataDirCollection.cs): this graph's constructors create directories
+// under the real %APPDATA% data dir, and a parallel teardown deleting that
+// dir used to throw DirectoryNotFoundException out of service resolution.
+[Collection("Shared-DataDir-Directory")]
 public class AppStartupWiringTests
 {
     internal static ServiceProvider BuildGraph(AppSettings? settings = null)
