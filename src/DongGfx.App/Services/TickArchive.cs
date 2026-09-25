@@ -39,7 +39,12 @@ public sealed class TickArchive : IDisposable
         // that drops ticks instead.
         _archiveUsable = TryPrepareDirectory(_root, out var error);
         DirectoryError = error;
-        _writer = Task.Run(WriterLoop);
+        // A dedicated thread (LongRunning), not the bare pool: under CI's
+        // parallel load + coverage collector the pool can starve, and a
+        // writer task that never gets scheduled is indistinguishable from
+        // a silent drop (observed: WriterError null, no file after 30 s).
+        _writer = Task.Factory.StartNew(
+            WriterLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     /// <summary>Create the directory and prove it is writable with a probe

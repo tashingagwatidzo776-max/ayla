@@ -492,8 +492,8 @@ public class TerminalViewModelCoverageTests : IDisposable
     [Fact]
     public void RefreshBuildBadgeAsync_SameVersion_ShowsUpToDate()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var (vm, _) = NewVm();
+        vm.ResetBadgeThrottleForTests();
         vm.LatestReleaseProbe = () => Task.FromResult<string?>("v" + Infrastructure.VersionInfo.Stamp.Split('+')[0]);
 
         RunInSta(() => vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult());
@@ -505,8 +505,8 @@ public class TerminalViewModelCoverageTests : IDisposable
     [Fact]
     public void RefreshBuildBadgeAsync_NewerRelease_ShowsUpdateAvailable()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var (vm, _) = NewVm();
+        vm.ResetBadgeThrottleForTests();
         vm.LatestReleaseProbe = () => Task.FromResult<string?>("v9.9.9");
 
         RunInSta(() => vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult());
@@ -517,8 +517,8 @@ public class TerminalViewModelCoverageTests : IDisposable
     [Fact]
     public void RefreshBuildBadgeAsync_FailingProbe_NeverThrows_KeepsStamp()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var (vm, _) = NewVm();
+        vm.ResetBadgeThrottleForTests();
         vm.LatestReleaseProbe = () => throw new InvalidOperationException("network down");
 
         RunInSta(() => vm.RefreshBuildBadgeAsync().GetAwaiter().GetResult());
@@ -529,8 +529,8 @@ public class TerminalViewModelCoverageTests : IDisposable
     [Fact]
     public void RefreshBuildBadgeAsync_ThrottlesRepeatProbes()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var (vm, _) = NewVm();
+        vm.ResetBadgeThrottleForTests();
         var calls = 0;
         vm.LatestReleaseProbe = () => { calls++; return Task.FromResult<string?>("v9.9.9"); };
 

@@ -104,8 +104,8 @@ public class TerminalViewModelTests : IDisposable
     [Fact]
     public async Task BuildBadge_ShowsUpdateAvailable_WhenReleaseIsNewer()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var vm = CreateVm();
+        vm.ResetBadgeThrottleForTests();
         vm.LatestReleaseProbe = () => Task.FromResult<string?>("v9.9.9");
 
         await vm.RefreshBuildBadgeAsync();
@@ -116,8 +116,8 @@ public class TerminalViewModelTests : IDisposable
     [Fact]
     public async Task BuildBadge_ShowsUpToDate_WhenReleaseMatchesStamp()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var vm = CreateVm();
+        vm.ResetBadgeThrottleForTests();
         vm.LatestReleaseProbe = () =>
             Task.FromResult<string?>(DongGfx.App.Infrastructure.VersionInfo.Stamp);
 
@@ -129,8 +129,8 @@ public class TerminalViewModelTests : IDisposable
     [Fact]
     public async Task BuildBadge_ProbeFailure_KeepsPlainStamp_AndDoesNotThrow()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var vm = CreateVm();
+        vm.ResetBadgeThrottleForTests();
         vm.LatestReleaseProbe = () => throw new HttpRequestException("offline");
 
         await vm.RefreshBuildBadgeAsync();
@@ -142,8 +142,8 @@ public class TerminalViewModelTests : IDisposable
     [Fact]
     public async Task BuildBadge_TagVsStamp_Formats_Compare_Equal()
     {
-        TerminalViewModel.ResetBadgeThrottleForTests();
         var vm = CreateVm();
+        vm.ResetBadgeThrottleForTests();
         // GitHub tag is "v<major.minor.patch>"; the stamp is
         // "<major.minor.patch>+<sha>" on published builds — the normalized
         // comparison must treat these as equal. Derived from the live
