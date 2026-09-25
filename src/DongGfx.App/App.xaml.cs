@@ -107,6 +107,7 @@ public partial class App : System.Windows.Application
             setAutonomyBound: v => sp.GetRequiredService<SettingsViewModel>().AutonomyEnabled = v,
             setSymbolBound: s => sp.GetRequiredService<SettingsViewModel>().FxSymbol = s,
             tickArchive: sp.GetRequiredService<TickArchive>(),
+            alerts: sp.GetRequiredService<PriceAlertEngine>(),
             fxHostFactory: () =>
             {
                 var s = sp.GetRequiredService<Func<AppSettings>>()();

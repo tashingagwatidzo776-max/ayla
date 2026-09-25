@@ -650,6 +650,22 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                               Background="Transparent" RowBackground="Transparent"
                                               BorderThickness="0" FontFamily="Consolas"
                                               VirtualizingPanel.IsVirtualizing="True">
+                                        <DataGrid.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="_New Order"
+                                                          Command="{Binding SymbolNewOrderCommand}"
+                                                          CommandParameter="{Binding PlacementTarget.SelectedItem}"
+                                                          ToolTip="Pre-select this symbol on the order ticket" />
+                                                <MenuItem Header="Create _Alert here"
+                                                          Command="{Binding SymbolCreateAlertCommand}"
+                                                          CommandParameter="{Binding PlacementTarget.SelectedItem}"
+                                                          ToolTip="Arm above/below alerts around the last price" />
+                                                <MenuItem Header="Open _Chart"
+                                                          Command="{Binding SymbolOpenChartCommand}"
+                                                          CommandParameter="{Binding PlacementTarget.SelectedItem}"
+                                                          ToolTip="Load this symbol's candle chart" />
+                                            </ContextMenu>
+                                        </DataGrid.ContextMenu>
                                         <DataGrid.Columns>
                                             <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol}" Width="110" />
                                             <DataGridTextColumn Header="Bid" Binding="{Binding Bid, StringFormat=0.#####}" Width="90">
