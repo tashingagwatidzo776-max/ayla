@@ -260,6 +260,7 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     private readonly Action<bool>? _setAutonomyBound;
     private readonly Action<string>? _setSymbolBound;
+    private readonly PriceAlertEngine _alerts;   // Market Watch → Create Alert
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _mt5PollTimer;
     private readonly DispatcherTimer _mt5QuoteTimer;
@@ -277,7 +278,8 @@ public sealed partial class TerminalViewModel : ObservableObject
         Action<bool>? setAutonomyBound = null,
         Action<string>? setSymbolBound = null,
         TickArchive? tickArchive = null,
-        Func<FxPortfolioHost?>? fxHostFactory = null)
+        Func<FxPortfolioHost?>? fxHostFactory = null,
+        PriceAlertEngine? alerts = null)
     {
         // FIRST: the UI-thread helper is used from the constructor itself —
         // it must never see an unset dispatcher.
@@ -293,6 +295,9 @@ public sealed partial class TerminalViewModel : ObservableObject
         _fxHostFactory = fxHostFactory;
         _setAutonomyBound = setAutonomyBound;
         _setSymbolBound = setSymbolBound;
+        // Market Watch right-click → Create Alert arms PriceAlertEngine
+        // alerts; a test-injected engine is used as-is (no toast plumbing).
+        _alerts = alerts ?? new PriceAlertEngine(new NotificationService());
 
         // The Toolbox's Journal rows follow the FX engine, the supervisor and
         // the deal feed live (the journal is the app's single append path).
@@ -450,6 +455,65 @@ public sealed partial class TerminalViewModel : ObservableObject
                                  || s.DisplayName.Contains(SymbolFilter, StringComparison.OrdinalIgnoreCase));
 
     partial void OnSymbolFilterChanged(string value) => OnPropertyChanged(nameof(FilteredSymbols));
+
+    // ── Market Watch context menu (right-click a symbol) ───────────
+
+    /// <summary>Right-click → New Order: pre-selects the symbol on the
+    /// order ticket. No order is sent from the menu itself — the ticket's
+    /// guards (kill switch, lots cap, real-money gate) stay the only path.</summary>
+    [RelayCommand]
+    private Task SymbolNewOrderAsync(TerminalSymbolRow? row)
+    {
+        if (row is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        Mt5Symbol = row.Symbol;
+        Mt5OrderStatus = $"order ticket ready: {row.Symbol} — choose action/type/lots and send";
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Right-click → Alert: arms one alert above and one below
+    /// the symbol's last price (spread-offset). The engine collapses
+    /// duplicates, so repeat clicks never stack. A row with no quote yet
+    /// is refused with a hint instead of arming a nonsense trigger.</summary>
+    [RelayCommand]
+    private Task SymbolCreateAlertAsync(TerminalSymbolRow? row)
+    {
+        if (row is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var price = row.Last > 0 ? row.Last : (row.Bid > 0 ? row.Bid : 0);
+        if (price <= 0)
+        {
+            MarketWatchStatus = $"no quote yet for {row.Symbol} — an alert needs a price";
+            return Task.CompletedTask;
+        }
+
+        var offset = Math.Max(row.Spread, price * 0.0005);
+        _alerts.Add(row.Symbol, "above", price + offset);
+        _alerts.Add(row.Symbol, "below", price - offset);
+        MarketWatchStatus = $"alerts armed: {row.Symbol} above {price + offset:0.#####} / below {price - offset:0.#####}";
+        _journal.Log(Guid.Empty, "MT5_ALERT", $"{row.Symbol} ±{offset:0.#####} around {price:0.#####}");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Right-click → Chart: selects the row — candles, ladder
+    /// and the brain-symbol sync all follow from OnSelectedSymbolChanged.</summary>
+    [RelayCommand]
+    private Task SymbolOpenChartAsync(TerminalSymbolRow? row)
+    {
+        if (row is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        SelectedSymbol = Symbols.FirstOrDefault(s => s.Symbol == row.Symbol) ?? row;
+        return Task.CompletedTask;
+    }
 
     partial void OnSelectedSymbolChanged(TerminalSymbolRow? value)
     {
