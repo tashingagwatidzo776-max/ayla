@@ -35,17 +35,25 @@ public class TickArchiveTests : IDisposable
         catch (UnauthorizedAccessException) { return 0; }
     }
 
-    private static void WaitForFile(string path, int lines)
+    private static void WaitForFile(TickArchive archive, string path, int lines)
     {
         // The writer flushes per tick, but under full-suite parallel load the
-        // background task can lag; poll before disposing (Dispose drops what
-        // the 2s flush deadline missed).
+        // background task can lag; poll before disposing (Dispose drains the
+        // queue before closing the files).
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
             if (File.Exists(path) && LineCount(path) >= lines) return;
             Thread.Sleep(25);
         }
+
+        // A timeout used to fail with a bare "file missing", which hid the
+        // real cause (the writer loop dying on an uncaught exception). Fail
+        // with what the writer actually recorded.
+        Assert.True(
+            File.Exists(path) && LineCount(path) >= lines,
+            $"tick file never reached {lines} line(s) at {path}" +
+            (archive.WriterError is null ? "" : $" — writer error: {archive.WriterError}"));
     }
 
     [Fact]
@@ -58,8 +66,8 @@ public class TickArchiveTests : IDisposable
 
         var eur = Path.Combine(_root, "deriv", $"EURUSD_{DateTime.UtcNow:yyyyMMdd}.jsonl");
         var xau = Path.Combine(_root, "mt5-demo", $"XAUUSDmicro_{DateTime.UtcNow:yyyyMMdd}.jsonl");
-        WaitForFile(eur, 2);
-        WaitForFile(xau, 1);
+        WaitForFile(archive, eur, 2);
+        WaitForFile(archive, xau, 1);
         archive.Dispose();   // close writers
 
         Assert.True(File.Exists(eur));
@@ -94,5 +102,27 @@ public class TickArchiveTests : IDisposable
 
         var ex = Record.Exception(() => archive.Add("deriv", "EURUSD", 1.0, 1.1, 1));
         Assert.Null(ex);
+    }
+
+    [Fact]
+    public void Ctor_With_Unwritable_Root_Never_Throws_And_Add_Is_A_Safe_NoOp()
+    {
+        // Same contract as TradeJournal/AppLogger: the archive is resolved
+        // eagerly from the DI graph, so an unusable root must degrade to a
+        // drop-everything sink instead of throwing out of service resolution.
+        var blocker = Path.Combine(_root, "archive_blocker");
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(blocker, string.Empty);
+        File.SetAttributes(blocker, FileAttributes.ReadOnly);
+        var blocked = Path.Combine(blocker, "ticks");
+
+        using var archive = new TickArchive(blocked);
+
+        Assert.NotNull(archive.DirectoryError);
+        Assert.False(Directory.Exists(blocked));
+
+        archive.Add("deriv", "EURUSD", 1.0, 1.1, 1);   // must not throw
+        archive.Dispose();                              // drains without throwing
+        Assert.Null(archive.WriterError);               // the writer loop stays healthy
     }
 }

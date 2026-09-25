@@ -17,6 +17,10 @@ namespace DongGfx.App.Tests;
 /// </summary>
 [Trait("Category", "Unit")]
 [Trait("Category", "RealMoney")]
+// Serialized against the other DataDir-touching suites (see
+// SharedDataDirCollection.cs): these tests delete and rewrite the real
+// settings file under %APPDATA% and must not race the DI-graph suites.
+[Collection("Shared-DataDir-Directory")]
 public class CoverageSprintTests : IDisposable
 {
 
