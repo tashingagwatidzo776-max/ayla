@@ -148,3 +148,74 @@ jobs:
         gh api "repos/$GITHUB_REPOSITORY/releases/$RID" \
           --jq '{draft, assets: [.assets[] | {name, size, state}]}' >> "$GITHUB_STEP_SUMMARY"
         echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Attach the updater package (zip) and announce its SHA-256
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        # The updater's update check only recognizes assets whose name
+        # contains "win-x64" and ends in ".zip", and its hardened download
+        # path verifies the package against a sha256 line announced in the
+        # release notes. Zip the exe, attach that package, and PATCH the
+        # body with the announcement — without this the checksum check can
+        # never fire in production.
+        ZIP_NAME="DongGfx-$TAG-win-x64.zip"
+        zip -j -q "dist/$ZIP_NAME" dist/DongGfx.exe
+        ZIP_SHA256=$(sha256sum "dist/$ZIP_NAME" | awk '{print $1}')
+        echo "package: $ZIP_NAME (sha256 $ZIP_SHA256)"
+
+        RID=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+          --jq "[.[] | select(.tag_name == \"$TAG\")][0].id")
+        if [ -z "$RID" ] || [ "$RID" = "null" ]; then
+          echo "::error::no release (draft or published) exists for $TAG"
+          exit 1
+        fi
+
+        # Idempotent (--clobber): replace a previous zip asset first.
+        for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq ".assets[] | select(.name == \"$ZIP_NAME\") | .id"); do
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$AID"
+          echo "replaced existing asset $AID"
+        done
+        UPLOAD_URL="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.upload_url' | sed 's/{.*}//')?name=$ZIP_NAME"
+        EXPECTED=$(stat -c%s "dist/$ZIP_NAME")
+        ok=0
+        for attempt in 1 2 3; do
+          if curl --fail-with-body -sS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/zip" \
+              --data-binary @"dist/$ZIP_NAME" \
+              "$UPLOAD_URL"; then
+            ok=1
+            break
+          fi
+          echo "zip upload attempt $attempt failed — retrying in 30s"
+          for AID in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq ".assets[] | select(.name == \"$ZIP_NAME\") | .id"); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$AID" || true
+          done
+          sleep 30
+        done
+        if [ "$ok" != "1" ]; then
+          echo "::error::zip asset upload failed after 3 attempts"
+          exit 1
+        fi
+        ACTUAL=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq "[.assets[] | select(.name == \"$ZIP_NAME\")][0].size // 0")
+        if [ "$ACTUAL" != "$EXPECTED" ]; then
+          echo "::error::uploaded zip is $ACTUAL bytes, expected $EXPECTED — upload did not land"
+          exit 1
+        fi
+
+        # Announce the checksum in the release notes — the updater parses
+        # "sha256: <hex>  <asset-name>" from the body (and ignores hex
+        # lines naming a different asset). Idempotent: previously announced
+        # lines are stripped before appending, so re-runs never duplicate.
+        BODY=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RID" --jq '.body // ""')
+        BODY=$(printf '%s' "$BODY" | sed '/^sha256:/Id')
+        NEWBODY=$(printf '%s\n\n## Verify the download\n\nsha256: %s  %s\n' "$BODY" "$ZIP_SHA256" "$ZIP_NAME")
+        gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RID" -f body="$NEWBODY" > /dev/null
+        echo "announced sha256 of $ZIP_NAME in the release notes"
+        echo "### 📦 Updater package" >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        echo "$ZIP_NAME  sha256:$ZIP_SHA256" >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"

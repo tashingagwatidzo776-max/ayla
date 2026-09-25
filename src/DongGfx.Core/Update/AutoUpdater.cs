@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace DongGfx.Core.Update;
 
@@ -97,7 +99,8 @@ public sealed class AutoUpdater : IDisposable
                 Version = remoteVersion,
                 ReleaseNotes = release.Body ?? "",
                 DownloadUrl = asset.BrowserDownloadUrl,
-                FileSize = asset.Size
+                FileSize = asset.Size,
+                ChecksumSha256 = ExtractChecksumFromNotes(release.Body ?? "", asset.Name) ?? "",
             };
         }
         catch (Exception ex)
@@ -136,14 +139,99 @@ public sealed class AutoUpdater : IDisposable
             : FileMode.Create;
 
         using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var file = new FileStream(zipPath, mode, FileAccess.Write, FileShare.None);
-        await stream.CopyToAsync(file, ct);
+
+        // Hardening: a truncated or resume-stitched download must never be
+        // staged — a half package brick-steps the install into a rollback.
+        // When the release declares a size, the byte count must match
+        // exactly (0 = size unknown, skip the check). The count is read
+        // AFTER the stream is closed: NTFS reports a stale (0) length for
+        // a file with unflushed buffered writes.
+        long written;
+        using (var file = new FileStream(zipPath, mode, FileAccess.Write, FileShare.None))
+        {
+            await stream.CopyToAsync(file, ct);
+            await file.FlushAsync(ct);
+            written = file.Length;
+        }
+
+        if (info.FileSize > 0 && written != info.FileSize)
+        {
+            try { File.Delete(zipPath); } catch { /* best effort */ }
+            Progress?.Invoke($"Incomplete download: got {written} bytes, expected {info.FileSize}");
+            throw new InvalidDataException(
+                $"incomplete download: {written} of {info.FileSize} bytes — retry the download");
+        }
+
+        // Hardening: an announced SHA-256 turns "right size" into "right
+        // bytes" — a corrupted-but-complete download is caught here
+        // instead of bricking the install into a rollback.
+        if (!string.IsNullOrWhiteSpace(info.ChecksumSha256))
+        {
+            var actualHash = await ComputeSha256Async(zipPath, ct).ConfigureAwait(false);
+            if (!string.Equals(actualHash, info.ChecksumSha256.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                try { File.Delete(zipPath); } catch { /* best effort */ }
+                Progress?.Invoke($"Checksum mismatch: got {actualHash}, release announced {info.ChecksumSha256}");
+                throw new InvalidDataException(
+                    $"checksum mismatch — downloaded {actualHash}, release announced {info.ChecksumSha256}; download deleted");
+            }
+        }
 
         Progress?.Invoke($"Download complete: {info.Version}");
         return zipPath;
     }
 
-    /// <summary>Extract and stage update files for installation.</summary>
+    /// <summary>Extracts the announced SHA-256 for `assetName` from the
+    /// release notes. Two formats are recognized: the sha256sum line
+    /// ("<64-hex>  <asset-name>") and a labeled line ("sha256: <hex>",
+    /// "SHA256 = <hex>"). A hex line naming a DIFFERENT file is ignored, so
+    /// multi-asset releases cannot poison the verdict. No announcement →
+    /// null → the download falls back to the size check alone.</summary>
+    public static string? ExtractChecksumFromNotes(string releaseBody, string assetName)
+    {
+        if (string.IsNullOrWhiteSpace(releaseBody) || string.IsNullOrWhiteSpace(assetName))
+        {
+            return null;
+        }
+
+        foreach (var rawLine in releaseBody.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            var hex = FindHex64(line);
+            if (hex is null)
+            {
+                continue;
+            }
+
+            var namesAsset = line.Contains(assetName, StringComparison.OrdinalIgnoreCase);
+            var lineLower = line.ToLowerInvariant();
+            var labeled = lineLower.Contains("sha256") || lineLower.Contains("sha-256");
+            if (namesAsset || labeled)
+            {
+                return hex;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindHex64(string line)
+    {
+        var match = Regex.Match(line, @"\b[0-9a-fA-F]{64}\b");
+        return match.Success ? match.Value : null;
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)
+    {
+        await using var file = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(file, ct).ConfigureAwait(false);
+        return Convert.ToHexString(hash);
+    }
+
+    /// <summary>Extract and stage update files for installation. The
+    /// extracted package is validated before anything can be installed:
+    /// a package with no executable (a wrong-asset or junk zip) is refused
+    /// and the stage is removed, so InstallUpdate never runs on it.</summary>
     public async Task<string> StageUpdateAsync(string zipPath, CancellationToken ct = default)
     {
         Progress?.Invoke("Extracting update...");
@@ -153,6 +241,18 @@ public sealed class AutoUpdater : IDisposable
             Directory.Delete(stageDir, recursive: true);
 
         await Task.Run(() => ZipFile.ExtractToDirectory(zipPath, stageDir), ct);
+
+        // Hardening: require at least one executable somewhere in the
+        // package. A zip without one is not a DON G FX update (wrong asset,
+        // truncated-but-valid zip, junk) — refuse and clean up.
+        if (!Directory.GetFiles(stageDir, "*.exe", SearchOption.AllDirectories)
+                .Any())
+        {
+            try { Directory.Delete(stageDir, recursive: true); } catch { /* best effort */ }
+            Progress?.Invoke("Staged package contains no executable — not an update package");
+            throw new InvalidDataException(
+                "staged package contains no executable — refusing to stage it");
+        }
 
         Progress?.Invoke("Update staged successfully");
         return stageDir;
@@ -170,6 +270,17 @@ public sealed class AutoUpdater : IDisposable
 
         try
         {
+            // Hardening: an empty stage means "download first" reached the
+            // install command, or a validated stage was wiped — refusing
+            // here leaves the running app untouched instead of "installing"
+            // nothing and reporting success.
+            if (!Directory.Exists(stagedDir) ||
+                !Directory.GetFiles(stagedDir, "*", SearchOption.AllDirectories).Any())
+            {
+                Progress?.Invoke("No staged update found. Download first.");
+                return false;
+            }
+
             Progress?.Invoke("Creating backup...");
 
             // Best-effort sweep of rename-aside leftovers from earlier hops.
@@ -178,23 +289,34 @@ public sealed class AutoUpdater : IDisposable
                 try { File.Delete(stale); } catch { /* still mapped */ }
             }
 
-            // Backup current files
+            // Backup current files, recursively but never the update dir
+            // itself: backups copying zips/backups into themselves grows
+            // unbounded and can cycle when restoring.
             Directory.CreateDirectory(backupDir);
-            foreach (var file in Directory.GetFiles(appDir))
+            var updateDirRoot = Path.GetFullPath(_updateDir)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            foreach (var file in Directory.GetFiles(appDir, "*", SearchOption.AllDirectories))
             {
+                var full = Path.GetFullPath(file);
+                if (full.StartsWith(updateDirRoot, StringComparison.OrdinalIgnoreCase)) continue;
                 if (Path.GetFileName(file).StartsWith("tf-update-")) continue;
-                File.Copy(file, Path.Combine(backupDir, Path.GetFileName(file)), true);
+                var dest = Path.Combine(backupDir,
+                    Path.GetRelativePath(appDir, full));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(file, dest, true);
             }
 
             Progress?.Invoke("Installing update...");
 
-            // Copy new files. A running exe image cannot be overwritten in
-            // place (the loader maps it without share-write), so an exe that
-            // refuses the copy is renamed aside first — the rename is
-            // permitted while the old process keeps running from it.
-            foreach (var file in Directory.GetFiles(stagedDir))
+            // Copy new files recursively — a staged package may carry
+            // subdirectories (runtimes/, assets/, locales/), and the old
+            // top-level-only walk silently half-installed those.
+            foreach (var file in Directory.GetFiles(stagedDir, "*", SearchOption.AllDirectories))
             {
-                var dest = Path.Combine(appDir, Path.GetFileName(file));
+                var dest = Path.Combine(appDir, Path.GetRelativePath(stagedDir, file));
+                var destDir = Path.GetDirectoryName(dest)!;
+                if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
                 CopyOverRunningImage(file, dest);
             }
 
@@ -243,11 +365,14 @@ public sealed class AutoUpdater : IDisposable
             return;
         }
         var restored = 0;
-        foreach (var file in Directory.GetFiles(backupDir))
+        foreach (var file in Directory.GetFiles(backupDir, "*", SearchOption.AllDirectories))
         {
             try
             {
-                File.Copy(file, Path.Combine(appDir, Path.GetFileName(file)), true);
+                var dest = Path.Combine(appDir, Path.GetRelativePath(backupDir, file));
+                var destDir = Path.GetDirectoryName(dest)!;
+                if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
+                File.Copy(file, dest, true);
                 restored++;
             }
             catch
@@ -341,6 +466,10 @@ public sealed class UpdateInfo
     public string ReleaseNotes { get; set; } = "";
     public string DownloadUrl { get; set; } = "";
     public long FileSize { get; set; }
+
+    /// <summary>SHA-256 announced in the release notes (empty = none
+    /// announced; the download then relies on the size check alone).</summary>
+    public string ChecksumSha256 { get; set; } = "";
 }
 
 internal sealed class GitHubRelease

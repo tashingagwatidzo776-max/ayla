@@ -16,6 +16,7 @@ one) and serves a small JSON API on 127.0.0.1 only:
     POST /close/{ticket}[?lots=] close a position (optionally partially)
     POST /cancel/{ticket}        delete a pending order
     POST /modify                 change SL/TP on an open position
+    POST /login                  switch the terminal account (3/min, body-only)
     GET  /deals?days=7           recent deal history
     GET  /deals?from=&to=        deal history over an explicit UTC range
 
@@ -132,6 +133,46 @@ class BridgeHandlers:
             "login": getattr(acc, "login", None),
             "server": getattr(acc, "server", None),
             "terminal_connected": getattr(term, "connected", False),
+        }
+
+    _login_attempts: list[float] = []   # module-level rate-limit state
+
+    def login(self, body: dict) -> dict:
+        """POST /login — switch the terminal's signed-in account via
+        mt5.login (the same switch the terminal's File->Login dialog
+        performs). Credentials are read from the POST body only: never
+        logged, never journaled, never echoed back. Rate-limited to 3
+        attempts/minute. On success the caller should re-read /account and
+        re-run the trade-mode gate verdict."""
+        now = time.monotonic()
+        type(self)._login_attempts = [t for t in type(self)._login_attempts if now - t < 60.0]
+        if len(type(self)._login_attempts) >= 3:
+            raise OrderError("too many login attempts - wait a minute")
+        type(self)._login_attempts.append(now)
+
+        raw_login = body.get("login")
+        password = body.get("password") or ""
+        server = (body.get("server") or "").strip()
+        try:
+            account_id = int(raw_login)
+        except (TypeError, ValueError):
+            raise OrderError("login must be the numeric account id")
+        if not password or not server:
+            raise OrderError("password and server are required")
+
+        if not self._m.login(account_id, password=password, server=server):
+            err = self._m.last_error()
+            return {"ok": False, "error": f"login failed: {err}"}
+        acc = self._m.account_info()
+        if acc is None:
+            return {"ok": False, "error": "login accepted but account unavailable"}
+        return {
+            "ok": True,
+            "login": acc.login,
+            "server": acc.server,
+            "trade_mode": int(getattr(acc, "trade_mode", 0)),
+            "balance": float(acc.balance),
+            "currency": acc.currency,
         }
 
     def account(self) -> dict:
@@ -584,6 +625,8 @@ class SidecarServer:
                         self._send(200, outer._handlers.cancel(parsed.path.rsplit("/", 1)[1]))
                     elif parsed.path == "/modify":
                         self._send(200, outer._handlers.modify(body))
+                    elif parsed.path == "/login":
+                        self._send(200, outer._handlers.login(body))
                     else:
                         self._send(404, {"error": f"no route {parsed.path}"})
                 except OrderError as e:

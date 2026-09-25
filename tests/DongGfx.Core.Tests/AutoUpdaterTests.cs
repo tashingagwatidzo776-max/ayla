@@ -104,19 +104,25 @@ public class AutoUpdaterTests : IDisposable
         };
     }
 
-    private void ServeRelease(string tagName, string assetName = "tf-1.2.0-win-x64.zip")
+    private void ServeRelease(string tagName, string assetName = "tf-1.2.0-win-x64.zip",
+                              long? size = null, string? checksum = null)
     {
+        var body = "release notes body";
+        if (checksum is not null)
+        {
+            body += $"\n\nsha256: {checksum}";
+        }
         var json = JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["tag_name"] = tagName,
-            ["body"] = "release notes body",
+            ["body"] = body,
             ["assets"] = new[]
             {
                 new Dictionary<string, object?>
                 {
                     ["name"] = assetName,
                     ["browser_download_url"] = DownloadUrl,
-                    ["size"] = 2048L
+                    ["size"] = size ?? 2048L
                 }
             }
         });
@@ -199,17 +205,22 @@ public class AutoUpdaterTests : IDisposable
     [Fact]
     public async Task DownloadThenStage_RoundTripsZipContent()
     {
+        // Packages carry an executable (the staged-package validation
+        // requires one) and the release declares the real byte size (the
+        // download-completeness check compares against it).
         var zipBytes = CreateZip(new Dictionary<string, string>
         {
+            ["DongGfx.exe"] = "fake exe image",
             ["DongGfx.dll"] = "fake assembly",
             ["README.txt"] = "update package"
         });
-        ServeRelease("v1.2.0");
+        ServeRelease("v1.2.0", size: zipBytes.Length);
         Serve(zipBytes, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
         using var updater = CreateUpdater();
 
         var info = await updater.CheckForUpdateAsync(Url);
         Assert.NotNull(info);
+        Assert.Equal(zipBytes.Length, info!.FileSize);
 
         var zipPath = await updater.DownloadUpdateAsync(info!);
         Assert.True(File.Exists(zipPath));
@@ -218,6 +229,109 @@ public class AutoUpdaterTests : IDisposable
         var stagedDir = await updater.StageUpdateAsync(zipPath);
         Assert.True(Directory.Exists(stagedDir));
         Assert.Equal("fake assembly", File.ReadAllText(Path.Combine(stagedDir, "DongGfx.dll")));
+    }
+
+    [Fact]
+    public async Task Download_TruncatedBody_Throws_And_Deletes_The_Partial_Zip()
+    {
+        // The release declares 2048 bytes but the server sends a fraction:
+        // a truncated (or resume-stitched) package must be deleted, never
+        // staged — a half zip is how an install turns into a rollback.
+        ServeRelease("v1.2.0");   // default declared size 2048
+        Serve(new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x00 }, contentType: "application/zip",
+              path: new Uri(DownloadUrl).AbsolutePath);
+        using var updater = CreateUpdater();
+
+        var info = await updater.CheckForUpdateAsync(Url);
+        Assert.NotNull(info);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => updater.DownloadUpdateAsync(info!));
+        Assert.Contains("incomplete download", ex.Message);
+        Assert.False(File.Exists(Path.Combine(AppContext.BaseDirectory, "updates", "tf-update-1.2.0.zip")),
+            "the partial zip must be deleted after the size mismatch");
+    }
+
+    [Fact]
+    public async Task Download_Right_Size_Wrong_Bytes_Is_Deleted_When_Checksum_Announced()
+    {
+        // Announce the sha256 of a body we are NOT serving: the download
+        // arrives with the right byte count but wrong content — exactly
+        // the corruption the size check cannot see. It must be deleted.
+        var served = Encoding.UTF8.GetBytes("corrupted package body, same length as announced");
+        var realHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                Encoding.UTF8.GetBytes("the real package bytes")));
+        ServeRelease("v1.2.0", size: served.Length, checksum: realHash);
+        Serve(served, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
+        using var updater = CreateUpdater();
+
+        var info = await updater.CheckForUpdateAsync(Url);
+        Assert.NotNull(info);
+        Assert.Equal(realHash, info!.ChecksumSha256);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => updater.DownloadUpdateAsync(info));
+        Assert.Contains("checksum mismatch", ex.Message);
+        Assert.False(File.Exists(Path.Combine(AppContext.BaseDirectory, "updates", "tf-update-1.2.0.zip")),
+            "a checksum-mismatched package must be deleted");
+    }
+
+    [Fact]
+    public async Task Download_Matching_Checksum_Is_Kept_For_Staging()
+    {
+        var package = CreateZip(new Dictionary<string, string>
+        {
+            ["DongGfx.exe"] = "fake exe image",
+            ["DongGfx.dll"] = "fake assembly",
+        });
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(package));
+        ServeRelease("v1.2.0", size: package.Length, checksum: hash);
+        Serve(package, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
+        using var updater = CreateUpdater();
+
+        var info = await updater.CheckForUpdateAsync(Url);
+        Assert.NotNull(info);
+
+        var zipPath = await updater.DownloadUpdateAsync(info!);
+        Assert.True(File.Exists(zipPath), "an intact package must survive the checksum verdict");
+        var stagedDir = await updater.StageUpdateAsync(zipPath);
+        Assert.True(Directory.Exists(stagedDir));
+    }
+
+    [Fact]
+    public async Task Download_No_Checksum_Announced_Falls_Back_To_Size_Check()
+    {
+        var package = CreateZip(new Dictionary<string, string> { ["DongGfx.exe"] = "exe" });
+        ServeRelease("v1.2.0", size: package.Length, checksum: null);   // nothing announced
+        Serve(package, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
+        using var updater = CreateUpdater();
+
+        var info = await updater.CheckForUpdateAsync(Url);
+        Assert.NotNull(info);
+        Assert.Equal("", info!.ChecksumSha256);
+
+        var zipPath = await updater.DownloadUpdateAsync(info!);
+        Assert.True(File.Exists(zipPath));
+    }
+
+    [Fact]
+    public async Task Stage_ZipWithoutExecutable_Is_Refused_And_Stage_Removed()
+    {
+        var zipBytes = CreateZip(new Dictionary<string, string>
+        {
+            ["README.txt"] = "not an update package"
+        });
+        var zipPath = Path.Combine(Path.GetTempPath(), "noexe-" + Guid.NewGuid() + ".zip");
+        File.WriteAllBytes(zipPath, zipBytes);
+        using var updater = CreateUpdater();
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(
+            () => updater.StageUpdateAsync(zipPath));
+        Assert.Contains("no executable", ex.Message);
+        Assert.False(Directory.Exists(Path.Combine(AppContext.BaseDirectory, "updates", "staged")),
+            "a refused package must not leave a staged dir behind");
+        File.Delete(zipPath);
     }
 
     [Fact]
@@ -421,6 +535,58 @@ public class AutoUpdaterTests : IDisposable
 
         foreach (var d in createdBackups) try { Directory.Delete(d, recursive: true); } catch { /* best effort */ }
         try { Directory.Delete(updateDir, recursive: true); } catch { /* best effort */ }
+    }
+
+    [Fact]
+    public void InstallUpdate_EmptyStagedDir_Is_Refused_Not_Installed()
+    {
+        var stagedDir = Path.Combine(Path.GetTempPath(), "staged-empty-" + Guid.NewGuid());
+        Directory.CreateDirectory(stagedDir);   // exists but contains nothing
+        var messages = new List<string>();
+        using var updater = new AutoUpdater("1.0.0");
+        updater.Progress += m => messages.Add(m);
+
+        var result = updater.InstallUpdate(stagedDir);
+
+        Assert.False(result);
+        Assert.Contains(messages, m => m.Contains("No staged update found"));
+        Directory.Delete(stagedDir, recursive: true);
+    }
+
+    [Fact]
+    public void InstallUpdate_Copies_Staged_Subdirectories_Into_The_App_Dir()
+    {
+        // Real packages carry subdirectories (runtimes/, assets/, …): the
+        // old top-level-only walk silently half-installed them. A staged
+        // sub/file must land in the app dir's own sub/.
+        var appDir = AppContext.BaseDirectory;
+        var stagedDir = Path.Combine(Path.GetTempPath(), "staged-" + Guid.NewGuid());
+        Directory.CreateDirectory(Path.Combine(stagedDir, "runtimes", "win-x64"));
+        File.WriteAllText(Path.Combine(stagedDir, "subtestapp.exe"), "new build");
+        File.WriteAllText(Path.Combine(stagedDir, "runtimes", "win-x64", "native.dll"), "native blob");
+        var messages = new List<string>();
+
+        try
+        {
+            using var updater = new AutoUpdater("1.0.0");
+            updater.Progress += m => messages.Add(m);
+
+            var result = updater.InstallUpdate(stagedDir);
+
+            Assert.True(result, "progress: " + string.Join(" | ", messages));
+            Assert.Equal("new build", File.ReadAllText(Path.Combine(appDir, "subtestapp.exe")));
+            Assert.Equal("native blob",
+                File.ReadAllText(Path.Combine(appDir, "runtimes", "win-x64", "native.dll")));
+        }
+        finally
+        {
+            foreach (var f in new[] { "subtestapp.exe", Path.Combine("runtimes", "win-x64", "native.dll") })
+            {
+                try { File.Delete(Path.Combine(appDir, f)); } catch { /* best effort */ }
+            }
+            try { Directory.Delete(Path.Combine(appDir, "runtimes"), recursive: true); } catch { /* best effort */ }
+            try { Directory.Delete(stagedDir, recursive: true); } catch { /* best effort */ }
+        }
     }
 
     private static byte[] CreateZip(Dictionary<string, string> files)

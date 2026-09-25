@@ -179,6 +179,16 @@ class FakeMT5:
     def last_error(self):
         return (0, "ok")
 
+    # account switching (POST /login) --------------------------------
+    login_calls: list[dict] = []
+    login_result: dict = {}   # set per-test to simulate failure
+
+    def login(self, account_id, password="", server=""):
+        self.login_calls.append({"login": account_id, "server": server})
+        if self.login_result.get("fail"):
+            return False
+        return True
+
 
 def make_handlers() -> sidecar.BridgeHandlers:
     return sidecar.BridgeHandlers(FakeMT5())
@@ -418,6 +428,61 @@ def test_candles_accept_all_21_timeframes():
 
 
 # ── the real loopback server, end to end ──────────────────────────────
+
+# ── POST /login (in-terminal account switching) ────────────────────
+
+def test_login_success_switches_the_account():
+    h = make_handlers()
+    out = h.login({"login": 201587365, "password": "secret", "server": "Deriv-Demo"})
+    assert out["ok"] is True
+    assert out["login"] == 201587365
+    assert out["server"] == "Deriv-Demo"
+    assert out["trade_mode"] == 0   # demo
+    assert out["currency"] == "USD"
+    assert FakeMT5.login_calls[-1] == {"login": 201587365, "server": "Deriv-Demo"}
+
+
+def test_login_failure_reports_error_without_secrets():
+    h = make_handlers()
+    FakeMT5.login_result = {"fail": True}
+    try:
+        out = h.login({"login": 42, "password": "nope", "server": "Deriv-Real"})
+        assert out["ok"] is False
+        assert "login failed" in out["error"]
+        assert "nope" not in json.dumps(out)   # password never echoed
+    finally:
+        FakeMT5.login_result = {}
+
+
+def test_login_validates_input():
+    h = make_handlers()
+    for bad in (
+        {"password": "x", "server": "Deriv-Demo"},
+        {"login": "abc", "password": "x", "server": "s"},
+        {"login": 1, "server": "s"},
+        {"login": 1, "password": "x"},
+    ):
+        try:
+            h.login(bad)
+            raise AssertionError(f"expected rejection for {bad}")
+        except sidecar.OrderError:
+            pass
+
+
+def test_login_is_rate_limited():
+    h = make_handlers()
+    sidecar.BridgeHandlers._login_attempts = []
+    try:
+        for _ in range(3):
+            h.login({"login": 1, "password": "x", "server": "s"})
+        try:
+            h.login({"login": 1, "password": "x", "server": "s"})
+            raise AssertionError("expected rate limit")
+        except sidecar.OrderError as e:
+            assert "too many login attempts" in str(e)
+    finally:
+        sidecar.BridgeHandlers._login_attempts = []
+
 
 def test_loopback_round_trip():
     server = sidecar.SidecarServer(make_handlers(), port=0)  # ephemeral port

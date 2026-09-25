@@ -99,7 +99,7 @@ public class UpdateViewModelTests : IDisposable
         };
     }
 
-    private void ServeRelease(string tagName)
+    private void ServeRelease(string tagName, long size = 2048L)
     {
         var json = JsonSerializer.Serialize(new Dictionary<string, object?>
         {
@@ -111,7 +111,7 @@ public class UpdateViewModelTests : IDisposable
                 {
                     ["name"] = "tf-1.2.0-win-x64.zip",
                     ["browser_download_url"] = DownloadUrl,
-                    ["size"] = 2048L,
+                    ["size"] = size,
                 },
             },
         });
@@ -123,9 +123,16 @@ public class UpdateViewModelTests : IDisposable
         using var stream = new MemoryStream();
         using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
+            // Packages must carry an executable: the staged-package
+            // validation refuses a zip without one.
+            var exe = zip.CreateEntry("DongGfx.exe");
+            using (var writer = new StreamWriter(exe.Open()))
+            {
+                writer.Write("fake exe image");
+            }
             var entry = zip.CreateEntry("DongGfx.dll");
-            using var writer = new StreamWriter(entry.Open());
-            writer.Write("fake assembly");
+            using var writer2 = new StreamWriter(entry.Open());
+            writer2.Write("fake assembly");
         }
         return stream.ToArray();
     }
@@ -197,8 +204,9 @@ public class UpdateViewModelTests : IDisposable
     [Fact]
     public async Task Download_Downloads_And_Stages_A_Real_Package()
     {
-        ServeRelease("v1.2.0");
-        Serve(CreateZip(), contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
+        var zipBytes = CreateZip();
+        ServeRelease("v1.2.0", size: zipBytes.Length);   // truthful size for the completeness check
+        Serve(zipBytes, contentType: "application/zip", path: new Uri(DownloadUrl).AbsolutePath);
         var (vm, _) = NewVm();
 
         await vm.CheckForUpdateCommand.ExecuteAsync(null);

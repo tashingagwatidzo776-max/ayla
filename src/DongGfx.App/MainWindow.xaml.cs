@@ -81,6 +81,45 @@ public partial class MainWindow : Window
         }
     }
 
+    // File→Login: switch the terminal's signed-in MT5 account through the
+    // sidecar's POST /login (M2). The dialog holds the credentials; the
+    // account+server prefill comes from the last successful switch (the
+    // password is never persisted); on success the account bar refreshes
+    // so the switch is visible at once.
+    private void OnMenuLogin(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        var dialog = new LoginDialog { Owner = this };
+        var loginVm = new LoginViewModel(
+            CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+                .GetRequiredService<Mt5BridgeClient>())
+        {
+            Account = vm.SettingsVm.Mt5LastLogin,
+            Server = vm.SettingsVm.Mt5LastServer,
+        };
+        // Recent picker: last + previous successful switches (two slots).
+        loginVm.SetRecentAccounts(
+            vm.SettingsVm.Mt5LastLogin, vm.SettingsVm.Mt5LastServer,
+            vm.SettingsVm.Mt5PrevLogin, vm.SettingsVm.Mt5PrevServer);
+        loginVm.OnSignedIn = () =>
+        {
+            // Persist the switch through the two-slot Recent history (never
+            // the password) so the next dialog opens prefilled; the
+            // account-bar refresh rides behind it so the switch shows at
+            // once.
+            vm.SettingsVm.RecordMt5Login(loginVm.Account, loginVm.Server);
+            _ = vm.SettingsVm.SaveSettingsQuietAsync();
+            return vm.TerminalVm.RefreshAccountBarCommand.ExecuteAsync(null);
+        };
+        loginVm.SignedIn += () => dialog.Close();
+        dialog.DataContext = loginVm;
+        dialog.ShowDialog();
+    }
+
     private void SelectTab(string header)
     {
         foreach (var item in MainTabs.Items)
