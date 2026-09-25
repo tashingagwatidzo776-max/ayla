@@ -136,7 +136,8 @@ public partial class App : System.Windows.Application
             sp.GetRequiredService<UpdateViewModel>(),
             sp.GetRequiredService<PerformanceViewModel>(),
             sp.GetRequiredService<TerminalViewModel>(),
-            sp.GetRequiredService<TradeJournal>()));
+            sp.GetRequiredService<TradeJournal>(),
+            sp.GetRequiredService<ManualRealMoneyGate>()));
 
         return services;
     }

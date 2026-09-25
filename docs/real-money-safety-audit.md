@@ -133,6 +133,7 @@ here.
 
 | Test class | What it exercises |
 |---|---|
+| `AccountSwitchGuardTests` (DongGfx.App) | The MT5 account-switch guards: a successful switch stops the FX portfolio brain (badge OFF, host stopped), resets the manual real-money session unlock (a fresh account starts locked), journals the guard action as `MT5_SESSION`, and stays safe/idempotent with no brain running — all through the account-switch continuation the login dialog invokes (the composition root's OnMt5AccountSwitched). |
 | `RealMoneyGateTests` (DongGfx.Core) | The gate's decision matrix: demo passthrough; locked, unverified, virtual-account and config-mismatch refusals; fail-closed on unknown verification; `Explain` never renders an empty refusal. |
 | `Mt5AccountGateVerdictTests` (DongGfx.App) | The bridge's venue-verdict mapping: `trade_mode` → `RealMoneyGate.VerdictFromTradeMode`, demo-contest→true / real→false / absent-or-unknown→null (fail-closed), and the `DetermineApiVerifiedVirtual` demo-heuristic fallback the mapping preserves. |
 | `JournalLoggingSurfaceTests` (DongGfx.Core) | The journal surface the gate writes through, including `REAL_MONEY_UNLOCK_ARMED` entries. |

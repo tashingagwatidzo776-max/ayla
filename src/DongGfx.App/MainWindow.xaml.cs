@@ -113,6 +113,12 @@ public partial class MainWindow : Window
             // once.
             vm.SettingsVm.RecordMt5Login(loginVm.Account, loginVm.Server);
             _ = vm.SettingsVm.SaveSettingsQuietAsync();
+            // Account-switch safety guards: the FX brain stops (its
+            // positions/caps/authorization belong to the old account) and
+            // the real-money unlock resets (a new account starts locked).
+            // Best-effort and before the refresh — the switch succeeded
+            // either way.
+            vm.OnMt5AccountSwitched(loginVm.Account, loginVm.Server);
             return vm.TerminalVm.RefreshAccountBarCommand.ExecuteAsync(null);
         };
         loginVm.SignedIn += () => dialog.Close();
