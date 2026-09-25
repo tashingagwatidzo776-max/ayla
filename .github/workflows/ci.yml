@@ -150,8 +150,8 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
-    - name: Build (Debug — the smoke launches the Debug exe)
-      run: dotnet build src/DongGfx.App/DongGfx.App.csproj --configuration Debug
+    - name: Build (Debug — the smoke launches the app's Debug exe)
+      run: dotnet build tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --configuration Debug
 
     - name: Run UIA smoke
       run: dotnet test tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --no-build --configuration Debug --filter "Category=Uia" --logger "console;verbosity=normal"
