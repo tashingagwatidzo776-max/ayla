@@ -140,6 +140,7 @@ public partial class MainWindow : Window
             vm.Dashboard.Chart = Chart;
             vm.Dashboard.CandleChart = DashboardCandles;
             vm.TerminalVm.CandleChart = TerminalCandles;
+            WireChartTrading(vm.TerminalVm, TerminalCandles);
         }
 
         // Initialize tray icon for headless operation.
@@ -149,6 +150,59 @@ public partial class MainWindow : Window
             if (DataContext is MainViewModel m)
                 m.Shutdown();
             Application.Current.Shutdown();
+        };
+    }
+
+    /// <summary>Chart trading + drawing menu wiring: right-click offers
+    /// market buy/sell (the ticket's guards apply — the chart is a
+    /// shortcut, never a bypass), a horizontal level at the clicked price,
+    /// and drawing cleanup; a dragged SL/TP line maps onto the position
+    /// modify (journaled, kill-switched) via the view model.</summary>
+    private void WireChartTrading(ViewModels.TerminalViewModel terminal, Controls.CandleChartControl chart)
+    {
+        chart.ChartContextMenuRequested += (_, price, _) =>
+        {
+            var menu = new System.Windows.Controls.ContextMenu { Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+
+            var buy = new System.Windows.Controls.MenuItem
+            {
+                Header = $"Buy {terminal.Mt5Lots:0.##} {terminal.SelectedSymbol?.Symbol ?? terminal.Mt5Symbol} at market",
+            };
+            buy.Click += (_, _) => _ = terminal.PlaceChartOrderCommand.ExecuteAsync("buy");
+            menu.Items.Add(buy);
+
+            var sell = new System.Windows.Controls.MenuItem
+            {
+                Header = $"Sell {terminal.Mt5Lots:0.##} {terminal.SelectedSymbol?.Symbol ?? terminal.Mt5Symbol} at market",
+            };
+            sell.Click += (_, _) => _ = terminal.PlaceChartOrderCommand.ExecuteAsync("sell");
+            menu.Items.Add(sell);
+
+            menu.Items.Add(new System.Windows.Controls.Separator());
+
+            var hline = new System.Windows.Controls.MenuItem
+            {
+                Header = $"Add horizontal line @ {price:0.#####}",
+                ToolTip = "Right-drag also draws a trendline",
+            };
+            hline.Click += (_, _) => chart.AddDrawing(
+                new Controls.CandleChartControl.ChartDrawing("hlevel", 0, price, 0, 0));
+            menu.Items.Add(hline);
+
+            var clear = new System.Windows.Controls.MenuItem { Header = "Clear drawings" };
+            clear.Click += (_, _) => chart.ClearDrawings();
+            menu.Items.Add(clear);
+
+            menu.IsOpen = true;
+        };
+
+        chart.PriceLineDragged += (line, newPrice) =>
+        {
+            if (line.Ticket is { } ticket)
+            {
+                _ = terminal.ChartLineDraggedCommand.ExecuteAsync(
+                    $"{ticket}|{line.Kind}|{newPrice.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            }
         };
     }
 

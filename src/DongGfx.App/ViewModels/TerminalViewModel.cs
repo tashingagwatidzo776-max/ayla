@@ -414,6 +414,52 @@ public sealed partial class TerminalViewModel : ObservableObject
     /// <summary>Test seam: one explicit MT5 poll without the timer.</summary>
     internal Task PollMt5ForTestsAsync() => PollMt5Async();
 
+    /// <summary>Rebuilds the chart's tradable levels for the selected
+    /// symbol: one entry line per position (open price) and per pending
+    /// order (its price), plus each SL/TP that is actually set. Advisory
+    /// entry lines carry no ticket; SL/TP carry the position's ticket and
+    /// are the draggable ones. No chart attached → no-op.</summary>
+    internal void RebuildChartPriceLines(
+        IReadOnlyList<Mt5Position> positions, IReadOnlyList<Mt5PendingOrder> orders)
+    {
+        if (CandleChart is null)
+        {
+            return;
+        }
+
+        var symbol = SelectedSymbol?.Symbol;
+        var lines = new List<Controls.CandleChartControl.ChartPriceLine>();
+        foreach (var p in positions.Where(p => p.Symbol == symbol))
+        {
+            lines.Add(new Controls.CandleChartControl.ChartPriceLine(null, "entry", p.PriceOpen));
+            if (p.Sl > 0)
+            {
+                lines.Add(new Controls.CandleChartControl.ChartPriceLine(p.Ticket, "sl", p.Sl));
+            }
+
+            if (p.Tp > 0)
+            {
+                lines.Add(new Controls.CandleChartControl.ChartPriceLine(p.Ticket, "tp", p.Tp));
+            }
+        }
+
+        foreach (var o in orders.Where(o => o.Symbol == symbol))
+        {
+            lines.Add(new Controls.CandleChartControl.ChartPriceLine(null, "entry", o.Price));
+            if (o.Sl > 0)
+            {
+                lines.Add(new Controls.CandleChartControl.ChartPriceLine(o.Ticket, "sl", o.Sl));
+            }
+
+            if (o.Tp > 0)
+            {
+                lines.Add(new Controls.CandleChartControl.ChartPriceLine(o.Ticket, "tp", o.Tp));
+            }
+        }
+
+        CandleChart.SetPriceLines(lines);
+    }
+
     /// <summary>Test seam: rebuild the history/journal rows on demand.</summary>
     internal Task RefreshHistoryForTests() => RefreshHistoryAsync();
 
@@ -1144,6 +1190,8 @@ public sealed partial class TerminalViewModel : ObservableObject
                 {
                     OrderRows.Add(o);
                 }
+
+                RebuildChartPriceLines(positions, orders);
             });
         }
         finally
@@ -1152,41 +1200,33 @@ public sealed partial class TerminalViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private async Task PlaceMt5OrderAsync()
+    /// <summary>The one order path: every guard (kill switch, lot cap,
+    /// lots sanity, pending-type prices, bridge, real-money gate) and the
+    /// send+journal. Both the order ticket and the chart context menu go
+    /// through here — a chart order is a market order at bid/ask with the
+    /// same Mt5Lots sizing and the full gate. Returns the status line.</summary>
+    private async Task<string> ExecuteMt5OrderAsync(
+        string symbol, string action, double lots,
+        string type = "market", double? price = null,
+        double? sl = null, double? tp = null)
     {
         var settings = _settings();
 
         if (_dashboard.IsKillSwitchEngaged)
         {
-            Mt5OrderStatus = "kill switch is engaged — reset it on the Dashboard first";
-            return;
+            return "kill switch is engaged — reset it on the Dashboard first";
         }
 
         // The MT5 lot cap fail-closes at 0: MT5 order placement must be
         // deliberately enabled by the operator.
         if (settings.Mt5MaxLots <= 0)
         {
-            Mt5OrderStatus = "MT5 orders are disabled (Mt5MaxLots = 0) — enable it on the Settings tab";
-            return;
+            return "MT5 orders are disabled (Mt5MaxLots = 0) — enable it on the Settings tab";
         }
 
-        if (Mt5Lots <= 0 || (decimal)Mt5Lots > settings.Mt5MaxLots)
+        if (lots <= 0 || (decimal)lots > settings.Mt5MaxLots)
         {
-            Mt5OrderStatus = $"lots {Mt5Lots:0.##} outside the allowed 0 < lots ≤ {settings.Mt5MaxLots:0.##}";
-            return;
-        }
-
-        if (Mt5NeedsPrice && Mt5Price is null)
-        {
-            Mt5OrderStatus = $"{Mt5Type} orders need a price";
-            return;
-        }
-
-        if (Mt5NeedsStopPrice && Mt5StopPrice is null)
-        {
-            Mt5OrderStatus = "stop-limit orders need a stop trigger price";
-            return;
+            return $"lots {lots:0.##} outside the allowed 0 < lots ≤ {settings.Mt5MaxLots:0.##}";
         }
 
         // The bridge's account decides demo/real; a real MT5 account obeys
@@ -1194,8 +1234,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
         if (account is null)
         {
-            Mt5OrderStatus = "bridge unavailable — run:  python bridge/mt5_sidecar.py";
-            return;
+            return "bridge unavailable — run:  python bridge/mt5_sidecar.py";
         }
 
         // Demo/real: the bridge's account_info().trade_mode is the venue's
@@ -1210,23 +1249,21 @@ public sealed partial class TerminalViewModel : ObservableObject
                                           unlockArmed: unlocked);
         if (gate is not (RealMoneyDecision.DemoPassthrough or RealMoneyDecision.Allowed))
         {
-            Mt5OrderStatus = RealMoneyGate.Explain(gate);
-            return;
+            return RealMoneyGate.Explain(gate);
         }
 
         IsMt5Busy = true;
         try
         {
             var result = await _mt5.PlaceOrderAsync(
-                Mt5Symbol, Mt5Action, Mt5Type, Mt5Lots,
-                Mt5Price, Mt5StopPrice, Mt5Sl, Mt5Tp).ConfigureAwait(true);
+                symbol, action, type, lots, price, null, sl, tp).ConfigureAwait(true);
 
-            Mt5OrderStatus = result.Ok
-                ? $"{Mt5Action} {Mt5Type} filled: ticket {result.Order ?? result.Deal} @ {result.Price:0.#####}"
+            var status = result.Ok
+                ? $"{action} {type} filled: ticket {result.Order ?? result.Deal} @ {result.Price:0.#####}"
                 : $"refused: {result.RetcodeName} ({result.Retcode})";
 
             _journal.Log(Guid.Empty, "MT5_ORDER",
-                $"{Mt5Action} {Mt5Type} {Mt5Lots} {Mt5Symbol} → {result.RetcodeName}",
+                $"{action} {type} {lots} {symbol} → {result.RetcodeName}",
                 JsonSerializerOps.ToJson(new
                 {
                     result.Retcode,
@@ -1237,18 +1274,96 @@ public sealed partial class TerminalViewModel : ObservableObject
                 }));
 
             _ = PollMt5Async();
+            return status;
         }
         catch (Mt5BridgeException ex)
         {
-            Mt5OrderStatus = $"order refused: {ex.Message}";
+            return $"order refused: {ex.Message}";
         }
         catch (Exception ex)
         {
-            Mt5OrderStatus = $"order failed: {ex.Message}";
+            return $"order failed: {ex.Message}";
         }
         finally
         {
             IsMt5Busy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task PlaceMt5OrderAsync()
+    {
+        if (Mt5NeedsPrice && Mt5Price is null)
+        {
+            Mt5OrderStatus = $"{Mt5Type} orders need a price";
+            return;
+        }
+
+        if (Mt5NeedsStopPrice && Mt5StopPrice is null)
+        {
+            Mt5OrderStatus = "stop-limit orders need a stop trigger price";
+            return;
+        }
+
+        // The ticket's own pending-type validation rides ahead of the
+        // shared executor; everything else (guards + send) is one path.
+        Mt5OrderStatus = await ExecuteMt5OrderAsync(
+            Mt5Symbol, Mt5Action, Mt5Lots, Mt5Type, Mt5Price, Mt5Sl, Mt5Tp)
+            .ConfigureAwait(true);
+    }
+
+    /// <summary>Chart order: buy/sell at market on the chart's symbol at
+    /// the ticket's size — every guard of the shared executor applies, so
+    /// the chart is a shortcut to the ticket, never a bypass.</summary>
+    [RelayCommand]
+    private async Task PlaceChartOrderAsync(string? side)
+    {
+        if (side is not ("buy" or "sell"))
+        {
+            return;
+        }
+
+        var symbol = SelectedSymbol?.Symbol ?? Mt5Symbol;
+        Mt5OrderStatus = $"chart order sending: {side} {Mt5Lots:0.##} {symbol}…";
+        Mt5OrderStatus = await ExecuteMt5OrderAsync(symbol, side, Mt5Lots)
+            .ConfigureAwait(true);
+    }
+
+    /// <summary>A chart SL/TP line was dragged: modify only that leg of
+    /// the position. Journaled and re-polled like the ticket's modify.</summary>
+    [RelayCommand]
+    private async Task ChartLineDraggedAsync(string? spec)
+    {
+        // spec: "<ticket>|<kind>|<price>" (event adapter from code-behind).
+        var parts = (spec ?? "").Split('|');
+        if (parts.Length != 3
+            || !long.TryParse(parts[0], out var ticket)
+            || !double.TryParse(parts[2], System.Globalization.CultureInfo.InvariantCulture, out var price)
+            || parts[1] is not ("sl" or "tp"))
+        {
+            return;
+        }
+
+        if (_dashboard.IsKillSwitchEngaged)
+        {
+            Mt5OrderStatus = "kill switch is engaged — reset it on the Dashboard first";
+            return;
+        }
+
+        try
+        {
+            var result = parts[1] == "sl"
+                ? await _mt5.ModifyPositionAsync(ticket, sl: price).ConfigureAwait(true)
+                : await _mt5.ModifyPositionAsync(ticket, tp: price).ConfigureAwait(true);
+            Mt5OrderStatus = result.Ok
+                ? $"position {ticket} {parts[1]} dragged to {price:0.#####}"
+                : $"drag modify refused: {result.RetcodeName}";
+            _journal.Log(Guid.Empty, "MT5_ORDER", $"drag modify {ticket} {parts[1]}={price:0.#####} → {result.RetcodeName}");
+            _ = PollMt5Async();
+        }
+        catch (Exception ex)
+        {
+            Mt5OrderStatus = $"drag modify failed: {ex.Message}";
         }
     }
 

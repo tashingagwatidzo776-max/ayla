@@ -16,10 +16,13 @@ public sealed record Mt5Symbol(
     double VolumeMin = 0, double VolumeStep = 0, double VolumeMax = 0,
     double ContractSize = 0);
 
-/// <summary>One open MT5 position (bridge /positions).</summary>
+/// <summary>One open MT5 position (bridge /positions). Sl/Tp feed the
+/// chart's draggable price lines; 0 = no leg set. Optional so older
+/// sidecar payloads without the legs still parse.</summary>
 public sealed record Mt5Position(
     long Ticket, string Symbol, string Side, double Volume,
-    double PriceOpen, double PriceCurrent, double Profit);
+    double PriceOpen, double PriceCurrent, double Profit,
+    double Sl = 0, double Tp = 0);
 
 /// <summary>One open (pending) order from the bridge /orders.</summary>
 public sealed record Mt5PendingOrder(
@@ -367,7 +370,9 @@ public sealed class Mt5BridgeClient : IDisposable
                 p.GetProperty("volume").GetDouble(),
                 p.GetProperty("price_open").GetDouble(),
                 p.GetProperty("price_current").GetDouble(),
-                p.GetProperty("profit").GetDouble()));
+                p.GetProperty("profit").GetDouble(),
+                p.TryGetProperty("sl", out var slp) && slp.ValueKind == JsonValueKind.Number ? slp.GetDouble() : 0,
+                p.TryGetProperty("tp", out var tpp) && tpp.ValueKind == JsonValueKind.Number ? tpp.GetDouble() : 0));
         }
 
         return positions;

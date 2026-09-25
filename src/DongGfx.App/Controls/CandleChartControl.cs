@@ -155,6 +155,63 @@ public sealed class CandleChartControl : FrameworkElement
     /// a fresh canvas rather than draw lines glued to the wrong bars.</summary>
     private void ResetDrawingsForNewWindow() => _drawings.Clear();
 
+    // ── Trading price lines (entry / SL / TP) with drag-to-modify ────
+
+    /// <summary>One tradable level on the chart: a position's or pending
+    /// order's entry, stop-loss or take-profit. `Ticket` + `Kind` identify
+    /// it for the drag-to-modify round-trip (null ticket = advisory line).</summary>
+    public sealed record ChartPriceLine(long? Ticket, string Kind, double Price);
+
+    private readonly List<ChartPriceLine> _priceLines = new();
+
+    /// <summary>Replaces the tradable levels shown (call after each
+    /// positions/orders refresh). Entries render gold, SL red, TP green.</summary>
+    public void SetPriceLines(IEnumerable<ChartPriceLine> lines)
+    {
+        _priceLines.Clear();
+        _priceLines.AddRange(lines);
+        InvalidateVisual();
+    }
+
+    /// <summary>A price line's left-drag finished: the Terminal maps
+    /// (ticket, kind) onto a modify call. Fired only for lines with a
+    /// ticket; advisory lines (entry) are not draggable.</summary>
+    public event Action<ChartPriceLine, double>? PriceLineDragged;
+
+    /// <summary>Current tradable levels (entry/SL/TP) — exposed for tests
+    /// and for the Terminal to reason about what is on the chart.</summary>
+    public IReadOnlyList<ChartPriceLine> PriceLines => _priceLines;
+
+    private ChartPriceLine? _dragLine;
+    private ChartPriceLine? _hoverLine;
+
+    /// <summary>The line whose y is within 5px of the mouse (draggables
+    /// first, so a stacked entry/SL pair is grabbed, not the entry).</summary>
+    private ChartPriceLine? LineAt(double y, double top, double plotH, double min, double max)
+    {
+        foreach (var line in _priceLines.Where(l => l.Ticket.HasValue && l.Kind != "entry"))
+        {
+            if (Math.Abs(PriceToY(line.Price, top, plotH, min, max) - y) <= 5)
+            {
+                return line;
+            }
+        }
+
+        foreach (var line in _priceLines)
+        {
+            if (Math.Abs(PriceToY(line.Price, top, plotH, min, max) - y) <= 5)
+            {
+                return line;
+            }
+        }
+
+        return null;
+    }
+
+    private static Brush EntryBrush = MakeBrush(0xFF, 0xC8, 0x4D);
+    private static Brush SlBrush = MakeBrush(0xFF, 0x5C, 0x5C);
+    private static Brush TpBrush = MakeBrush(0x4D, 0xE0, 0x8A);
+
     /// <summary>Overwrites the newest bar (same-second tick roll-up).
     /// No-op when the chart is empty.</summary>
     public void UpdateLast(FxBar bar)
@@ -287,6 +344,23 @@ public sealed class CandleChartControl : FrameworkElement
         }
 
         _dragOrigin = e.GetPosition(this);
+
+        // Grab a draggable price line (SL/TP) when the press lands on one:
+        // the drag modifies the line instead of panning the chart.
+        if (PlotRect() is { } rect)
+        {
+            var (start, end) = VisibleRange((int)(rect.R - rect.L));
+            var (min, max) = ComputeScale(start, end);
+            if (LineAt(_dragOrigin.Y, rect.T, rect.B - rect.T, min, max) is { } line)
+            {
+                _dragLine = line;
+                _dragStartOffset = _panBarsOffset;
+                CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+        }
+
         _dragStartOffset = _panBarsOffset;
         _dragging = true;
         CaptureMouse();
@@ -312,11 +386,46 @@ public sealed class CandleChartControl : FrameworkElement
             UpdateTrendPreview(_mouse.Value);
         }
 
+        // Dragging a price line: live-preview the new price.
+        if (_dragLine is { } line && PlotRect() is { } rect)
+        {
+            var (start, end) = VisibleRange((int)(rect.R - rect.L));
+            var (min, max) = ComputeScale(start, end);
+            var newPrice = YToPrice(_mouse.Value.Y, rect.T, rect.B - rect.T, min, max);
+            var idx = _priceLines.IndexOf(line);
+            if (idx >= 0)
+            {
+                _priceLines[idx] = line with { Price = newPrice };
+                _dragLine = _priceLines[idx];
+            }
+        }
+        else if (_dragLine is null && PlotRect() is { } rect2)
+        {
+            // Hover feedback: grabbable lines get the resize cursor.
+            var (start, end) = VisibleRange((int)(rect2.R - rect2.L));
+            var (min, max) = ComputeScale(start, end);
+            _hoverLine = LineAt(_mouse.Value.Y, rect2.T, rect2.B - rect2.T, min, max);
+            Cursor = _hoverLine is not null ? System.Windows.Input.Cursors.SizeNS : System.Windows.Input.Cursors.Cross;
+        }
+
         InvalidateVisual();
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
+        if (_dragLine is { } line && PlotRect() is { } rect)
+        {
+            var (start, end) = VisibleRange((int)(rect.R - rect.L));
+            var (min, max) = ComputeScale(start, end);
+            // The drag preview already moved the line; fire with the final
+            // price so the Terminal can modify the real order.
+            PriceLineDragged?.Invoke(line, line.Price);
+            _dragLine = null;
+            ReleaseMouseCapture();
+            e.Handled = true;
+            return;
+        }
+
         _dragging = false;
         ReleaseMouseCapture();
     }
@@ -326,6 +435,12 @@ public sealed class CandleChartControl : FrameworkElement
         _mouse = null;
         _rightOrigin = null;
         _previewTrend = null;
+        _hoverLine = null;
+        if (_dragLine is null)
+        {
+            Cursor = System.Windows.Input.Cursors.Cross;
+        }
+
         InvalidateVisual();
     }
 
@@ -540,6 +655,30 @@ public sealed class CandleChartControl : FrameworkElement
             dc.DrawLine(ghost,
                 new Point(Xp(preview.Index1), PriceToY(preview.Price1, top, plotH, min, max)),
                 new Point(Xp(preview.Index2), PriceToY(preview.Price2, top, plotH, min, max)));
+        }
+
+        // Tradable price lines (entry/SL/TP) over everything else — the
+        // drag affordance is the point. Entries gold, SL red, TP green;
+        // the label sits on the price axis side for instant reading.
+        foreach (var line in _priceLines)
+        {
+            var brush = line.Kind switch
+            {
+                "sl" => SlBrush,
+                "tp" => TpBrush,
+                _ => EntryBrush,
+            };
+            var pen = new Pen(brush, 1.3)
+            {
+                DashStyle = line.Kind == "entry"
+                    ? new DashStyle(new double[] { 6, 3 }, 0)
+                    : null,
+            };
+            var y = PriceToY(line.Price, top, plotH, min, max);
+            dc.DrawLine(pen, new Point(left, y), new Point(right, y));
+            dc.DrawText(MakeLabel(
+                $"{(line.Kind == "entry" ? "E" : line.Kind.ToUpperInvariant())} {line.Price:0.#####}", brush),
+                new Point(right - 74, y - 13));
         }
 
         // Time axis: a label every ~90px at the bar nearest that pixel.
