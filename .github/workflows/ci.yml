@@ -132,6 +132,30 @@ jobs:
     - name: Test the soak-report verdicts (go-live evidence path)
       run: python scripts/test_soak_report.py
 
+  # End-to-end UI smoke: launches the real WPF shell on the runner's
+  # interactive desktop and asserts via UI Automation that the Terminal
+  # tab renders (bridge online → live rows; offline → degradation text).
+  # UIA-only by design — no synthetic mouse, no focus stealing — so it is
+  # safe on CI and skipped (not failed) when a developer's own instance is
+  # running locally. Windows-only: the app is a WPF exe.
+  uia-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Build (Debug — the smoke launches the Debug exe)
+      run: dotnet build src/DongGfx.App/DongGfx.App.csproj --configuration Debug
+
+    - name: Run UIA smoke
+      run: dotnet test tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --no-build --configuration Debug --filter "Category=Uia" --logger "console;verbosity=normal"
+
   # Merges both jobs' cobertura files into one HTML report and gates the
   # build on a minimum line-coverage floor (measured at 53.2% when the
   # gate was introduced; 52% stays below the baseline with headroom for
