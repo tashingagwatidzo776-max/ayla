@@ -143,10 +143,17 @@ def run_backtest(bars: list[dict], proposal: dict) -> dict:
         for i in range(1, len(bars)):
             if not in_trade:
                 if entry_signal(bars, i, proposal["entry"], d):
-                    in_trade, entry_i, entry_price = True, i, bars[i]["close"]
+                    # Risk unit: widest bar range in the lookback (skip flat
+                    # one-quote bars); a fully flat tape gives no sane risk
+                    # unit, so the entry is skipped rather than sized on a
+                    # degenerate stop.
                     atr = max(
-                        (bars[j]["high"] - bars[j]["low"]) for j in range(max(1, i - 5), i)
-                    ) or 1e-6
+                        (bars[j]["high"] - bars[j]["low"] for j in range(max(1, i - 30), i)),
+                        default=0.0,
+                    )
+                    if atr <= 0:
+                        continue
+                    in_trade, entry_i, entry_price = True, i, bars[i]["close"]
                     stop = entry_price - stop_bars * atr if d == "long" else entry_price + stop_bars * atr
             else:
                 price = bars[i]["close"]
