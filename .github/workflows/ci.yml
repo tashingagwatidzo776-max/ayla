@@ -132,6 +132,12 @@ jobs:
     - name: Test the soak-report verdicts (go-live evidence path)
       run: python scripts/test_soak_report.py
 
+    - name: Test the pre-go-live check (M3 checklist verdicts)
+      run: python scripts/test_pre_go_live_check.py
+
+    - name: Test the flake tracker (fail-then-pass visibility)
+      run: python scripts/test_flake_tracker.py
+
   # End-to-end UI smoke: launches the real WPF shell on the runner's
   # interactive desktop and asserts via UI Automation that the Terminal
   # tab renders (bridge online → live rows; offline → degradation text).

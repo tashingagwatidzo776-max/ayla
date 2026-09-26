@@ -45,6 +45,10 @@ The go-live refusal is implemented, not aspirational
 
 ## 3. Pre-go-live checklist (demo first — the same list is the real gate)
 
+Verify the machine-readable version of this checklist any time with
+`python scripts/pre_go_live_check.py` (read-only; exits 0 only when every
+item below passes):
+
 1. **Safety settings fail-closed** (Settings → FX BRAIN): `Mt5MaxLots`
    (0 disables placement), `Mt5DailyLossCap`, `Mt5EquityFloor`,
    `FxPortfolioMaxLots`, `NewsBlackoutMinutes` — all bounded before start.
