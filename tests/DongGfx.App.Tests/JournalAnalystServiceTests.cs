@@ -16,8 +16,8 @@ namespace DongGfx.App.Tests;
 
 /// <summary>
 /// Tests for AI agent 1 (docs/ai-agent-program.md): the journal analyst.
-/// Covers the local stats engine, the deterministic template fallback (no
-/// env LLM, LLM failure, disabled service), the webhook post against a real
+/// Covers the local stats engine, the deterministic template fallback (LLM
+/// unreachable, LLM failure, disabled service), the webhook post against a real
 /// local capture listener, and the guarded type-7 prediction-memory loop —
 /// recording, mechanical grading against journal outcomes, and the hit-rate
 /// the analyst is allowed to know about itself.
@@ -44,8 +44,13 @@ public class JournalAnalystServiceTests : IDisposable
         try { Directory.Delete(Path.GetDirectoryName(_memoryPath)!, recursive: true); } catch { }
     }
 
+    // The service always has a default endpoint (local Ollama), so "LLM
+    // unavailable" is simulated with a reserved port that refuses fast —
+    // hermetic whether or not a daemon happens to be running on this box.
+    private const string DeadLlmUrl = "http://127.0.0.1:1/v1";
+
     private JournalAnalystService NewService(
-        string? baseUrl = null, Func<string?>? model = null, WebhookService? webhook = null)
+        string? baseUrl = DeadLlmUrl, Func<string?>? model = null, WebhookService? webhook = null)
     {
         return new JournalAnalystService(_journal, webhook ?? _webhook,
             memory: new AnalystMemory(_memoryPath))
@@ -73,7 +78,7 @@ public class JournalAnalystServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task NoLlmConfigured_TemplateNarrative_PostsAndJournalsAiCall()
+    public async Task LlmUnavailable_TemplateNarrative_PostsAndJournalsAiCall()
     {
         Seed(
             ("FX_DECISION", "cycle ok: {\"Symbol\":\"XAUUSDmicro\"}"),
