@@ -1,0 +1,46 @@
+name: Flake tracker
+
+# The unit job's flake guard (one automatic retry) keeps timing noise from
+# blocking a PR — and hides real failures: a test that fails attempt 1 and
+# passes attempt 2 turns the run green with the failure buried in one log
+# file nobody opens. This weekly job runs scripts/flake_tracker.py so those
+# failures accumulate an audit trail on the ci-flakes issue (chronic tests
+# at or above the threshold are called out), and notifies the metrics
+# webhook when a NEW test goes chronic (FLAKE_WEBHOOK_URL secret, the same
+# Discord/Slack split the digest uses). Visibility, not a gate: a tracker
+# that blocks would itself become a second gate to flake.
+
+on:
+  schedule:
+    - cron: '52 7 * * 6' # Saturdays 07:52 UTC — clear of the gate drill (02:37), bankroll drill (05:23), nightly (03:17), watchdog (06:00), health check (Mon 06:23) and the Wednesday drills (05:41)
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: 'How many recent CI runs on main to scan'
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+  actions: read   # run list, job lookup, job-log download
+  issues: write   # post/refresh the flake report on the ci-flakes issue
+
+jobs:
+  flake-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Scan recent runs and refresh the flake report
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        FLAKE_WEBHOOK_URL: ${{ secrets.FLAKE_WEBHOOK_URL }}
+      run: |
+        set -euo pipefail
+        python scripts/flake_tracker.py \
+          --runs "${{ inputs.runs || 30 }}" \
+          --threshold 3 \
+          --update-issue \
+          --notify-webhook

@@ -57,6 +57,14 @@ public sealed class FxEngineHost : IDisposable
     public int PaperSignalsSeen { get; private set; }
     public bool PaperSoakComplete => PaperSignalsSeen >= PaperSoakSignalsRequired;
 
+    /// <summary>Whether one engine decision advances the paper soak: a
+    /// signal must have spoken (any action — ordered, paper, or a sizing
+    /// skip still proves the alpha fired) while the engine is in PAPER.
+    /// Internal static so tests can pin the rule without fake-market
+    /// plumbing.</summary>
+    internal static bool CountsTowardSoak(FxDecision decision, bool engineIsLive)
+        => !engineIsLive && decision.Signal is not null;
+
     public FxEngineHost(
         Mt5BridgeClient mt5,
         TradeJournal journal,
@@ -228,6 +236,24 @@ public sealed class FxEngineHost : IDisposable
 
             var decision = _engine.RunOnce(DateTimeOffset.UtcNow, bars, bid, ask);
             LastDecision = decision;
+
+            // Paper soak: an alpha SPOKE while the engine is in paper — that
+            // is one observed signal toward this symbol's soak bar. Live
+            // signals are proven by execution, not counted here. Without
+            // this the counter never advanced and GO LIVE could never fire.
+            if (CountsTowardSoak(decision, _engine.IsLive))
+            {
+                PaperSignalsSeen++;
+                Journal("FX_MODE",
+                    $"paper soak {PaperSignalsSeen}/{PaperSoakSignalsRequired} on {Symbol}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Symbol,
+                        Seen = PaperSignalsSeen,
+                        Required = PaperSoakSignalsRequired,
+                        Alpha = decision.Signal!.Alpha,
+                    }));
+            }
 
             if (decision.Action == FxDecisionAction.Ordered && decision.Signal is not null)
             {

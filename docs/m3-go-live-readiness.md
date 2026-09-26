@@ -6,6 +6,10 @@ regression suite + UIA smoke lane). M3 is the milestone this app exists for:
 the FX brain leaves paper mode against the demo venue, accumulates settled
 trades, and — only after that evidence exists — asks the real-money question.
 
+The practical how-to for producing that evidence lives in
+[`soak-session-plan.md`](soak-session-plan.md) (configure, run, record);
+this document is the readiness review.
+
 ## 1. Where the soak stands
 
 Committed evidence in `docs/soak/`:

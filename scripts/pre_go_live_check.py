@@ -121,29 +121,56 @@ def check_sidecar(skip):
 
 
 def read_journal_entries(data_dir):
-    """Returns (categories_counter, first_timestamp, last_timestamp)."""
+    """Returns (categories, fx_symbols, first_ts, last_ts).
+
+    fx_symbols maps category -> {symbol: count} for entries whose Details
+    JSON carries a Symbol field (FX_SIGNAL, FX_DECISION, FX_ORDER, FX_MODE).
+    Details holds JSON-in-JSON (escaped inside the outer line), so it is
+    unescaped once before parsing; rows that fail to parse count under the
+    symbol "" (unknown)."""
     journal_dir = os.path.join(data_dir, "journal")
     categories = {}
+    fx_symbols = {}
     first_ts = None
     last_ts = None
     ts_re = re.compile(r"\"Timestamp\":\"([^\"]+)\"")
     cat_re = re.compile(r"\"Category\":\"([^\"]+)\"")
+    # Details is the LAST serialized field (Timestamp, AccountId, Category,
+    # Details): the value runs to the line's closing quote-brace. Greedy to
+    # the final `"}` so inner escaped quotes never truncate the capture.
+    det_re = re.compile(r"\"Details\":\"(.*)\"\}")
     for path in sorted(glob.glob(os.path.join(journal_dir, "journal_*.jsonl"))):
         try:
             with open(path, encoding="utf-8") as f:
                 for line in f:
-                    cat = cat_re.search(line)
-                    if cat:
-                        categories[cat.group(1)] = categories.get(cat.group(1), 0) + 1
+                    cat_m = cat_re.search(line)
+                    if cat_m:
+                        cat = cat_m.group(1)
+                        categories[cat] = categories.get(cat, 0) + 1
                     ts = ts_re.search(line)
                     if ts:
                         raw = ts.group(1)
                         if first_ts is None:
                             first_ts = raw
                         last_ts = raw
+                    if cat_m:
+                        cat = cat_m.group(1)
+                        symbol = ""
+                        det_m = det_re.search(line)
+                        if det_m:
+                            raw_details = det_m.group(1)
+                            try:
+                                details = json.loads(raw_details.encode().decode("unicode_escape"))
+                                sym = details.get("Symbol")
+                                if isinstance(sym, str):
+                                    symbol = sym
+                            except (ValueError, UnicodeDecodeError):
+                                symbol = ""
+                        bucket = fx_symbols.setdefault(cat, {})
+                        bucket[symbol] = bucket.get(symbol, 0) + 1
         except OSError:
             continue
-    return categories, first_ts, last_ts
+    return categories, fx_symbols, first_ts, last_ts
 
 
 def parse_iso(ts):
@@ -155,18 +182,43 @@ def parse_iso(ts):
         return None
 
 
-def check_soak_progress(data_dir):
-    categories, first_ts, last_ts = read_journal_entries(data_dir)
+def check_soak_progress(data_dir, signals_required=10):
+    """Per-symbol soak progress: the engine counts one signal per cycle in
+    which an alpha SPOKE while in PAPER (FxEngineHost.CountsTowardSoak),
+    journals it as FX_MODE 'paper soak n/m on <symbol>', and the engine
+    itself journals FX_SIGNAL '<alpha> -> <dir> conf ...' whenever an alpha
+    speaks. Counting FX_SIGNAL per symbol reproduces the badge's bar; the
+    soak bar itself (PaperSoakSignalsRequired) is 10 per symbol.
+    GO LIVE is all-or-nothing across symbols, so the worst symbol decides."""
+    categories, fx_symbols, first_ts, last_ts = read_journal_entries(data_dir)
     decisions = categories.get("BRAIN_DECISION", 0)
     if decisions == 0:
         return False, "journal has 0 BRAIN_DECISION entries - the brain has never produced a signal (start the FX brain in paper mode)"
 
+    signal_counts = dict(fx_symbols.get("FX_SIGNAL", {}))
+    signal_counts.pop("", None)   # unparseable Details rows
+    if not signal_counts:
+        # Older journals may lack FX_SYMBOL in Details; fall back to the
+        # FX_MODE 'paper soak n/m on <symbol>' messages, then to a bare
+        # decision-count statement.
+        mode_counts = {s: c for s, c in fx_symbols.get("FX_MODE", {}).items() if s}
+        if mode_counts:
+            signal_counts = mode_counts
+        else:
+            return True, (f"{decisions} BRAIN_DECISION entries journaled; no per-symbol "
+                          f"FX_SIGNAL rows yet (legacy journal) - watch the FX badge for soak n/m")
+
+    per_symbol = ", ".join(
+        f"{sym} {count}/{signals_required}"
+        for sym, count in sorted(signal_counts.items(), key=lambda kv: (-kv[1], kv[0])))
+    worst = min(signal_counts.values())
     first_dt = parse_iso(first_ts)
     last_dt = parse_iso(last_ts)
-    window = ""
-    if first_dt and last_dt:
-        window = f" (first {first_dt.date()}, last {last_dt.date()})"
-    return True, f"{decisions} BRAIN_DECISION entries journaled{window}"
+    window = f" (first {first_dt.date()}, last {last_dt.date()})" if first_dt and last_dt else ""
+    ok = worst >= signals_required
+    detail = (f"per-symbol soak {per_symbol} - worst symbol decides "
+              f"{'(complete)' if ok else f'(worst below {signals_required})'}{window}")
+    return ok, detail
 
 
 def check_soak_evidence(repo_root, max_age):
