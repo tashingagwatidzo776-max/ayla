@@ -39,7 +39,12 @@ Invoke-Step 'unit' {
     dotnet test tests/DongGfx.Core.Tests/DongGfx.Core.Tests.csproj --no-build --nologo -v q
 }
 Invoke-Step 'integration' {
-    dotnet test tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --no-build --nologo -v q
+    # Exclude Category=Uia: the UIA smoke launches the real app against the
+    # live %APPDATA%\tf\data dir (freshening the journal), which both breaks
+    # the Shared-DataDir suites' LiveSoakGuard and violates the smoke's own
+    # contract — it runs in CI's dedicated uia-smoke job, not local gates.
+    dotnet test tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --no-build --nologo -v q `
+        --filter "Category!=Uia"
 }
 Invoke-Step 'workflow-lint' {
     python scripts/lint_workflows.py

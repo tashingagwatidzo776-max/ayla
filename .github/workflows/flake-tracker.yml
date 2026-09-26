@@ -9,6 +9,11 @@ name: Flake tracker
 # webhook when a NEW test goes chronic (FLAKE_WEBHOOK_URL secret, the same
 # Discord/Slack split the digest uses). Visibility, not a gate: a tracker
 # that blocks would itself become a second gate to flake.
+#
+# Rot guard: this job's exact script invocation is smoke-tested on every
+# push/PR by CI's integration job (scripts/flake_tracker.py --dry-run),
+# which fails when the scan can no longer see or parse CI runs - so the
+# API contract below cannot silently break between Saturdays.
 
 on:
   schedule:

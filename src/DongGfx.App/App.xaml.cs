@@ -70,10 +70,23 @@ public partial class App : System.Windows.Application
         services.AddSingleton<Mt5BridgeClient>();
         services.AddSingleton<TickArchive>();
         services.AddSingleton<MetricsCollector>();
-        services.AddSingleton(sp => new FxTradeFeed(
-            sp.GetRequiredService<Mt5BridgeClient>(),
-            sp.GetRequiredService<PerformanceTracker>(),
-            sp.GetRequiredService<TradeJournal>()));
+        services.AddSingleton(sp =>
+        {
+            var feed = new FxTradeFeed(
+                sp.GetRequiredService<Mt5BridgeClient>(),
+                sp.GetRequiredService<PerformanceTracker>(),
+                sp.GetRequiredService<TradeJournal>());
+            // Milestones (first settled FX trade) ride the same webhook as
+            // trade settlements; PostFxMilestone no-ops while no URL is set.
+            var webhook = sp.GetRequiredService<WebhookService>();
+            feed.MilestoneNotifier = (title, body, progress) =>
+                webhook.PostFxMilestone(title, body, progress);
+            // The persisted WebhookOnMilestone toggle gates milestone posts
+            // (read live: the settings editor applies without a restart).
+            feed.MilestonesEnabled = () =>
+                sp.GetRequiredService<Func<AppSettings>>()().WebhookOnMilestone;
+            return feed;
+        });
         services.AddSingleton(sp => new FxScorecardService(
             sp.GetRequiredService<Mt5BridgeClient>(),
             sp.GetRequiredService<TradeJournal>(),
@@ -186,8 +199,13 @@ public partial class App : System.Windows.Application
                 var halt = portfolio.Supervisor.IsHalted
                     ? $"halt:{portfolio.Supervisor.HaltReason}"
                     : "clear";
+                // Laggard-first per-symbol detail, matching the badge: the
+                // digest is where monitoring sees the laggard without the app.
+                var laggards = string.Join(", ", portfolio.SoakLaggards
+                    .Select(h => $"{h.Symbol} {h.PaperSignalsSeen}/{h.PaperSoakSignalsRequired}"));
                 parts.Add($"FX brain {mode} on {string.Join("+", portfolio.Symbols)} " +
-                          $"soak {portfolio.PaperSignalsSeen}/{portfolio.PaperSoakSignalsRequired} {halt}");
+                          $"soak {portfolio.PaperSignalsSeen}/{portfolio.PaperSoakSignalsRequired} {halt}" +
+                          (laggards.Length > 0 ? $"; waiting on: {laggards}" : ""));
             }
 
             if (scorecard.LastSummary is { } sc)

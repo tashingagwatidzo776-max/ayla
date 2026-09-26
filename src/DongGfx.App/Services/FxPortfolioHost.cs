@@ -205,6 +205,15 @@ public sealed class FxPortfolioHost : IDisposable
     /// go-live is all-or-nothing across the portfolio.</summary>
     public bool PaperSoakComplete => _hosts.All(h => h.PaperSoakComplete);
 
+    /// <summary>The symbols still short of their soak bar, laggard first —
+    /// the names a go-live refusal should show, because those are the ones
+    /// holding the whole portfolio in paper.</summary>
+    public IReadOnlyList<FxEngineHost> SoakLaggards => _hosts
+        .Where(h => !h.PaperSoakComplete)
+        .OrderBy(h => h.PaperSignalsSeen)
+        .ThenBy(h => h.Symbol, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
     public FxDecision? LastDecision => _hosts.LastOrDefault(h => h.LastDecision is not null)?.LastDecision;
 
     public void Start()
@@ -227,8 +236,10 @@ public sealed class FxPortfolioHost : IDisposable
     {
         if (!PaperSoakComplete)
         {
+            var laggards = SoakLaggards;
+            var names = string.Join(", ", laggards.Select(h => $"{h.Symbol} {h.PaperSignalsSeen}/{h.PaperSoakSignalsRequired}"));
             StatusChanged?.Invoke(
-                $"go-live refused — portfolio paper soak {PaperSignalsSeen}/{PaperSoakSignalsRequired} signals");
+                $"go-live refused — portfolio paper soak {PaperSignalsSeen}/{PaperSoakSignalsRequired}; waiting on: {names}");
             return;
         }
 

@@ -41,8 +41,11 @@ The go-live refusal is implemented, not aspirational
   PaperSoakSignalsRequired` (default **10 paper signals per symbol engine**).
 - Portfolio: `PaperSoakComplete` ⇔ **every** symbol engine has soaked —
   GO LIVE is all-or-nothing across `FxSymbols`; a refused attempt journals
-  `FX_MODE` and reports `go-live refused — paper soak n/m signals` on the
-  FX badge.
+  `FX_MODE` and reports `go-live refused — paper soak n/m; waiting on:
+  <symbol k/m, …>` on the FX badge.
+- The account bar carries a per-symbol soak pill (`FxSoakBadge`, laggard
+  symbol first): `XAUUSDmicro 3/10 EURUSD 5/10 …` — the symbol holding GO
+  LIVE back is always visible in-app, not just in the journal.
 - Per the soak reports, sessions so far have produced decisions but not the
   10-signal-per-symbol bar — expect several more demo sessions before the
   badge stops refusing.
@@ -58,8 +61,8 @@ item below passes):
    `FxPortfolioMaxLots`, `NewsBlackoutMinutes` — all bounded before start.
 2. **Sidecar running** so the venue's `trade_mode` verdict reaches the
    real-money gate (`docs/mt5-bridge.md`).
-3. **Paper soak complete** on every symbol (badge shows `soak n/m`), then
-   the explicit GO LIVE.
+3. **Paper soak complete** on every symbol (the account bar pill shows
+   per-symbol `sym n/m`, laggard first), then the explicit GO LIVE.
 4. **Webhook on** so refusals, arms and staleness reach you out-of-band;
    unlock-staleness watch (`ArmStalenessHours`) nagging when armed.
 5. **Record the evidence** after each session:
@@ -68,7 +71,10 @@ item below passes):
 ## 4. Open dependencies
 
 - **Issue #44** (bankroll drill re-run) is blocked on the first *settled
-  growth trade* — the demo go-live session is what unblocks it.
+  growth trade* — the demo go-live session is what unblocks it. The app
+  announces that moment on the webhook (`🥇 First settled FX trade`, once
+  per installation and restart-proof against the journal), so the unblock
+  is visible out-of-band the moment the evidence exists.
 - **Issue #52** (gate-drill alert) is stale-open: runs 31–36 all posted
   "went green" notes; it is taken down by human review per the drift policy.
 - The Monday-open watcher (`open-watcher.ps1`) is the soak-evidence

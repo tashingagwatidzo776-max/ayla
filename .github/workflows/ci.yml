@@ -138,6 +138,21 @@ jobs:
     - name: Test the flake tracker (fail-then-pass visibility)
       run: python scripts/test_flake_tracker.py
 
+    # Smoke the scheduled flake-tracker's exact invocation (--dry-run: real
+    # scan against the real API, zero writes - no issue post, no webhook,
+    # no state). The weekly job fires once a Saturday, so its contract with
+    # the GitHub API (run-list fields, the 'unit' job-name filter, the log
+    # endpoint) could otherwise rot silently for up to a week; this fails
+    # the build the moment it stops working. --runs 3 instead of the
+    # scheduled 30: the window size is data, not contract - three runs still
+    # prove auth, filters, download and parse, and guard against the whole
+    # window being in-flight/cancelled at smoke time (which would exit 1).
+    - name: Smoke the flake tracker's scheduled invocation (dry-run)
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        FLAKE_WEBHOOK_URL: ${{ secrets.FLAKE_WEBHOOK_URL }}
+      run: python scripts/flake_tracker.py --runs 3 --threshold 3 --update-issue --notify-webhook --dry-run
+
   # End-to-end UI smoke: launches the real WPF shell on the runner's
   # interactive desktop and asserts via UI Automation that the Terminal
   # tab renders (bridge online → live rows; offline → degradation text).

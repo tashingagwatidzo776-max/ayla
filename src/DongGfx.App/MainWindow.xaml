@@ -414,6 +414,13 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                         ToolTip="The forex brain: regime detection + momentum/mean-reversion families on MT5. Paper mode journals signals only; go-live needs the paper soak first.">
                                     <TextBlock Text="{Binding FxBadge}" FontWeight="Bold" FontSize="11" />
                                 </Border>
+                                <!-- per-symbol paper soak: laggard symbol first, so the
+                                     one holding GO LIVE back is always the visible one -->
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
+                                        ToolTip="Per-symbol paper-soak progress (n/m signals). GO LIVE needs EVERY symbol at its bar — the laggard is shown first.">
+                                    <TextBlock Text="{Binding FxSoakBadge}" FontFamily="Consolas" FontSize="11"
+                                               Foreground="{StaticResource TextSecondaryBrush}" />
+                                </Border>
                                 <Button Content="FX BRAIN ON/OFF" Command="{Binding ToggleFxBrainCommand}"
                                         Margin="0,0,6,0" />
                                 <Button Content="GO LIVE" Command="{Binding FxGoLiveCommand}" Margin="0,0,6,0" />
