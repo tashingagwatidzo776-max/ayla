@@ -110,6 +110,15 @@ public partial class App : System.Windows.Application
         services.AddSingleton(sp => new MetricsDigestService(
             sp.GetRequiredService<MetricsCollector>(),
             sp.GetRequiredService<WebhookService>()));
+
+        // AI agent 1 (docs/ai-agent-program.md): the journal analyst. It
+        // reads the journal, optionally asks a local LLM (Ollama/Qwen3 by
+        // default) to narrate the session, and posts to the webhook.
+        // Read-only by construction — it talks to the webhook, never to the
+        // order path; failures degrade to the template narrative.
+        services.AddSingleton(sp => new JournalAnalystService(
+            sp.GetRequiredService<TradeJournal>(),
+            sp.GetRequiredService<WebhookService>()));
         services.AddSingleton(sp => new TerminalViewModel(
             () => sp.GetRequiredService<SettingsViewModel>().BuildSettings(),
             persist: () => _ = sp.GetRequiredService<SettingsViewModel>().SaveSettingsQuietAsync(),
@@ -256,6 +265,14 @@ public partial class App : System.Windows.Application
             Mt5TerminalLocator.Find(settingsFactory().Mt5TerminalPath));
         provider.GetRequiredService<MetricsDigestService>().Start();
 
+        // AI journal analyst: toggles read live from the settings factory so
+        // the Settings checkboxes apply without a restart (same pattern as
+        // the milestone gate). Start() no-ops while Disabled.
+        var analyst = provider.GetRequiredService<JournalAnalystService>();
+        analyst.AnalystEnabledToggle = () => settingsFactory().AnalystEnabled;
+        analyst.MemoryEnabledToggle = () => settingsFactory().AnalystMemoryEnabled;
+        analyst.Start();
+
         // Unlock-staleness alert: an armed session unlock past the
         // configured threshold journals REAL_MONEY_UNLOCK_STALE + toast +
         // webhook (the rail the removed hub used to own).
@@ -283,6 +300,7 @@ public partial class App : System.Windows.Application
             Ioc.Default.GetService<FxTradeFeed>(),
             Ioc.Default.GetService<UnlockStalenessMonitor>(),
             Ioc.Default.GetService<MetricsDigestService>(),
+            Ioc.Default.GetService<JournalAnalystService>(),
             Ioc.Default.GetService<TickArchive>()
         ];
 

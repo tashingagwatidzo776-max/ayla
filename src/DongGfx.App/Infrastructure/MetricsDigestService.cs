@@ -12,8 +12,8 @@ namespace DongGfx.App.Infrastructure;
 
 /// <summary>
 /// Periodically composes an operational digest from the live cycle telemetry
-/// (latency/error samples collected by the growth runners and the LLM-tab
-/// loop) and posts it to the Discord/Slack webhook — the same channel trade
+/// (latency/error samples collected by the trading surfaces' poll loops) and
+/// posts it to the Discord/Slack webhook — the same channel trade
 /// settlements use — so monitoring sees session health without anyone
 /// exporting manually.
 ///

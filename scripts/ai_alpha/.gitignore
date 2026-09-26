@@ -1,0 +1,4 @@
+# Generated locally by propose.py / backtest.py — machine artifacts, not
+# source. The harness re-creates them on every run.
+proposals/
+results/
