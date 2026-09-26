@@ -27,9 +27,12 @@ posts/updates an issue labeled ci-flakes (created if absent).
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from collections import defaultdict
 
 FLAKE_MARKER = "Unit tests failed on the first attempt - retrying once"
@@ -64,6 +67,14 @@ def parse_args(argv):
                    help="post/refresh the flake report on the ci-flakes issue")
     p.add_argument("--json", dest="json_out", metavar="PATH",
                    help="also write the raw per-attempt findings as JSON")
+    p.add_argument("--notify-webhook", action="store_true",
+                   help="announce NEW chronic tests on FLAKE_WEBHOOK_URL "
+                        "(Discord/Slack split matches the metrics digest)")
+    p.add_argument("--webhook-url", default=None,
+                   help="webhook URL override (default: $FLAKE_WEBHOOK_URL)")
+    p.add_argument("--state-file", default=None,
+                   help="file remembering previously-notified chronic tests "
+                        "(default: issue-history fallback)")
     args = p.parse_args(argv)
     if args.runs < 1 or args.threshold < 1:
         p.error("--runs and --threshold must be >= 1")
@@ -240,6 +251,76 @@ def update_issue(report_md):
     return f"created {out.strip()}"
 
 
+# ── webhook notification (drift-alert side channel) ───────────────
+
+def build_notification_payload(chronic_names, webhook_url, state_path=None):
+    """Discord/Slack payload announcing new chronic flakes. Discord detection
+    matches the metrics-digest convention ('discord' in the URL). Returns
+    None when there is nothing NEW to say (state remembers prior chronic
+    tests so the same test does not re-alarm every week)."""
+    if not chronic_names:
+        return None
+    prior = _load_chronic_state(state_path)
+    new = sorted(n for n in chronic_names if n not in prior)
+    if not new:
+        return None
+    is_discord = "discord" in webhook_url
+    text = "New chronic flake(s) (>= threshold failed attempts in the window): " + ", ".join(f"`{n}`" for n in new)
+    if is_discord:
+        body = {"embeds": [{"title": "\U0001f4a2 CI flake tracker: new chronic test",
+                             "description": text, "color": 0xB3541E}]}
+    else:
+        body = {"attachments": [{"color": "#B3541E",
+                                  "text": f"\U0001f4a2 CI flake tracker: new chronic test - {text}"}]}
+    return new, body
+
+
+def _load_chronic_state(state_path):
+    """Previously-seen chronic tests. When no state file exists yet, the
+    tracker has no memory — fall back to the ci-flakes issue's existing
+    CHRONIC mentions so a re-run does not re-alarm on old findings."""
+    if state_path and os.path.exists(state_path):
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                return set(json.load(f))
+        except (OSError, ValueError):
+            pass
+    prior = set()
+    if not state_path:
+        try:
+            raw = gh("issue", "list", "--label", ISSUE_LABEL, "--state", "all",
+                     "--limit", "5", "--json", "body", "--jq", ".[].body")
+            prior = {m for body in raw.splitlines()
+                     for m in re.findall(r"`([A-Za-z_][\w.]*?)`", body)
+                     if "chronic" in body.lower()}
+        except RuntimeError:
+            pass
+    return prior
+
+
+def _save_chronic_state(state_path, chronic_names):
+    if not state_path:
+        return
+    try:
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(sorted(set(chronic_names)), f)
+    except OSError:
+        pass
+
+
+def post_webhook(url, body):
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status
+    except urllib.error.HTTPError as ex:
+        raise RuntimeError(f"webhook POST failed: HTTP {ex.code}") from ex
+    except Exception as ex:
+        raise RuntimeError(f"webhook POST failed: {ex.__class__.__name__}") from ex
+
+
 def main(argv):
     args = parse_args(argv)
     try:
@@ -272,6 +353,26 @@ def main(argv):
 
     if args.update_issue:
         print(f"issue: {update_issue(report_md)}")
+
+    if args.notify_webhook:
+        url = args.webhook_url or os.environ.get("FLAKE_WEBHOOK_URL") or ""
+        if not url.strip():
+            print("webhook: FLAKE_WEBHOOK_URL unset - no notification sent")
+        else:
+            payload = build_notification_payload(
+                [r["test"] for r in chronic], url, args.state_file)
+            if payload is None:
+                print("webhook: no NEW chronic tests to announce")
+            else:
+                new_names, body = payload
+                try:
+                    status = post_webhook(url, body)
+                    _save_chronic_state(args.state_file, [r["test"] for r in chronic])
+                    print(f"webhook: HTTP {status} - announced {len(new_names)} new chronic test(s)")
+                except RuntimeError as ex:
+                    # A failed notification must not fail the scan: the
+                    # issue report already carries the finding.
+                    print(f"::warning::{ex}")
 
     if args.strict and chronic:
         return 1

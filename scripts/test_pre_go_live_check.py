@@ -53,10 +53,12 @@ def run_check(tmp, extra_args=None):
     return proc.stdout + proc.stderr, proc.returncode
 
 
-def journal_line(category):
+def journal_line(category, symbol=None):
+    details = '{"Symbol":"%s"}' % symbol if symbol else "{}"
+    details_escaped = json.dumps(details)[1:-1]   # JSON-in-JSON escaping
     return ('{"Timestamp":"2026-09-25T10:00:00.0000000+00:00",'
             f'"AccountId":"11111111-1111-1111-1111-111111111111",'
-            f'"Category":"{category}","Details":"{{}}"}}')
+            f'"Category":"{category}","Details":"{details_escaped}"}}')
 
 
 GOOD_SETTINGS = {
@@ -127,6 +129,32 @@ def test_no_journal_signals_fails():
         out, rc = run_check(tmp)
         assert rc == 1, out
         assert "0 BRAIN_DECISION" in out
+
+
+def test_per_symbol_soak_progress_reported_and_worst_decides():
+    lines = ([journal_line("BRAIN_DECISION")]
+             + [journal_line("FX_SIGNAL", "XAUUSDmicro") for _ in range(10)]
+             + [journal_line("FX_SIGNAL", "EURUSD") for _ in range(3)])
+    with tempfile.TemporaryDirectory() as tmp:
+        make_repo(tmp)
+        make_data_dir(tmp, GOOD_SETTINGS, lines)
+        out, rc = run_check(tmp)
+        assert rc == 1, out   # EURUSD is below 10: all-or-nothing
+        assert "XAUUSDmicro 10/10" in out
+        assert "EURUSD 3/10" in out
+        assert "worst below" in out
+
+
+def test_per_symbol_soak_complete_when_every_symbol_at_bar():
+    lines = ([journal_line("BRAIN_DECISION")]
+             + [journal_line("FX_SIGNAL", "XAUUSDmicro") for _ in range(10)]
+             + [journal_line("FX_SIGNAL", "EURUSD") for _ in range(10)])
+    with tempfile.TemporaryDirectory() as tmp, LiveHook() as hook:
+        make_repo(tmp)
+        make_data_dir(tmp, {**GOOD_SETTINGS, "WebhookUrl": hook}, lines)
+        out, rc = run_check(tmp)
+        assert rc == 0, out
+        assert "(complete)" in out
 
 
 def test_stale_soak_evidence_fails():

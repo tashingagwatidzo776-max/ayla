@@ -7,7 +7,10 @@ failures, so these verdicts must be exact.
 
 Run: python scripts/test_flake_tracker.py   (exit 0 = all pass)
 """
+import json
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -140,6 +143,84 @@ def test_markdown_empty_window_has_no_table():
     md = ft.render_markdown([], window=20, threshold=3)
     assert "No test failures found" in md
     assert "|" not in md
+
+
+# ── webhook notification ────────────────────────────────────────────
+
+def test_notification_payload_discord_format():
+    payload = ft.build_notification_payload(
+        ["A.New", "B.Once"], "https://discord.com/api/webhooks/x", state_path="")
+    assert payload is not None
+    new_names, body = payload
+    assert new_names == ["A.New", "B.Once"]
+    assert "embeds" in body                      # discord split
+    assert "A.New" in body["embeds"][0]["description"]
+
+
+def test_notification_payload_slack_format():
+    _new, body = ft.build_notification_payload(
+        ["A.New"], "https://hooks.slack.com/services/x", state_path="")
+    assert "attachments" in body                 # slack split
+    assert "A.New" in body["attachments"][0]["text"]
+
+
+def test_notification_none_when_no_chronic():
+    assert ft.build_notification_payload([], "https://discord.com/x", state_path="") is None
+
+
+def test_notification_skips_already_notified_via_state_file():
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(["A.Known"], f)
+        state = f.name
+    try:
+        payload = ft.build_notification_payload(
+            ["A.Known", "B.New"], "https://discord.com/x", state_path=state)
+        assert payload is not None
+        new_names, _body = payload
+        assert new_names == ["B.New"]           # only the new one
+    finally:
+        import os
+        os.unlink(state)
+
+
+def test_notification_none_when_everything_already_known():
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(["A.Known"], f)
+        state = f.name
+    try:
+        payload = ft.build_notification_payload(
+            ["A.Known"], "https://discord.com/x", state_path=state)
+        assert payload is None                  # nothing new: stay silent
+    finally:
+        os.unlink(state)
+
+
+def test_post_webhook_delivers_payload():
+    received = {}
+
+    class Hook(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length", 0))
+            received["body"] = json.loads(self.rfile.read(length))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Hook)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status = ft.post_webhook(
+            f"http://127.0.0.1:{server.server_port}/hook",
+            {"embeds": [{"title": "t"}]})
+        assert status == 200
+        assert received["body"] == {"embeds": [{"title": "t"}]}
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":
