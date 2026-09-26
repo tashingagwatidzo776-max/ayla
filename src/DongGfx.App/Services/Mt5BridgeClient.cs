@@ -133,9 +133,15 @@ public sealed class Mt5BridgeClient : IDisposable
             return null;
         }
 
+        // Degraded sidecars answer with explicit JSON nulls ("login": null)
+        // rather than omitting the fields — TryGetProperty still matches, so
+        // the ValueKind must be checked before the typed read (a raw
+        // GetInt64/GetString on a null threw and killed the startup poll).
         return (doc.RootElement.GetProperty("ok").GetBoolean(),
-                doc.RootElement.TryGetProperty("login", out var login) ? login.GetInt64() : null,
-                doc.RootElement.TryGetProperty("server", out var server) ? server.GetString() : null);
+                doc.RootElement.TryGetProperty("login", out var login) && login.ValueKind == JsonValueKind.Number
+                    ? login.GetInt64() : null,
+                doc.RootElement.TryGetProperty("server", out var server) && server.ValueKind == JsonValueKind.String
+                    ? server.GetString() : null);
     }
 
     public async Task<Mt5Account?> GetAccountAsync(CancellationToken ct = default)
