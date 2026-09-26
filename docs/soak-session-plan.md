@@ -33,10 +33,11 @@ review) and [`mt5-bridge.md`](mt5-bridge.md) (transport).
    one symbol at 3/10 holds the whole portfolio in paper). With 4 symbols
    and a few signals per hour, expect a handful of sessions across several
    days rather than one afternoon.
-4. **Watch progress:** the FX badge shows `soak n/m`; the journal records
-   `FX_MODE "paper soak n/m on <symbol>"` every time the counter advances;
-   `python scripts/pre_go_live_check.py` reports the per-symbol n/m table
-   and which symbol is the laggard.
+4. **Watch progress:** the account bar's soak pill shows every symbol's
+   `sym n/m` (laggard first — that is the symbol holding GO LIVE back); the
+   journal records `FX_MODE "paper soak n/m on <symbol>"` every time the
+   counter advances; `python scripts/pre_go_live_check.py` reports the
+   per-symbol n/m table and which symbol is the laggard.
 5. **Leave it running:** supervisor halts (bridge down, loss cap, equity
    floor) return the engine to paper and latch until RE-ARM — treat those
    as findings, fix the cause, resume.
@@ -65,7 +66,10 @@ git push
    typed-phrase unlock rails stay armed for the real account).
 4. **Settlements are the point:** `TRADE_SETTLEMENT` entries are the
    evidence the soak reports and the alpha scorecard consume. The first
-   settled trade also unblocks the bankroll-drill issue (#44).
+   settled trade also unblocks the bankroll-drill issue (#44) — and the
+   app announces it on the webhook (`🥇 First settled FX trade`, exactly
+   once per installation), so monitoring sees the unblock without opening
+   a journal.
 5. Keep recording `soak_report.py --record docs/soak` per session — now
    with settled trades, the verdicts carry weight.
 

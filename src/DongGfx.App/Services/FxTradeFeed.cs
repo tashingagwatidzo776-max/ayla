@@ -35,6 +35,17 @@ public sealed class FxTradeFeed : IDisposable
     private string? _accountName;
     private Guid? _accountId;
     private decimal _bankroll;
+    private bool _firstFxSettlementAnnounced;
+
+    /// <summary>Optional sink for milestone notifications (Discord/Slack).
+    /// Kept as a delegate so this read-only history feed stays decoupled
+    /// from the webhook service and trivially fakeable in tests.</summary>
+    public Action<string, string, bool>? MilestoneNotifier { get; set; }
+
+    /// <summary>Whether milestone posts are enabled (the persisted
+    /// WebhookOnMilestone toggle). Null/true = enabled; a false-answering
+    /// provider silences milestone posts without touching settlements.</summary>
+    public Func<bool>? MilestonesEnabled { get; set; }
 
     public FxTradeFeed(
         Mt5BridgeClient mt5,
@@ -122,6 +133,33 @@ public sealed class FxTradeFeed : IDisposable
                 _bankroll += net;
             }
 
+            // First settled demo trade = the go/no-go evidence milestone: it
+            // is what unblocks the bankroll drill (#44) and what turns the
+            // soak reports' verdicts from "nothing settled" into real
+            // outcomes. Only a FRESH settlement announces: the feed re-ingests
+            // the venue's whole 7-day deal window on every startup, and a
+            // week-old historical import must not masquerade as the first
+            // trade of the go-live era (it must not POISON the gate either —
+            // hence an explicit MILESTONE journal marker as the once-ever
+            // record, not a bare "a settlement exists somewhere" check).
+            if (!_firstFxSettlementAnnounced
+                && (MilestonesEnabled?.Invoke() ?? true)
+                && IsFreshSettlement(deal)
+                && !IsTicketJournaled(deal.Ticket)
+                && !FirstSettlementAlreadyAnnounced())
+            {
+                _firstFxSettlementAnnounced = true;
+                _journal.Log(Guid.Empty, "MILESTONE",
+                    $"first settled FX trade announced (ticket {deal.Ticket}) — " +
+                    "bankroll drill (issue #44) unblocked", "{}");
+                MilestoneNotifier?.Invoke(
+                    "🥇 First settled FX trade",
+                    $"{trade.Symbol} {deal.Side} settled {trade.Profit:+0.##;-0.##;0} " +
+                    $"(ticket {deal.Ticket}, {_accountName ?? "MT5 demo"}) — " +
+                    "the bankroll drill (issue #44) is unblocked.",
+                    true);
+            }
+
             _tracker.RecordTrade(trade);
             _journal.LogTradeSettlement(
                 _accountId ?? Guid.Empty,
@@ -135,6 +173,52 @@ public sealed class FxTradeFeed : IDisposable
 
         _tracker.Save();
         return added;
+    }
+
+    /// <summary>How old, at ingest, a deal must be to count as a live
+    /// settlement rather than a startup import of the venue's history.
+    /// The feed polls every 2 minutes; 15 minutes is generous slack for a
+    /// poll delay plus clock skew while still excluding every deal a
+    /// restart re-imports.</summary>
+    internal static readonly TimeSpan FreshSettlementWindow = TimeSpan.FromMinutes(15);
+
+    /// <summary>True when the deal closed within the fresh window — i.e. it
+    /// was settled by the market moments ago, not imported from history.</summary>
+    private static bool IsFreshSettlement(Mt5Deal deal) =>
+        DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(deal.Time) <= FreshSettlementWindow;
+
+    /// <summary>True when this deal's ticket already sits in the journal as
+    /// a TRADE_SETTLEMENT (a restart's re-ingest of an already-recorded
+    /// settle). False on any read failure — fail toward announcing.</summary>
+    private bool IsTicketJournaled(long ticket)
+    {
+        try
+        {
+            var needle = $"\"ContractId\":\"{ticket}\"";
+            return _journal.GetRecent(count: 10000)
+                .Any(e => e.Category == "TRADE_SETTLEMENT" && e.Details.Contains(needle, StringComparison.Ordinal));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>True once the first-settlement milestone has EVER fired —
+    /// the MILESTONE journal entry written at announce time is the once-per-
+    /// installation record. History imports never write it, so they can
+    /// neither trigger nor suppress the genuine first live settlement.</summary>
+    private bool FirstSettlementAlreadyAnnounced()
+    {
+        try
+        {
+            return _journal.GetRecent(count: 10000)
+                .Any(e => e.Category == "MILESTONE" && e.Details.Contains("first settled FX trade"));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task EnsureAccountAsync(CancellationToken ct)

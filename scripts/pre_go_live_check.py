@@ -7,7 +7,7 @@ verifies each item of the go-live checklist in docs/m3-go-live-readiness.md:
 
   1. Safety caps fail-closed  (settings.json)
   2. Sidecar healthy          (GET http://127.0.0.1:<port>/health)
-  3. Soak progress            (journal FX_MODE/BRAIN_DECISION categories)
+  3. Soak progress            (journal FX_DECISION/FX_SIGNAL categories)
   4. Soak evidence fresh      (docs/soak/ — reuses the freshness rules)
   5. Webhook reachable        (settings.json URL, POST-free probe)
 
@@ -191,9 +191,14 @@ def check_soak_progress(data_dir, signals_required=10):
     soak bar itself (PaperSoakSignalsRequired) is 10 per symbol.
     GO LIVE is all-or-nothing across symbols, so the worst symbol decides."""
     categories, fx_symbols, first_ts, last_ts = read_journal_entries(data_dir)
-    decisions = categories.get("BRAIN_DECISION", 0)
+    # The FX brain journals FX_DECISION (never BRAIN_DECISION - that older
+    # category belongs to the retired binary surface); FX_SIGNAL rows are
+    # its per-symbol signal record. Either proves the brain has produced a
+    # decision; neither does means it has never run.
+    decisions = sum(categories.get(c, 0) for c in ("FX_DECISION", "BRAIN_DECISION"))
+    signals_seen = sum(categories.get(c, 0) for c in ("FX_SIGNAL", "FX_DECISION", "BRAIN_DECISION"))
     if decisions == 0:
-        return False, "journal has 0 BRAIN_DECISION entries - the brain has never produced a signal (start the FX brain in paper mode)"
+        return False, "journal has 0 FX_DECISION entries - the FX brain has never produced a decision (start the FX brain in paper mode)"
 
     signal_counts = dict(fx_symbols.get("FX_SIGNAL", {}))
     signal_counts.pop("", None)   # unparseable Details rows
@@ -205,7 +210,7 @@ def check_soak_progress(data_dir, signals_required=10):
         if mode_counts:
             signal_counts = mode_counts
         else:
-            return True, (f"{decisions} BRAIN_DECISION entries journaled; no per-symbol "
+            return True, (f"{signals_seen} FX decision/signal entries journaled; no per-symbol "
                           f"FX_SIGNAL rows yet (legacy journal) - watch the FX badge for soak n/m")
 
     per_symbol = ", ".join(
