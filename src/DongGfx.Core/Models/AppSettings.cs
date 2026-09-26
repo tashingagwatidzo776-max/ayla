@@ -120,6 +120,12 @@ public sealed class AppSettings
     /// weights). State lives under %LOCALAPPDATA%\tf\ai\.</summary>
     public bool AnalystMemoryEnabled { get; set; } = true;
 
+    /// <summary>AI risk narrator (docs/ai-agent-program.md agent 2): when
+    /// the FX supervisor halts, an LLM explains what happened on the webhook
+    /// within seconds. Pure journal subscriber — it can never re-arm, clear
+    /// or influence a halt.</summary>
+    public bool RiskNarratorEnabled { get; set; } = true;
+
     // ── Logging ────────────────────────────────────────────────────
     /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>
     public int LogLevel { get; set; } = 1;

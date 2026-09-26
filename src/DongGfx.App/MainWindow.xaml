@@ -370,8 +370,10 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                         <StackPanel Grid.Row="39" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
                             <CheckBox Content="Narrative digest" IsChecked="{Binding SettingsVm.AnalystEnabled}" Margin="0,0,16,0"
                                       ToolTip="Periodic 🤖 journal narrative posted to the webhook (default every 6h)." />
-                            <CheckBox Content="Prediction memory" IsChecked="{Binding SettingsVm.AnalystMemoryEnabled}"
+                            <CheckBox Content="Prediction memory" IsChecked="{Binding SettingsVm.AnalystMemoryEnabled}" Margin="0,0,16,0"
                                       ToolTip="The analyst records what it expects next cycle and is graded against what actually happened (weights stay frozen)." />
+                            <CheckBox Content="Halt narrator" IsChecked="{Binding SettingsVm.RiskNarratorEnabled}"
+                                      ToolTip="When the FX supervisor halts, an AI explanation posts to the webhook within seconds. Read-only: it can never re-arm or influence the halt." />
                         </StackPanel>
 
                         <TextBlock Grid.Row="37" Grid.ColumnSpan="2" Text="APPEARANCE" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />

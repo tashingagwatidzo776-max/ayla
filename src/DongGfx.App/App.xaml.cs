@@ -119,6 +119,14 @@ public partial class App : System.Windows.Application
         services.AddSingleton(sp => new JournalAnalystService(
             sp.GetRequiredService<TradeJournal>(),
             sp.GetRequiredService<WebhookService>()));
+
+        // AI agent 2: the risk narrator. Subscribes to the journal's
+        // EntryAdded stream and explains FX supervisor halts on the webhook
+        // within seconds. Pure observer — it holds no reference to the
+        // supervisor or any order path and can never re-arm a halt.
+        services.AddSingleton(sp => new RiskNarratorService(
+            sp.GetRequiredService<TradeJournal>(),
+            sp.GetRequiredService<WebhookService>()));
         services.AddSingleton(sp => new TerminalViewModel(
             () => sp.GetRequiredService<SettingsViewModel>().BuildSettings(),
             persist: () => _ = sp.GetRequiredService<SettingsViewModel>().SaveSettingsQuietAsync(),
@@ -273,6 +281,10 @@ public partial class App : System.Windows.Application
         analyst.MemoryEnabledToggle = () => settingsFactory().AnalystMemoryEnabled;
         analyst.Start();
 
+        // The risk narrator is event-driven (no Start); wire its live toggle.
+        provider.GetRequiredService<RiskNarratorService>().NarratorEnabledToggle =
+            () => settingsFactory().RiskNarratorEnabled;
+
         // Unlock-staleness alert: an armed session unlock past the
         // configured threshold journals REAL_MONEY_UNLOCK_STALE + toast +
         // webhook (the rail the removed hub used to own).
@@ -301,6 +313,7 @@ public partial class App : System.Windows.Application
             Ioc.Default.GetService<UnlockStalenessMonitor>(),
             Ioc.Default.GetService<MetricsDigestService>(),
             Ioc.Default.GetService<JournalAnalystService>(),
+            Ioc.Default.GetService<RiskNarratorService>(),
             Ioc.Default.GetService<TickArchive>()
         ];
 
