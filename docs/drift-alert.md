@@ -141,3 +141,29 @@ workflow (either leg can be deselected).
    body plus history tells the whole story.
 6. An open alert that goes quiet for 48h gets flagged by the watchdog;
    silence is itself a finding, never a pass.
+
+## Flake tracking (fail-then-pass visibility)
+
+The unit job's one automatic retry (the flake guard) keeps timing noise
+from blocking a PR — but it also hides real failures: a test that fails
+attempt 1 and passes attempt 2 turns the run green and the failure exists
+only inside one log file nobody opens.
+
+`scripts/flake_tracker.py` closes that blind spot. It scans the recent CI
+runs on `main`, pulls each unit job's full log, splits it at the retry
+marker into per-attempt failure sets, and classifies:
+
+- **hidden retry** — failed attempt 1, absent from attempt 2, run green
+  (only visible here);
+- **cross-run flake** — failed in an older run, passed in a newer one;
+- **chronic** — at least `--threshold` (default 3) failed attempts in the
+  window.
+
+Run it ad hoc (`python scripts/flake_tracker.py --runs 20 --update-issue`)
+or from a scheduled workflow: the report lands as a comment on a
+`ci-flakes`-labeled issue (created on first post), so chronic flakes
+accumulate an audit trail instead of hiding behind the retry guard. The
+scan is deliberately **not a gate** — a tracker that blocks would itself
+become a second gate to flake. Chronic findings are triaged like any
+drift: fix the test's timing assumptions, or quarantine the case with a
+narrative until it is deterministic.

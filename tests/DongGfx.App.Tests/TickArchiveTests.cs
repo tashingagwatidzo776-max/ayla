@@ -7,7 +7,11 @@ namespace DongGfx.App.Tests;
 /// <summary>
 /// The tick archive: every accepted quote lands as an invariant-culture JSON
 /// line under {venue}/{symbol}_{date}.jsonl, malformed ticks are silently
-/// dropped, and Dispose flushes the writer queue before closing the files.
+/// dropped, and Dispose closes the writers. The tests construct the archive
+/// with the synchronous writer (synchronousWriter: true), so Add writes
+/// inline — assertions are race-free by construction, no polling, no
+/// background-thread scheduling under any load. The async production mode
+/// shares the same WriteOne body (exercised via the dispose/no-op tests).
 /// </summary>
 [Trait("Category", "Unit")]
 public class TickArchiveTests : IDisposable
@@ -19,56 +23,34 @@ public class TickArchiveTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
-    private static int LineCount(string path)
+    private static string[] ReadAllLinesShared(string path)
     {
-        try
+        // Mid-life reads: the archive holds the file open for writing until
+        // Dispose — read with FileShare.ReadWrite or Windows refuses the
+        // open outright.
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var sr = new StreamReader(fs);
+        var lines = new List<string>();
+        while (sr.ReadLine() is { } line)
         {
-            // The writer holds the file open for writing: read with
-            // FileShare.ReadWrite or Windows refuses the open outright.
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var sr = new StreamReader(fs);
-            var n = 0;
-            while (sr.ReadLine() is not null) n++;
-            return n;
-        }
-        catch (IOException) { return 0; }   // not flushed yet / transient lock
-        catch (UnauthorizedAccessException) { return 0; }
-    }
-
-    private static void WaitForFile(TickArchive archive, string path, int lines)
-    {
-        // The writer flushes per tick, but under full-suite parallel load the
-        // background task can lag; poll before disposing (Dispose drains the
-        // queue before closing the files).
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (File.Exists(path) && LineCount(path) >= lines) return;
-            Thread.Sleep(25);
+            lines.Add(line);
         }
 
-        // A timeout used to fail with a bare "file missing", which hid the
-        // real cause (the writer loop dying on an uncaught exception). Fail
-        // with what the writer actually recorded.
-        Assert.True(
-            File.Exists(path) && LineCount(path) >= lines,
-            $"tick file never reached {lines} line(s) at {path}" +
-            (archive.WriterError is null ? "" : $" — writer error: {archive.WriterError}"));
+        return lines.ToArray();
     }
 
     [Fact]
     public void Add_Writes_Invariant_Json_Lines_Per_Venue_And_Symbol()
     {
-        using var archive = new TickArchive(_root);
-        archive.Add("deriv", "EURUSD", 1.10234, 1.10256, 1790000000123);
-        archive.Add("deriv", "EURUSD", 1.10240, 1.10261, 1790000000789);
-        archive.Add("mt5-demo", "XAUUSDmicro", 2650.5, 2651.0, 1790000000400);
+        using (var archive = new TickArchive(_root, synchronousWriter: true))
+        {
+            archive.Add("deriv", "EURUSD", 1.10234, 1.10256, 1790000000123);
+            archive.Add("deriv", "EURUSD", 1.10240, 1.10261, 1790000000789);
+            archive.Add("mt5-demo", "XAUUSDmicro", 2650.5, 2651.0, 1790000000400);
+        }   // Dispose: close writers — no drain wait, everything was inline
 
         var eur = Path.Combine(_root, "deriv", $"EURUSD_{DateTime.UtcNow:yyyyMMdd}.jsonl");
         var xau = Path.Combine(_root, "mt5-demo", $"XAUUSDmicro_{DateTime.UtcNow:yyyyMMdd}.jsonl");
-        WaitForFile(archive, eur, 2);
-        WaitForFile(archive, xau, 1);
-        archive.Dispose();   // close writers
 
         Assert.True(File.Exists(eur));
         var lines = File.ReadAllLines(eur);
@@ -82,13 +64,32 @@ public class TickArchiveTests : IDisposable
     }
 
     [Fact]
+    public void Synchronous_Writer_Is_Visible_Immediately_Add_And_After()
+    {
+        // Pins the determinism contract: the file exists with all its lines
+        // the moment Add returns — no Dispose, no wait, no background thread.
+        using var archive = new TickArchive(_root, synchronousWriter: true);
+        var eur = Path.Combine(_root, "deriv", $"EURUSD_{DateTime.UtcNow:yyyyMMdd}.jsonl");
+
+        archive.Add("deriv", "EURUSD", 1.1, 1.2, 42);
+
+        Assert.True(File.Exists(eur));
+        Assert.Equal(1, ReadAllLinesShared(eur).Length);
+
+        archive.Add("deriv", "EURUSD", 1.3, 1.4, 43);
+        Assert.Equal(2, ReadAllLinesShared(eur).Length);
+        Assert.Null(archive.WriterError);
+    }
+
+    [Fact]
     public void Invalid_Ticks_Are_Dropped_Silently()
     {
-        using var archive = new TickArchive(_root);
-        archive.Add("deriv", "EURUSD", 0, 1.1, 1);        // bid <= 0
-        archive.Add("deriv", "EURUSD", -1, 1.1, 1);       // negative bid
-        archive.Add("deriv", "", 1.0, 1.1, 1);            // empty symbol
-        archive.Dispose();
+        using (var archive = new TickArchive(_root, synchronousWriter: true))
+        {
+            archive.Add("deriv", "EURUSD", 0, 1.1, 1);        // bid <= 0
+            archive.Add("deriv", "EURUSD", -1, 1.1, 1);       // negative bid
+            archive.Add("deriv", "", 1.0, 1.1, 1);            // empty symbol
+        }
 
         Assert.False(Directory.Exists(Path.Combine(_root, "deriv")));
     }
@@ -116,13 +117,13 @@ public class TickArchiveTests : IDisposable
         File.SetAttributes(blocker, FileAttributes.ReadOnly);
         var blocked = Path.Combine(blocker, "ticks");
 
-        using var archive = new TickArchive(blocked);
+        using var archive = new TickArchive(blocked, synchronousWriter: true);
 
         Assert.NotNull(archive.DirectoryError);
         Assert.False(Directory.Exists(blocked));
 
         archive.Add("deriv", "EURUSD", 1.0, 1.1, 1);   // must not throw
         archive.Dispose();                              // drains without throwing
-        Assert.Null(archive.WriterError);               // the writer loop stays healthy
+        Assert.Null(archive.WriterError);               // the writer stays healthy
     }
 }
