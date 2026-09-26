@@ -187,7 +187,7 @@ public partial class App : System.Windows.Application
                     ? $"halt:{portfolio.Supervisor.HaltReason}"
                     : "clear";
                 parts.Add($"FX brain {mode} on {string.Join("+", portfolio.Symbols)} " +
-                          $"soak {portfolio.PaperSignalsSeen}/{portfolio.PaperSignalsSeen} {halt}");
+                          $"soak {portfolio.PaperSignalsSeen}/{portfolio.PaperSoakSignalsRequired} {halt}");
             }
 
             if (scorecard.LastSummary is { } sc)

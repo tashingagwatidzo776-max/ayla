@@ -218,4 +218,25 @@ public class FxPortfolioTests
         Assert.Equal(0, p.PaperSignalsSeen);
         p.Dispose();
     }
+
+    [Fact]
+    public void Soak_Counter_Rule_Signal_In_Paper_Counts_Live_Does_Not()
+    {
+        // Pins the soak rule: an alpha signal in PAPER advances the counter
+        // (that is what GO LIVE demands evidence of); in LIVE the order path
+        // is the proof, so the counter must not move.
+        FxSignal signal = new("Momentum", FxDirection.Buy, 0.9, 0.0010, "test", 0);
+        Assert.True(FxEngineHost.CountsTowardSoak(
+            new FxDecision(0, null!, signal, FxDecisionAction.Paper, 0.01, "paper mode"),
+            engineIsLive: false));
+        Assert.True(FxEngineHost.CountsTowardSoak(
+            new FxDecision(0, null!, signal, FxDecisionAction.Ordered, 0.01, "live"),
+            engineIsLive: false));
+        Assert.False(FxEngineHost.CountsTowardSoak(
+            new FxDecision(0, null!, signal, FxDecisionAction.Ordered, 0.01, "live"),
+            engineIsLive: true));
+        Assert.False(FxEngineHost.CountsTowardSoak(
+            new FxDecision(0, null!, null, FxDecisionAction.NoSignal, 0, "nothing"),
+            engineIsLive: false));
+    }
 }
