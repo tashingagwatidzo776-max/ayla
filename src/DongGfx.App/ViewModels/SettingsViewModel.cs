@@ -44,6 +44,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool metricsDigestEnabled = true;
 
     [ObservableProperty]
+    private bool analystEnabled = true;
+
+    [ObservableProperty]
+    private bool analystMemoryEnabled = true;
+
+    [ObservableProperty]
+    private bool riskNarratorEnabled = true;
+
+    [ObservableProperty]
     private int metricsDigestIntervalHours = 6;
 
     /// <summary>Hours an unlock may stay armed before the staleness alert
@@ -178,6 +187,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnCircuitBreaker = settings.WebhookOnCircuitBreaker;
         MetricsDigestEnabled = settings.MetricsDigestEnabled;
         MetricsDigestIntervalHours = settings.MetricsDigestIntervalHours;
+        AnalystEnabled = settings.AnalystEnabled;
+        AnalystMemoryEnabled = settings.AnalystMemoryEnabled;
+        RiskNarratorEnabled = settings.RiskNarratorEnabled;
         ArmStalenessHours = settings.ArmStalenessHours;
         LogLevel = settings.LogLevel;
         StatusMessage = "Settings loaded.";
@@ -208,6 +220,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         WebhookOnCircuitBreaker = WebhookOnCircuitBreaker,
         MetricsDigestEnabled = MetricsDigestEnabled,
         MetricsDigestIntervalHours = Math.Clamp(MetricsDigestIntervalHours, 1, 168),
+        AnalystEnabled = AnalystEnabled,
+        AnalystMemoryEnabled = AnalystMemoryEnabled,
+        RiskNarratorEnabled = RiskNarratorEnabled,
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         LogLevel = LogLevel
     };

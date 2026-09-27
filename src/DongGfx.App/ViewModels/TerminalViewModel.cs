@@ -139,6 +139,8 @@ public sealed partial class TerminalViewModel : ObservableObject
             host.Stop();
             FxBadge = "FX BRAIN: OFF";
             FxStatusText = "engine stopped";
+            FxSoakBadge = "";   // the pill must not outlive a stopped brain
+            _lastSoakSeen = -1;
             return;
         }
 
@@ -154,6 +156,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         _fxHost.Start();
         FxBadge = "FX BRAIN: PAPER";
         FxStatusText = $"engine running on {string.Join(", ", _fxHost.Symbols)} (paper mode)";
+        UpdateFxSoakBadge();
     }
 
     [RelayCommand]
@@ -167,7 +170,12 @@ public sealed partial class TerminalViewModel : ObservableObject
 
         if (!host.PaperSoakComplete)
         {
-            FxStatusText = $"go-live refused — paper soak {host.PaperSignalsSeen}/{host.PaperSoakSignalsRequired} signals";
+            // Name the laggards: with all-or-nothing go-live, the aggregate
+            // n/m hides WHICH symbol is still short of its bar.
+            var laggards = string.Join(", ", host.SoakLaggards
+                .Select(h => $"{h.Symbol} {h.PaperSignalsSeen}/{h.PaperSoakSignalsRequired}"));
+            FxStatusText = $"go-live refused — paper soak {host.PaperSignalsSeen}/{host.PaperSoakSignalsRequired}; waiting on: {laggards}";
+            UpdateFxSoakBadge();
             return;
         }
 
@@ -194,6 +202,8 @@ public sealed partial class TerminalViewModel : ObservableObject
 
         _fxHost = null;
         FxBadge = "FX BRAIN: OFF";
+        _lastSoakSeen = -1;
+        FxSoakBadge = "";
     }
 
     [RelayCommand]
@@ -251,6 +261,62 @@ public sealed partial class TerminalViewModel : ObservableObject
     }
 
     private void StatusChangedInternal(string message) => OnUiThread(() => FxStatusText = message);
+
+    // ── FX soak badge: per-symbol progress on the account bar ──────
+
+    /// <summary>Per-symbol paper-soak progress, laggard first, shown next to
+    /// the FX BRAIN badge while the brain runs. GO LIVE is all-or-nothing
+    /// across symbols, so the laggard is the number that matters — the
+    /// aggregate n/m hid it. Empty string (the XAML pill collapses) while
+    /// the brain is stopped.</summary>
+    [ObservableProperty]
+    private string fxSoakBadge = "";
+
+    /// <summary>Rebuild the soak badge from live host state. Never throws;
+    /// clears the badge when there is no running host. Any thread (routed
+    /// through OnUiThread by its callers).</summary>
+    private void UpdateFxSoakBadge()
+    {
+        try
+        {
+            var host = _fxHost;
+            FxSoakBadge = host is { } h && h.IsRunning && h.Symbols.Count > 0
+                ? string.Join(" ", h.Hosts
+                    .OrderBy(hh => hh.PaperSignalsSeen)                    // laggard first
+                    .ThenBy(hh => hh.Symbol, StringComparer.OrdinalIgnoreCase)
+                    .Select(hh => $"{hh.Symbol} {hh.PaperSignalsSeen}/{hh.PaperSoakSignalsRequired}"))
+                : "";
+        }
+        catch
+        {
+            // A badge is never worth an exception — keep the last value.
+        }
+    }
+
+    /// <summary>Timer hook: refresh the soak badge cheaply and only when a
+    /// counter could have moved. The badge never changes from the 3 s poll
+    /// itself (the engine cycles on its own 60 s timer), so one compare per
+    /// tick is all the UI work. Internal: tests drive it directly.</summary>
+    internal void RefreshFxSoakBadgeIfRunning()
+    {
+        if (_fxHost is not { } h || !h.IsRunning)
+        {
+            return;
+        }
+
+        var seen = h.PaperSignalsSeen;
+        if (seen != _lastSoakSeen)
+        {
+            _lastSoakSeen = seen;
+            UpdateFxSoakBadge();
+        }
+    }
+
+    private int _lastSoakSeen = -1;
+
+    /// <summary>Resets the soak-badge change detector (account switch). Test
+    /// seam not needed: UpdateFxSoakBadge is idempotent.</summary>
+    private void ResetFxSoakBadgeTracking() => _lastSoakSeen = -1;
 
     // ── Terminal sign-in (A2): MT5 bridge status in the sign-in band ──
 
@@ -310,7 +376,11 @@ public sealed partial class TerminalViewModel : ObservableObject
         // GET), and a 30 s full-watchlist refresh. UI updates ride the
         // OnUiThread path (pump-free); no fixed 3 s polling of everything.
         _mt5PollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        _mt5PollTimer.Tick += async (_, _) => await PollMt5Async().ConfigureAwait(true);
+        _mt5PollTimer.Tick += async (_, _) =>
+        {
+            await PollMt5Async().ConfigureAwait(true);
+            OnUiThread(RefreshFxSoakBadgeIfRunning);
+        };
 
         _mt5QuoteTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _mt5QuoteTimer.Tick += async (_, _) => await RefreshMt5QuotesAsync().ConfigureAwait(true);

@@ -6,6 +6,7 @@ install and starts it when needed; the MetaTrader5 package cannot launch
 one) and serves a small JSON API on 127.0.0.1 only:
 
     GET  /health                 liveness + attached account snapshot
+                                 (re-attaches when the terminal dropped)
     GET  /account                balance/equity/margin/currency/leverage/login
     GET  /ticks/{symbol}         last bid/ask/time
     GET  /book/{symbol}          DOM levels (Deriv streams none -> client falls back)
@@ -120,12 +121,44 @@ def _filling_mode(symbol_info: Any) -> int:
 class BridgeHandlers:
     """Endpoint logic, transport-free: tests drive this with a fake facade."""
 
-    def __init__(self, facade: Any) -> None:
+    # /health re-attaches at most this often (the app polls every few
+    # seconds; mt5.initialize is a heavyweight IPC handshake, not a poll).
+    REATTACH_COOLDOWN_S = 30.0
+
+    def __init__(self, facade: Any, reattach: Any = None) -> None:
         self._m = facade
+        # Optional recovery hook (production: attach() again). None keeps
+        # the old behavior — reads only, never re-attaches.
+        self._reattach = reattach
+        self._last_attach_try = 0.0
 
     # ── reads ──────────────────────────────────────────────────────
 
+    def _ensure_attached(self) -> None:
+        """attach() is a one-shot at startup, so a terminal that finished
+        booting (or reconnected) after the sidecar left the sidecar
+        permanently detached. /health is the app's first poll of every
+        cycle, so it is the right place to retry — throttled, and any
+        failure here only leaves the degraded snapshot, never raises."""
+        if self._reattach is None:
+            return
+        try:
+            term = self._m.terminal_info()
+        except Exception:  # noqa: BLE001 — the facade failing must not kill /health
+            return
+        if getattr(term, "connected", False):
+            return
+        now = time.monotonic()
+        if now - self._last_attach_try < self.REATTACH_COOLDOWN_S:
+            return
+        self._last_attach_try = now
+        try:
+            self._reattach()
+        except Exception:  # noqa: BLE001
+            pass
+
     def health(self) -> dict:
+        self._ensure_attached()
         acc = self._m.account_info()
         term = self._m.terminal_info()
         return {
@@ -668,7 +701,11 @@ def main() -> int:
         return 1
     acc = mt5.account_info()
     print(f"attached: {acc.login} @ {acc.server} ({acc.balance} {acc.currency})")
-    server = SidecarServer(BridgeHandlers(mt5), port)
+    # /health re-attaches (throttled) when the terminal shows up late or
+    # drops — startup attach no longer has to win a race with MT5 booting.
+    handlers = BridgeHandlers(
+        mt5, reattach=lambda: attach(retries=2, delay=1.0, terminal_path=terminal_path))
+    server = SidecarServer(handlers, port)
     print(f"sidecar listening on http://127.0.0.1:{server.port} (loopback only)")
     try:
         server.serve_forever()

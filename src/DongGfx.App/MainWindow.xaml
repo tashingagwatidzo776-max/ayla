@@ -242,10 +242,7 @@
                             <RowDefinition Height="Auto" />  <!-- 9 AUTONOMY -->
                             <RowDefinition Height="Auto" />  <!-- 10 Autonomy -->
                             <RowDefinition Height="Auto" />  <!-- 11 Decision interval -->
-                            <RowDefinition Height="Auto" />  <!-- 12 LLM BRAIN -->
-                            <RowDefinition Height="Auto" />  <!-- 13 Base URL -->
-                            <RowDefinition Height="Auto" />  <!-- 14 Model -->
-                            <RowDefinition Height="Auto" />  <!-- 15 API key -->
+                            <RowDefinition Height="Auto" />  <!-- 12–15 removed with the Deriv surface -->
                             <RowDefinition Height="Auto" />  <!-- 16 MARKET HOURS -->
                             <RowDefinition Height="Auto" />  <!-- 17 Respect hours -->
                             <RowDefinition Height="Auto" />  <!-- 18 Overlaps only -->
@@ -267,6 +264,7 @@
                             <RowDefinition Height="Auto" />  <!-- 34 Portfolio max lots -->
                             <RowDefinition Height="Auto" />  <!-- 35 News blackout -->
                             <RowDefinition Height="Auto" />  <!-- 36 MT5 terminal path -->
+                            <RowDefinition Height="Auto" />  <!-- 39 AI analyst -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -367,6 +365,17 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                  Text="{Binding SettingsVm.Mt5TerminalPath, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center"
                                  ToolTip="C:/Program Files/MetaTrader 5 Terminal/terminal64.exe — leave empty to auto-discover." />
 
+                        <TextBlock Grid.Row="39" Grid.Column="0" Text="AI analyst" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="Read-only AI agent (docs/ai-agent-program.md): posts a journal narrative to the webhook, narrated by the local LLM (Ollama/Qwen3) when available. It never trades." />
+                        <StackPanel Grid.Row="39" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <CheckBox Content="Narrative digest" IsChecked="{Binding SettingsVm.AnalystEnabled}" Margin="0,0,16,0"
+                                      ToolTip="Periodic 🤖 journal narrative posted to the webhook (default every 6h)." />
+                            <CheckBox Content="Prediction memory" IsChecked="{Binding SettingsVm.AnalystMemoryEnabled}" Margin="0,0,16,0"
+                                      ToolTip="The analyst records what it expects next cycle and is graded against what actually happened (weights stay frozen)." />
+                            <CheckBox Content="Halt narrator" IsChecked="{Binding SettingsVm.RiskNarratorEnabled}"
+                                      ToolTip="When the FX supervisor halts, an AI explanation posts to the webhook within seconds. Read-only: it can never re-arm or influence the halt." />
+                        </StackPanel>
+
                         <TextBlock Grid.Row="37" Grid.ColumnSpan="2" Text="APPEARANCE" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
                         <TextBlock Grid.Row="38" Grid.Column="0" Text="Theme" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
                                    ToolTip="Classic mimics the original MetaTrader 5 gray; Dark is the modern default. Applies immediately." />
@@ -413,6 +422,13 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                 <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
                                         ToolTip="The forex brain: regime detection + momentum/mean-reversion families on MT5. Paper mode journals signals only; go-live needs the paper soak first.">
                                     <TextBlock Text="{Binding FxBadge}" FontWeight="Bold" FontSize="11" />
+                                </Border>
+                                <!-- per-symbol paper soak: laggard symbol first, so the
+                                     one holding GO LIVE back is always the visible one -->
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
+                                        ToolTip="Per-symbol paper-soak progress (n/m signals). GO LIVE needs EVERY symbol at its bar — the laggard is shown first.">
+                                    <TextBlock Text="{Binding FxSoakBadge}" FontFamily="Consolas" FontSize="11"
+                                               Foreground="{StaticResource TextSecondaryBrush}" />
                                 </Border>
                                 <Button Content="FX BRAIN ON/OFF" Command="{Binding ToggleFxBrainCommand}"
                                         Margin="0,0,6,0" />

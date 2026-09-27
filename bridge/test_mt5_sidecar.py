@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,16 +74,20 @@ class FakeMT5:
         self.sent: list[dict] = []
         self.deal_ranges: list[tuple] = []
         self._next_ticket = 900000
+        self.terminal_connected = True
+        self.reattach_calls = 0
 
     # terminal reads ------------------------------------------------
     def account_info(self):
+        if not self.terminal_connected:
+            return None
         return SimpleNamespace(
             login=201587365, server="Deriv-Demo", currency="USD",
             balance=2610.55, equity=2610.55, margin=0.0, margin_free=2610.55,
             leverage=1000, trade_mode=0)
 
     def terminal_info(self):
-        return SimpleNamespace(connected=True, name="MetaTrader 5 Terminal")
+        return SimpleNamespace(connected=self.terminal_connected, name="MetaTrader 5 Terminal")
 
     def symbol_select(self, symbol, enable=True):
         return symbol in ("XAUUSDmicro", "EURUSD")
@@ -428,6 +433,63 @@ def test_candles_accept_all_21_timeframes():
 
 
 # ── the real loopback server, end to end ──────────────────────────────
+
+# ── /health re-attach (the sidecar must recover a terminal that shows up
+# late — attach() at startup is a one-shot race against MT5 booting) ────
+
+def test_health_reattaches_when_terminal_shows_up_late():
+    fake = FakeMT5()
+    fake.terminal_connected = False   # sidecar lost the boot race
+    h = sidecar.BridgeHandlers(fake, reattach=lambda: setattr(fake, "terminal_connected", True))
+    out = h.health()
+    assert fake.reattach_calls == 0   # recovery hook owns the counter
+    assert out["ok"] is True and out["terminal_connected"] is True
+
+
+def test_health_reattach_is_throttled():
+    fake = FakeMT5()
+    fake.terminal_connected = False
+    h = sidecar.BridgeHandlers(fake, reattach=lambda: None)
+    h._reattach = lambda: setattr(h, "_tries", getattr(h, "_tries", 0) + 1)
+    h.health()
+    h.health()   # same instant: cooldown must suppress the second try
+    assert getattr(h, "_tries", 0) == 1
+    h._last_attach_try = time.monotonic() - h.REATTACH_COOLDOWN_S - 1
+    h.health()   # cooldown expired: retry allowed again
+    assert getattr(h, "_tries", 0) == 2
+
+
+def test_health_reattach_skipped_while_terminal_connected():
+    fake = FakeMT5()   # connected=True by default
+    tries = []
+    h = sidecar.BridgeHandlers(fake, reattach=lambda: tries.append(1))
+    h.health()
+    h.health()
+    assert tries == [] and h.health()["ok"] is True
+
+
+def test_health_reattach_failure_degrades_without_raising():
+    fake = FakeMT5()
+    fake.terminal_connected = False
+
+    def boom():
+        raise RuntimeError("initialize IPC timeout")
+
+    h = sidecar.BridgeHandlers(fake, reattach=boom)
+    out = h.health()   # must return the degraded snapshot, never raise
+    assert out["ok"] is False and out["terminal_connected"] is False
+    assert out["login"] is None and out["server"] is None
+
+
+def test_health_without_reattach_hook_stays_read_only():
+    """Regression: the pre-existing constructor keeps the old behavior —
+    a disconnected terminal reads as degraded, no recovery attempted."""
+    fake = FakeMT5()
+    fake.terminal_connected = False
+    h = sidecar.BridgeHandlers(fake)
+    out = h.health()
+    assert out["ok"] is False and out["login"] is None
+
 
 # ── POST /login (in-terminal account switching) ────────────────────
 

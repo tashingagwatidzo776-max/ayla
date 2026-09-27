@@ -108,6 +108,24 @@ public sealed class AppSettings
     /// but every other rail still applies.</summary>
     public int ArmStalenessHours { get; set; } = 4;
 
+    /// <summary>Periodic AI journal-analyst narrative to the webhook
+    /// (docs/ai-agent-program.md agent 1). Read-only agent: it narrates the
+    /// journal, it never trades. Off silences the JournalAnalystService
+    /// timer entirely (no LLM calls, no posts).</summary>
+    public bool AnalystEnabled { get; set; } = true;
+
+    /// <summary>Prediction-memory loop for the analyst: each cycle records
+    /// what it expects next and the next cycle mechanically grades it
+    /// against the journal (the guarded type-7 "learning" — context, never
+    /// weights). State lives under %LOCALAPPDATA%\tf\ai\.</summary>
+    public bool AnalystMemoryEnabled { get; set; } = true;
+
+    /// <summary>AI risk narrator (docs/ai-agent-program.md agent 2): when
+    /// the FX supervisor halts, an LLM explains what happened on the webhook
+    /// within seconds. Pure journal subscriber — it can never re-arm, clear
+    /// or influence a halt.</summary>
+    public bool RiskNarratorEnabled { get; set; } = true;
+
     // ── Logging ────────────────────────────────────────────────────
     /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>
     public int LogLevel { get; set; } = 1;

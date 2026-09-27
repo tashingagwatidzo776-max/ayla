@@ -159,4 +159,138 @@ public class FxTradeFeedTests
         feed.Start(TimeSpan.FromHours(1));
         feed.Dispose();
     }
+
+    // ── first settled FX trade milestone (issue #44 unblock) ──────────
+
+    /// <summary>Epoch seconds <paramref name="ageSec"/> ago — inside the
+    /// fresh window when small, a historical import when large.</summary>
+    private static long Ago(int ageSec) =>
+        DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ageSec;
+
+    [Fact]
+    public async Task First_Settlement_Announces_Once_And_Second_Settlement_Is_Silent()
+    {
+        var milestones = new List<(string Title, string Body, bool Progress)>();
+        var (feed, fake, _, journal) = NewFeed();
+        feed.MilestoneNotifier = (t, b, p) => milestones.Add((t, b, p));
+        fake.Route("deals", "{\"deals\": [" +
+            Deal(101, 12.5, -2.0, -0.5, Ago(60)) + "," +    // first: net +10, fresh
+            Deal(202, -20.0, 0.0, -1.0, Ago(120)) +         // second: net -21, fresh
+            "]}");
+
+        var added = await feed.RefreshAsync();
+
+        Assert.Equal(2, added);
+        var (title, body, progress) = Assert.Single(milestones);
+        Assert.Contains("First settled FX trade", title);
+        Assert.Contains("XAUUSDmicro", body);
+        Assert.Contains("#44", body);
+        Assert.True(progress);
+
+        // Idempotent on re-poll too (ticket dedup must not re-alarm).
+        Assert.Equal(0, await feed.RefreshAsync());
+        Assert.Single(milestones);
+
+        journal.Flush();
+        Assert.Equal(2, journal.GetRecent(count: 50).Count(e => e.Category == "TRADE_SETTLEMENT"));
+        Assert.Single(journal.GetRecent(count: 50), e => e.Category == "MILESTONE");
+    }
+
+    [Fact]
+    public async Task Historical_Import_Never_Announces_The_First_Settlement()
+    {
+        // Startup re-ingests the venue's whole 7-day deal window; a week-old
+        // settle must not masquerade as the first trade of the go-live era.
+        var milestones = new List<string>();
+        var (feed, fake, _, _) = NewFeed();
+        feed.MilestoneNotifier = (t, _, _) => milestones.Add(t);
+        fake.Route("deals", "{\"deals\": [" +
+            Deal(333, 9.0, 0.0, 0.0, Ago(3 * 24 * 3600)) +  // 3 days old
+            "]}");
+
+        var added = await feed.RefreshAsync();
+
+        Assert.Equal(1, added);          // recorded as a settlement
+        Assert.Empty(milestones);        // ... but NOT announced as the first
+        feed.Dispose();
+
+        // And the gate stays armed: a genuinely fresh settle afterwards
+        // (new ticket) must still announce.
+        var (feed2, fake2, _, journal2) = NewFeed();
+        feed2.MilestoneNotifier = (t, _, _) => milestones.Add(t);
+        fake2.Route("deals", "{\"deals\": [" + Deal(334, -2.0, 0.0, 0.0, Ago(30)) + "]}");
+
+        Assert.Equal(1, await feed2.RefreshAsync());
+        var title = Assert.Single(milestones);
+        Assert.Contains("First settled FX trade", title);
+        feed2.Dispose();
+
+        journal2.Flush();
+        Assert.Single(journal2.GetRecent(count: 100), e => e.Category == "MILESTONE");
+    }
+
+    [Fact]
+    public async Task Milestone_Is_Not_Reannounced_After_A_Restart_With_History()
+    {
+        // A fresh feed (app restart) over a journal that already carries the
+        // MILESTONE marker: no re-announcement — the milestone fires exactly
+        // once per installation, not per session.
+        var root = Path.Combine(Path.GetTempPath(), "donggfx-tests", Guid.NewGuid().ToString("N"));
+        var tracker = new PerformanceTracker(Path.Combine(root, "perf"));
+        var journal = new TradeJournal(Path.Combine(root, "journal"));
+
+        var firstFake = new FakeBridge();
+        var firstClient = new Mt5BridgeClient(firstFake, new Uri("http://127.0.0.1:53190/"));
+        using var first = new FxTradeFeed(firstClient, tracker, journal);
+        firstFake.Route("deals", "{\"deals\": [" + Deal(777, 5.0, 0.0, 0.0, Ago(60)) + "]}");
+        Assert.Equal(1, await first.RefreshAsync());
+        first.Dispose();   // flush the settlement + MILESTONE marker to disk
+        journal.Flush();
+
+        var secondFake = new FakeBridge();
+        var secondClient = new Mt5BridgeClient(secondFake, new Uri("http://127.0.0.1:53190/"));
+        var feed = new FxTradeFeed(secondClient, tracker, journal);
+        var milestones = new List<string>();
+        feed.MilestoneNotifier = (t, _, _) => milestones.Add(t);
+        secondFake.Route("deals", "{\"deals\": [" + Deal(888, -4.0, 0.0, 0.0, Ago(30)) + "]}");
+
+        var added = await feed.RefreshAsync();
+
+        Assert.Equal(1, added);          // the new settlement is still recorded
+        Assert.Empty(milestones);        // ... but not announced as a first
+        feed.Dispose();
+        journal.Dispose();
+        try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+    }
+
+    [Fact]
+    public async Task Milestones_Toggle_Silences_The_Post_Without_Touching_Settlements()
+    {
+        var milestones = new List<string>();
+        var (feed, fake, _, journal) = NewFeed();
+        feed.MilestoneNotifier = (t, _, _) => milestones.Add(t);
+        feed.MilestonesEnabled = () => false;   // the persisted WebhookOnMilestone=off
+        fake.Route("deals", "{\"deals\": [" + Deal(911, 4.0, 0.0, 0.0, Ago(60)) + "]}");
+
+        var added = await feed.RefreshAsync();
+
+        Assert.Equal(1, added);          // settlement still recorded
+        Assert.Empty(milestones);        // ... but the milestone post is off
+        journal.Flush();
+        Assert.Single(journal.GetRecent(count: 50), e => e.Category == "TRADE_SETTLEMENT");
+        Assert.Empty(journal.GetRecent(count: 50).Where(e => e.Category == "MILESTONE"));
+    }
+
+    [Fact]
+    public async Task No_Notifier_Configured_Is_Harmless()
+    {
+        var (feed, fake, _, journal) = NewFeed();   // MilestoneNotifier left null (default)
+        fake.Route("deals", "{\"deals\": [" + Deal(909, 3.0, 0.0, 0.0, Ago(60)) + "]}");
+
+        var added = await feed.RefreshAsync();
+
+        Assert.Equal(1, added);
+        journal.Flush();
+        Assert.Single(journal.GetRecent(count: 50), e => e.Category == "TRADE_SETTLEMENT");
+    }
 }

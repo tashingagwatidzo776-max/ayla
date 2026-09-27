@@ -98,6 +98,16 @@ public class Mt5BridgeClientTests
             Assert.True(minimal!.Value.Ok);
             Assert.Null(minimal.Value.Login);
 
+            // Degraded sidecar: fields present but explicitly JSON null.
+            // GetInt64()/GetString() on a null ValueKind must not throw —
+            // this is the crash that killed the startup poll.
+            fake.Route("health", Json("\"ok\": true", "\"login\": null", "\"server\": null"));
+            var degraded = await client.HealthAsync();
+            Assert.NotNull(degraded);
+            Assert.True(degraded!.Value.Ok);
+            Assert.Null(degraded.Value.Login);
+            Assert.Null(degraded.Value.Server);
+
             fake.GetRoutes.Remove("health"); // 404 -> sidecar down
             Assert.Null(await client.HealthAsync());
         }

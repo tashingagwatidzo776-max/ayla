@@ -19,7 +19,9 @@ Exit codes:
   0 = scan completed (findings do not fail the scan; this is visibility,
       not a gate — a tracker that blocks would just become a second gate
       to flake)
-  1 = --strict and at least one chronic flake was found
+  1 = --strict and at least one chronic flake was found; with --dry-run
+      also: zero CI runs were scanned (the scheduled invocation's API
+      contract has rotted — exactly what the smoke leg exists to catch)
   2 = usage/API error (gh missing, API failure)
 
 Requires: gh authenticated. Read-only on the repo; --update-issue only
@@ -63,6 +65,12 @@ def parse_args(argv):
                    help="failed attempts within the window that count as chronic")
     p.add_argument("--strict", action="store_true",
                    help="exit 1 when a chronic flake is found (otherwise always 0)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="run the full scan but write nothing: no issue post, "
+                        "no webhook, no state. Exit 1 when ZERO runs were "
+                        "scanned — a smoke test of the exact invocation the "
+                        "scheduled workflow uses, so its API contract cannot "
+                        "rot silently between Saturdays")
     p.add_argument("--update-issue", action="store_true",
                    help="post/refresh the flake report on the ci-flakes issue")
     p.add_argument("--json", dest="json_out", metavar="PATH",
@@ -328,6 +336,19 @@ def main(argv):
     except RuntimeError as ex:
         print(f"::error::{ex}")
         return 2
+
+    if args.dry_run:
+        scanned = len({a["run"] for a in attempts})
+        if scanned == 0:
+            print("::error::flake tracker smoke: 0 CI runs scanned - the "
+                  "scheduled invocation's API contract has rotted (fields, "
+                  "job-name filter or log endpoint changed). Fix before the "
+                  "next Saturday scan runs blind.")
+            return 1
+        print(f"flake tracker smoke (dry-run): scanned {scanned} run(s), "
+              f"parsed {len(attempts)} attempt(s) - invocation healthy")
+        print("  (no issue post, no webhook, no state written)")
+        return 0
 
     rows = build_report(attempts, args.threshold)
     chronic = [r for r in rows if r["chronic"]]

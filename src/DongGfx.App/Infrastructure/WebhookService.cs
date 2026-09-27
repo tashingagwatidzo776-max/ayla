@@ -56,6 +56,17 @@ public sealed class WebhookService : IDisposable
         _ = PostAsync($"🎯 {milestone}", $"{accountName} — bankroll ${bankroll:0.##}", color);
     }
 
+    /// <summary>Post an FX milestone (first settled demo trade, soak
+    /// completion): green for progress, gold otherwise. Distinct from the
+    /// growth engine's target/floor colors so monitoring can tell the two
+    /// milestone families apart at a glance.</summary>
+    public void PostFxMilestone(string title, string body, bool progress = true)
+    {
+        if (string.IsNullOrEmpty(WebhookUrl)) return;
+
+        _ = PostAsync(title, body, progress ? 0x00D4AA : 0xFFC857);
+    }
+
     /// <summary>Post a circuit breaker alert.</summary>
     public void PostCircuitBreaker(string accountName, int failures)
     {

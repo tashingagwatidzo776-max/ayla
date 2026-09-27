@@ -70,10 +70,23 @@ public partial class App : System.Windows.Application
         services.AddSingleton<Mt5BridgeClient>();
         services.AddSingleton<TickArchive>();
         services.AddSingleton<MetricsCollector>();
-        services.AddSingleton(sp => new FxTradeFeed(
-            sp.GetRequiredService<Mt5BridgeClient>(),
-            sp.GetRequiredService<PerformanceTracker>(),
-            sp.GetRequiredService<TradeJournal>()));
+        services.AddSingleton(sp =>
+        {
+            var feed = new FxTradeFeed(
+                sp.GetRequiredService<Mt5BridgeClient>(),
+                sp.GetRequiredService<PerformanceTracker>(),
+                sp.GetRequiredService<TradeJournal>());
+            // Milestones (first settled FX trade) ride the same webhook as
+            // trade settlements; PostFxMilestone no-ops while no URL is set.
+            var webhook = sp.GetRequiredService<WebhookService>();
+            feed.MilestoneNotifier = (title, body, progress) =>
+                webhook.PostFxMilestone(title, body, progress);
+            // The persisted WebhookOnMilestone toggle gates milestone posts
+            // (read live: the settings editor applies without a restart).
+            feed.MilestonesEnabled = () =>
+                sp.GetRequiredService<Func<AppSettings>>()().WebhookOnMilestone;
+            return feed;
+        });
         services.AddSingleton(sp => new FxScorecardService(
             sp.GetRequiredService<Mt5BridgeClient>(),
             sp.GetRequiredService<TradeJournal>(),
@@ -96,6 +109,23 @@ public partial class App : System.Windows.Application
             metrics: sp.GetRequiredService<MetricsCollector>()));
         services.AddSingleton(sp => new MetricsDigestService(
             sp.GetRequiredService<MetricsCollector>(),
+            sp.GetRequiredService<WebhookService>()));
+
+        // AI agent 1 (docs/ai-agent-program.md): the journal analyst. It
+        // reads the journal, optionally asks a local LLM (Ollama/Qwen3 by
+        // default) to narrate the session, and posts to the webhook.
+        // Read-only by construction — it talks to the webhook, never to the
+        // order path; failures degrade to the template narrative.
+        services.AddSingleton(sp => new JournalAnalystService(
+            sp.GetRequiredService<TradeJournal>(),
+            sp.GetRequiredService<WebhookService>()));
+
+        // AI agent 2: the risk narrator. Subscribes to the journal's
+        // EntryAdded stream and explains FX supervisor halts on the webhook
+        // within seconds. Pure observer — it holds no reference to the
+        // supervisor or any order path and can never re-arm a halt.
+        services.AddSingleton(sp => new RiskNarratorService(
+            sp.GetRequiredService<TradeJournal>(),
             sp.GetRequiredService<WebhookService>()));
         services.AddSingleton(sp => new TerminalViewModel(
             () => sp.GetRequiredService<SettingsViewModel>().BuildSettings(),
@@ -186,8 +216,13 @@ public partial class App : System.Windows.Application
                 var halt = portfolio.Supervisor.IsHalted
                     ? $"halt:{portfolio.Supervisor.HaltReason}"
                     : "clear";
+                // Laggard-first per-symbol detail, matching the badge: the
+                // digest is where monitoring sees the laggard without the app.
+                var laggards = string.Join(", ", portfolio.SoakLaggards
+                    .Select(h => $"{h.Symbol} {h.PaperSignalsSeen}/{h.PaperSoakSignalsRequired}"));
                 parts.Add($"FX brain {mode} on {string.Join("+", portfolio.Symbols)} " +
-                          $"soak {portfolio.PaperSignalsSeen}/{portfolio.PaperSoakSignalsRequired} {halt}");
+                          $"soak {portfolio.PaperSignalsSeen}/{portfolio.PaperSoakSignalsRequired} {halt}" +
+                          (laggards.Length > 0 ? $"; waiting on: {laggards}" : ""));
             }
 
             if (scorecard.LastSummary is { } sc)
@@ -238,6 +273,18 @@ public partial class App : System.Windows.Application
             Mt5TerminalLocator.Find(settingsFactory().Mt5TerminalPath));
         provider.GetRequiredService<MetricsDigestService>().Start();
 
+        // AI journal analyst: toggles read live from the settings factory so
+        // the Settings checkboxes apply without a restart (same pattern as
+        // the milestone gate). Start() no-ops while Disabled.
+        var analyst = provider.GetRequiredService<JournalAnalystService>();
+        analyst.AnalystEnabledToggle = () => settingsFactory().AnalystEnabled;
+        analyst.MemoryEnabledToggle = () => settingsFactory().AnalystMemoryEnabled;
+        analyst.Start();
+
+        // The risk narrator is event-driven (no Start); wire its live toggle.
+        provider.GetRequiredService<RiskNarratorService>().NarratorEnabledToggle =
+            () => settingsFactory().RiskNarratorEnabled;
+
         // Unlock-staleness alert: an armed session unlock past the
         // configured threshold journals REAL_MONEY_UNLOCK_STALE + toast +
         // webhook (the rail the removed hub used to own).
@@ -265,6 +312,8 @@ public partial class App : System.Windows.Application
             Ioc.Default.GetService<FxTradeFeed>(),
             Ioc.Default.GetService<UnlockStalenessMonitor>(),
             Ioc.Default.GetService<MetricsDigestService>(),
+            Ioc.Default.GetService<JournalAnalystService>(),
+            Ioc.Default.GetService<RiskNarratorService>(),
             Ioc.Default.GetService<TickArchive>()
         ];
 

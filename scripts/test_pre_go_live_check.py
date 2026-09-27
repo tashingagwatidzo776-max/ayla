@@ -96,11 +96,22 @@ class LiveHook:
 def test_all_green_passes():
     with tempfile.TemporaryDirectory() as tmp, LiveHook() as hook:
         make_repo(tmp, soak_days_ago=1)
-        make_data_dir(tmp, {**GOOD_SETTINGS, "WebhookUrl": hook}, [journal_line("BRAIN_DECISION")])
+        make_data_dir(tmp, {**GOOD_SETTINGS, "WebhookUrl": hook}, [journal_line("FX_DECISION", "XAUUSDmicro")])
         out, rc = run_check(tmp)
         assert rc == 0, out
         assert out.count("[PASS]") == 5, out   # sidecar leg skipped-but-passing
         assert "HTTP 404" in out   # exists-but-404 counts as reachable
+
+
+def test_legacy_brain_decision_still_counts():
+    # The retired binary surface journaled BRAIN_DECISION; old journals
+    # must still satisfy the decisions gate.
+    with tempfile.TemporaryDirectory() as tmp:
+        make_repo(tmp)
+        make_data_dir(tmp, GOOD_SETTINGS, [journal_line("BRAIN_DECISION")])
+        out, rc = run_check(tmp)
+        assert "0 FX_DECISION" not in out
+        assert "decision/signal entries journaled" in out   # legacy fallback branch
 
 
 def test_zero_lot_cap_fails():
@@ -128,11 +139,11 @@ def test_no_journal_signals_fails():
         make_data_dir(tmp, GOOD_SETTINGS)   # no journal at all
         out, rc = run_check(tmp)
         assert rc == 1, out
-        assert "0 BRAIN_DECISION" in out
+        assert "0 FX_DECISION" in out
 
 
 def test_per_symbol_soak_progress_reported_and_worst_decides():
-    lines = ([journal_line("BRAIN_DECISION")]
+    lines = ([journal_line("FX_DECISION", "XAUUSDmicro")]
              + [journal_line("FX_SIGNAL", "XAUUSDmicro") for _ in range(10)]
              + [journal_line("FX_SIGNAL", "EURUSD") for _ in range(3)])
     with tempfile.TemporaryDirectory() as tmp:
@@ -146,7 +157,7 @@ def test_per_symbol_soak_progress_reported_and_worst_decides():
 
 
 def test_per_symbol_soak_complete_when_every_symbol_at_bar():
-    lines = ([journal_line("BRAIN_DECISION")]
+    lines = ([journal_line("FX_DECISION", "XAUUSDmicro")]
              + [journal_line("FX_SIGNAL", "XAUUSDmicro") for _ in range(10)]
              + [journal_line("FX_SIGNAL", "EURUSD") for _ in range(10)])
     with tempfile.TemporaryDirectory() as tmp, LiveHook() as hook:
