@@ -63,7 +63,11 @@ public sealed class LiveSoakFixture
         var dir = SettingsService.DataDir;
         var live = ProbeOverride is { } probe
             ? probe(dir)
-            : LiveSoakGuard.IsLiveSoakRunning(dir, appProcessRunning: !redirected);
+            // Real process signal — but under TF_DATA_DIR redirect the
+            // process check is dropped BY THE OVERLOAD (a running
+            // DongGfx.exe belongs to the real dir, not the scratch dir
+            // being wiped); CI without the redirect gets the real signal.
+            : LiveSoakGuard.IsLiveSoakRunning(dir, appProcessRunning: !redirected && DongGfxAppRunning());
         if (live)
         {
             throw new InvalidOperationException(
