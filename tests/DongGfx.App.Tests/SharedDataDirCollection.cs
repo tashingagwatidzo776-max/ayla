@@ -67,7 +67,7 @@ public sealed class LiveSoakFixture
             // process check is dropped BY THE OVERLOAD (a running
             // DongGfx.exe belongs to the real dir, not the scratch dir
             // being wiped); CI without the redirect gets the real signal.
-            : LiveSoakGuard.IsLiveSoakRunning(dir, appProcessRunning: !redirected && DongGfxAppRunning());
+            : LiveSoakGuard.IsLiveSoakRunning(dir, appProcessRunning: !redirected && LiveSoakGuard.DongGfxAppRunning());
         if (live)
         {
             throw new InvalidOperationException(
