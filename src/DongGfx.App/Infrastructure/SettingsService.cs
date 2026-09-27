@@ -11,9 +11,30 @@ namespace DongGfx.App.Infrastructure;
 /// </summary>
 public sealed class SettingsService
 {
-    /// <summary>%APPDATA%\tf\data — shared by settings and trade data.</summary>
-    public static string DataDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tf", "data");
+    /// <summary>Environment variable redirecting the shared data dir.
+    /// The test harness (scripts/ci-local.ps1) points this at a scratch
+    /// directory so suite teardowns that DELETE the DataDir can never
+    /// destroy the real session's journal and settings — the LiveSoakGuard
+    /// only protects LIVE sessions (app running, journal fresh), so a
+    /// closed-but-idle session's data would otherwise be fair game. The
+    /// app itself never sets it; operators pointing it anywhere are
+    /// deliberately relocating their data.</summary>
+    public const string DataDirEnvVar = "TF_DATA_DIR";
+
+    /// <summary>TF_DATA_DIR when set (the full data dir, trimmed; relative
+    /// values stay relative and get resolved against the process cwd by the
+    /// file APIs); otherwise %APPDATA%\tf\data. Pure so tests can pin the
+    /// resolution without mutating process environment (xUnit runs suites
+    /// in parallel — a global env flip would leak into them).</summary>
+    internal static string ResolveDataDir(string? envOverride, string appDataBase) =>
+        !string.IsNullOrWhiteSpace(envOverride) ? envOverride.Trim()
+        : Path.Combine(appDataBase, "tf", "data");
+
+    /// <summary>%APPDATA%\tf\data (or TF_DATA_DIR) — shared by settings
+    /// and trade data.</summary>
+    public static string DataDir => ResolveDataDir(
+        Environment.GetEnvironmentVariable(DataDirEnvVar),
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
 
     private static readonly string SettingsPath = Path.Combine(DataDir, "settings.json");
 

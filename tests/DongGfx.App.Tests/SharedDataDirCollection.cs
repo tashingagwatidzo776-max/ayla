@@ -49,8 +49,21 @@ public sealed class LiveSoakFixture
             return;   // operator override: test against the live dir deliberately
         }
 
+        // TF_DATA_DIR redirection moves the wipe target to a scratch dir,
+        // so the real session can't be harmed even with the app running.
+        // The guard still evaluates the (redirected) dir's own liveness —
+        // only the dir-independent process signal is dropped under
+        // redirect: a DongGfx.exe belongs to the REAL dir then, not to
+        // the scratch dir these suites are about to wipe.
+        var appDataBase = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var redirected = SettingsService.ResolveDataDir(
+            Environment.GetEnvironmentVariable(SettingsService.DataDirEnvVar), appDataBase)
+            != SettingsService.ResolveDataDir(null, appDataBase);
+
         var dir = SettingsService.DataDir;
-        var live = ProbeOverride is { } probe ? probe(dir) : LiveSoakGuard.IsLiveSoakRunning(dir);
+        var live = ProbeOverride is { } probe
+            ? probe(dir)
+            : LiveSoakGuard.IsLiveSoakRunning(dir, appProcessRunning: !redirected);
         if (live)
         {
             throw new InvalidOperationException(

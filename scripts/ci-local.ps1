@@ -15,6 +15,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $failed = @()
 
+# The DataDir-touching suites DELETE SettingsService.DataDir in their
+# teardowns, and LiveSoakGuard only protects LIVE sessions (app running,
+# journal fresh) — so a gate run while the app is closed would legitimately
+# wipe the real session's journal and settings (this happened twice on
+# 2026-09-26). TF_DATA_DIR is the app-wide redirect (see SettingsService):
+# point it at a scratch dir for the whole gate so tests can never touch
+# %APPDATA%\tf\data. (Deliberate TF_TESTS_ALLOW_LIVE_DATADIR=1 overrides
+# require clearing this variable to actually reach the real dir.)
+$env:TF_DATA_DIR = Join-Path $env:TEMP 'tf-gate-data'
+
 function Invoke-Step {
     param([string]$Name, [scriptblock]$Body)
     Write-Host "`n=== $Name ===" -ForegroundColor Cyan
