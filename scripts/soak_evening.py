@@ -125,6 +125,14 @@ def analyst_section(narrative: str) -> str:
             f"> {narrative}")
 
 
+def alpha_title(now: dt.datetime | None = None) -> str:
+    """Timestamped heading: every run appends its own section. Reruns are
+    new information even on the same day (keyed backtest reports mean a
+    rerun only measures data it has not seen), so a hard once-a-day block
+    would silently skip the first real weekday validation."""
+    return f"{ALPHA_TITLE} — {(now or dt.datetime.now()):%Y-%m-%d %H:%M} local"
+
+
 # ── alpha rerun ──────────────────────────────────────────────────────
 
 def convert_bars(symbol: str, tick_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path | None:
@@ -282,17 +290,9 @@ def main(argv: list[str]) -> int:
         print(f"analyst: {analyst_status}")
 
     if args.alpha:
-        if soak.exists() and ALPHA_MARK in soak.read_text(encoding="utf-8"):
-            # alpha reruns accumulate as new dated sections only when there
-            # is something new; a second same-day run is reported, not written
-            alpha_status = "already recorded today (new runs need new bars/proposals)"
-        else:
-            lines, finding = run_alpha(args.tick_dir)
-            stamp = f"{dt.datetime.now():%Y-%m-%d %H:%M} local"
-            if append_section(soak, "Alpha rerun", f"- run: {stamp}\n" + "\n".join(lines)):
-                alpha_status = f"{len(lines)} line(s) recorded"
-            else:
-                alpha_status = "nothing new"
+        lines, finding = run_alpha(args.tick_dir)
+        append_section(soak, alpha_title(), "\n".join(lines))
+        alpha_status = f"{len(lines)} line(s) recorded"
         print(f"alpha:   {alpha_status}")
 
     print(f"finding: {finding or 'none'}")
