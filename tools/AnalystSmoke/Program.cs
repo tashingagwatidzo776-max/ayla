@@ -14,6 +14,10 @@ using DongGfx.App.Infrastructure;
 using DongGfx.Core.Logging;
 using DongGfx.Core.Models;
 
+// 🤖/📊 narratives must survive the pipe to scripts/soak_evening.py: the
+// default console encoding on Windows mangles emoji into '?'.
+Console.OutputEncoding = System.Text.Encoding.UTF8;
+
 var journalDir = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tf", "data", "journal");
 using var journal = new TradeJournal(journalDir);

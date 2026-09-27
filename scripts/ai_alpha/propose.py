@@ -58,7 +58,7 @@ def call_llm(base_url: str, model: str, api_key: str | None, timeout: float = 60
             {"role": "user", "content": USER_PROMPT},
         ],
         "temperature": 0.8,
-        "max_tokens": 400,
+        "max_tokens": 700,  # thinking models burn budget reasoning first
     }).encode()
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -74,14 +74,37 @@ def call_llm(base_url: str, model: str, api_key: str | None, timeout: float = 60
 def extract_json(text: str) -> dict:
     """Best-effort extraction of the JSON object from an LLM reply.
     Rejects anything that is not one clean object - the backtester only
-    consumes structured data."""
+    consumes structured data.
+
+    Reasoning models (qwen3) wrap their answer in <think>...</think> and
+    the thinking itself is full of braces, so think blocks are stripped
+    first; then the fenced block, the outer brace slice, and a raw_decode
+    scan are tried in order. raw_decode at each '{' survives prose around
+    the object and trailing commentary."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    text = re.sub(r"<think>.*\Z", "", text, flags=re.S)  # truncated thinking
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
     candidates = [fenced.group(1)] if fenced else []
-    candidates.append(text[text.find("{"): text.rfind("}") + 1])
+    if "{" in text and "}" in text:
+        candidates.append(text[text.find("{"): text.rfind("}") + 1])
+    decoder = json.JSONDecoder()
     for candidate in candidates:
         try:
             parsed = json.loads(candidate)
             if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    def acceptable(parsed: object) -> bool:
+        # The aggressive raw_decode scan must not accept a stray nested
+        # fragment (e.g. {"indicator": ...}); only a proposal-shaped dict
+        # counts. The fenced/outer-slice candidates stay permissive.
+        return isinstance(parsed, dict) and "entry" in parsed and "exit" in parsed
+
+    for start in [m.start() for m in re.finditer(r"\{", text)][:50]:
+        try:
+            parsed, _ = decoder.raw_decode(text[start:])
+            if acceptable(parsed):
                 return parsed
         except json.JSONDecodeError:
             continue
