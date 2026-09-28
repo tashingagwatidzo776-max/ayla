@@ -91,12 +91,33 @@ public class TerminalViewModelTests : IDisposable
 
         vm.ToggleFxBrainCommand.Execute(null);
         Assert.True(host.IsRunning);
+        Assert.True(_settings.FxBrainRunning);
 
         vm.ShutdownFxBrain();
 
         Assert.False(host.IsRunning);
         Assert.Equal("FX BRAIN: OFF", vm.FxBadge);
+        // A plain shutdown stop is teardown, not a change of intent: the
+        // persisted flag survives so the next launch auto-restores.
+        Assert.True(_settings.FxBrainRunning);
         vm.ShutdownFxBrain();   // idempotent — teardown must never throw
+    }
+
+    [Fact]
+    public void ShutdownFxBrain_OnAccountSwitch_PersistsNotRunning()
+    {
+        var host = NewFxPortfolio();
+        var vm = CreateVm(fxHostFactory: () => host);
+
+        vm.ToggleFxBrainCommand.Execute(null);
+        Assert.True(_settings.FxBrainRunning);
+
+        vm.ShutdownFxBrain(accountSwitched: true);
+
+        Assert.Equal("FX BRAIN: OFF", vm.FxBadge);
+        // A safety stop must not auto-restore the loop against the new
+        // account: the persisted running flag is cleared.
+        Assert.False(_settings.FxBrainRunning);
     }
 
     // ── Build-freshness badge ──────────────────────────────────────

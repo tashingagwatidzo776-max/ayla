@@ -98,7 +98,9 @@ public sealed class MainViewModel
     /// must never mask the successful login.</summary>
     public void OnMt5AccountSwitched(string login, string server)
     {
-        TerminalVm.ShutdownFxBrain();
+        // The stop is a safety guard, not the user's intent — persist OFF so
+        // the loop cannot auto-restore against the freshly switched account.
+        TerminalVm.ShutdownFxBrain(accountSwitched: true);
         try
         {
             // A fresh account starts locked: the unlock was armed for the

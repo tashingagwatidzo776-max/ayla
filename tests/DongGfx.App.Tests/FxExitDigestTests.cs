@@ -85,6 +85,31 @@ public class FxExitDigestTests
     }
 
     [Fact]
+    public void Build_Ignores_Close_Confirmation_Lines()
+    {
+        var entries = new JournalEntry[]
+        {
+            ExitEntry("hold", null, maeR: 0.1, mfeR: 0.3, profitR: 0.2,
+                votes: [("momentum", 0.1, 1.0)]),
+            // The engine host's bookkeeping line shares the FX_EXIT
+            // category but carries no Action — it must not become a
+            // phantom empty band in the consensus split.
+            new()
+            {
+                Timestamp = DateTimeOffset.UtcNow,
+                Category = "FX_EXIT",
+                Details = "closed #99 — deal : {\"Ticket\":99,\"Partial\":false,\"Retcode\":10009}",
+            },
+        };
+        var (msg, md) = FxExitWeeklyDigest.Build(entries, DateTimeOffset.UtcNow);
+
+        Assert.Contains("1 exit evaluation(s)", msg);
+        Assert.Contains("1 consensus", msg);
+        Assert.DoesNotContain(" ×0", msg);   // no phantom empty band
+        Assert.Contains("close confirmations (no evaluation): 1", md);
+    }
+
+    [Fact]
     public void Build_Reasons_Come_From_The_Heaviest_Voice()
     {
         var entries = new[]

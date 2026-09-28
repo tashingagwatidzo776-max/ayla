@@ -132,8 +132,15 @@ public class DemoPaperExecutionTests
             client, journal, "XAUUSDmicro",
             killSwitchEngaged: () => false,
             lotsCap: () => 1.00m,
-            realMoneyUnlocked: () => false);
+            realMoneyUnlocked: () => false,
+            clock: NySession);
     }
+
+    /// <summary>A fixed mid-week, mid-session instant: Wednesday 18:00 UTC.
+    /// The regime detector vetoes the thin "late" UTC session (21:00–24:00),
+    /// so a wall-clock-driven cycle would fail every evening — the clock is
+    /// pinned where the rules say liquidity is deep.</summary>
+    private static DateTimeOffset NySession() => new(2026, 9, 23, 18, 0, 0, TimeSpan.Zero);
 
     [Fact]
     public void PaperExecutionAllowed_Requires_VerifiedDemo()
@@ -305,7 +312,8 @@ public class DemoPaperExecutionTests
             client, journal, "XAUUSDmicro",
             killSwitchEngaged: () => true,
             lotsCap: () => 1.00m,
-            realMoneyUnlocked: () => false);
+            realMoneyUnlocked: () => false,
+            clock: NySession);
 
         await host.RunCycleAsync();
 

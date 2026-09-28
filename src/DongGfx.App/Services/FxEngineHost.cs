@@ -93,6 +93,13 @@ public sealed class FxEngineHost : IDisposable
     internal static bool OrderCooldownActive(DateTimeOffset? lastDispatchUtc, DateTimeOffset now, TimeSpan cooldown)
         => lastDispatchUtc is { } last && now - last < cooldown;
 
+    /// <summary>The engine's clock. Production: the real UTC clock. Tests
+    /// pin it — the regime detector vetoes the thin "late" UTC session
+    /// (21:00–24:00) as LowLiquidity, so a wall-clock-driven test suite
+    /// would fail every evening. Time-dependent rules stay testable behind
+    /// this seam.</summary>
+    private readonly Func<DateTimeOffset> _clock;
+
     public FxEngineHost(
         Mt5BridgeClient mt5,
         TradeJournal journal,
@@ -109,9 +116,11 @@ public sealed class FxEngineHost : IDisposable
         Func<double, Task<string?>>? preOrderVeto = null,
         Func<(bool Blackout, string Reason)>? newsVeto = null,
         TimeSpan cycleOffset = default,
-        string? shadowLedgerPath = null)
+        string? shadowLedgerPath = null,
+        Func<DateTimeOffset>? clock = null)
     {
         _cycleOffset = cycleOffset;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _preOrderVeto = preOrderVeto;
         _newsVeto = newsVeto;
         _mt5 = mt5;
@@ -319,7 +328,7 @@ public sealed class FxEngineHost : IDisposable
             // A transient halt (bridge/kill/governor) that has recovered.
             Supervisor.ClearTransientHalts();
 
-            var decision = _engine.RunOnce(DateTimeOffset.UtcNow, bars, bid, ask);
+            var decision = _engine.RunOnce(_clock(), bars, bid, ask);
             LastDecision = decision;
 
             // Paper soak: an alpha SPOKE while the engine is in paper — that

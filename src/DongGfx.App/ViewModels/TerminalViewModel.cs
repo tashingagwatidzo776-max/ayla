@@ -189,8 +189,14 @@ public sealed partial class TerminalViewModel : ObservableObject
     /// app shutdown paths): no engine cycle may fire against an MT5 account
     /// the engines were not sized and authorized for — after a switch the
     /// brain's open positions, exposure cap and real-money authorization
-    /// all belong to the previous login.</summary>
-    public void ShutdownFxBrain()
+    /// all belong to the previous login. An account switch also persists
+    /// "not running": the stop is safety, not the user's intent, so it must
+    /// not auto-restore the loop against a different account. A plain app
+    /// exit leaves the persisted intent alone — a running brain relaunches
+    /// where it left off.</summary>
+    /// <param name="accountSwitched">True when the caller is the MT5
+    /// account-switch guard rather than the shutdown path.</param>
+    public void ShutdownFxBrain(bool accountSwitched = false)
     {
         try
         {
@@ -206,6 +212,11 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: OFF";
         _lastSoakSeen = -1;
         FxSoakBadge = "";
+
+        if (accountSwitched)
+        {
+            PersistBrainRunning(running: false);
+        }
     }
 
     [RelayCommand]

@@ -186,10 +186,17 @@ public sealed class FxExitWeeklyDigest : IDisposable
             return (string.Empty, string.Empty);
         }
 
+        // Order-confirmation lines ("closed #N — deal …") share the FX_EXIT
+        // category but carry no Action: they are bookkeeping, not brain
+        // evaluations, so they never enter the override/consensus split —
+        // they only count in the confirmation tally in the markdown.
+        var evaluations = payloads.Where(p => !string.IsNullOrEmpty(p.Action)).ToList();
+        var closeConfirmed = payloads.Count - evaluations.Count;
+
         // The split: override engines (hard safety) vs consensus bands.
         string[] overrideEngines = ["bridge", "spread", "equity-floor", "drawdown"];
-        var overrides = payloads.Where(p => p.Override is { }).ToList();
-        var consensus = payloads.Where(p => p.Override is null).ToList();
+        var overrides = evaluations.Where(p => p.Override is { }).ToList();
+        var consensus = evaluations.Where(p => p.Override is null).ToList();
         var overrideByEngine = overrides
             .GroupBy(p => p.Override ?? "?")
             .OrderByDescending(g => g.Count())
@@ -201,7 +208,7 @@ public sealed class FxExitWeeklyDigest : IDisposable
 
         // Exit-reason distribution: for decisive exits (full/partial and
         // overrides), the leading engine is the heaviest exit × weight voice.
-        var decisive = payloads
+        var decisive = evaluations
             .Where(p => p.Action is "full" or "partial" || p.Override is not null)
             .ToList();
         var reasons = decisive
@@ -233,14 +240,17 @@ public sealed class FxExitWeeklyDigest : IDisposable
         var roundTripPct = decisive.Count > 0 ? (double)roundTrips / decisive.Count : 0;
 
         var message =
-            $"{payloads.Count} exit evaluation(s) this week: {overrides.Count} hard override(s) " +
+            $"{evaluations.Count} exit evaluation(s) this week: {overrides.Count} hard override(s) " +
             $"({string.Join(", ", overrideByEngine)}) vs {consensus.Count} consensus " +
             $"({string.Join(", ", consensusByAction)}). Decisive exits {decisive.Count}, " +
             $"round-trips {roundTrips} ({roundTripPct:P0}).";
 
         var markdown =
             $"\n\n## FX exit weekly digest — {now:yyyy-MM-dd}\n\n" +
-            $"- evaluations: {payloads.Count} (override {overrides.Count} / consensus {consensus.Count})\n" +
+            $"- evaluations: {evaluations.Count} (override {overrides.Count} / consensus {consensus.Count})\n" +
+            (closeConfirmed > 0
+                ? $"- close confirmations (no evaluation): {closeConfirmed}\n"
+                : string.Empty) +
             $"- overrides: {string.Join(", ", overrideByEngine)}\n" +
             $"- consensus bands: {string.Join(", ", consensusByAction)}\n" +
             $"- exit reasons (decisive): {string.Join(", ", reasons)}\n" +
