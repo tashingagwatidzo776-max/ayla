@@ -332,6 +332,13 @@ public class DemoPaperExecutionTests
                 new { ticket = 222L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
                       price_open = 1.1480, price_current = 1.1380, profit = -100.0,
                       sl = 0.0, tp = 0.0, comment = "manual" },
+                // Stamped but on ANOTHER symbol: only this host's own
+                // symbol's positions may be evaluated — a foreign-symbol
+                // ATR as risk yardstick produced nonsense MAE (207R) and a
+                // bogus emergency close (2026-09-28 live incident).
+                new { ticket = 333L, symbol = "EURUSD", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1400, profit = -80.0,
+                      sl = 0.0, tp = 0.0, comment = "donggfx-brain" },
             },
         };
         var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
@@ -356,12 +363,13 @@ public class DemoPaperExecutionTests
             Assert.Contains("donggfx-brain", script.LastOrderBody);
         }
 
-        // The settlement trail: FX_EXIT only for the owned ticket.
+        // The settlement trail: FX_EXIT only for the owned, own-symbol ticket.
         journal.Flush();
         var entries = journal.GetRecent(null, 200);
         var exitLines = entries.Where(e => e.Category == "FX_EXIT").ToList();
         Assert.Contains(exitLines, e => e.Details.Contains("#111"));
         Assert.DoesNotContain(exitLines, e => e.Details.Contains("#222"));
+        Assert.DoesNotContain(exitLines, e => e.Details.Contains("#333"));
     }
 
 }

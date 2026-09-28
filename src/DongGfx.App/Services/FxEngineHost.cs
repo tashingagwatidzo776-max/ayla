@@ -619,7 +619,13 @@ public sealed class FxEngineHost : IDisposable
     private async Task ManageOwnedPositionsAsync(IReadOnlyList<FxBar> bars, FxRegime currentRegime)
     {
         var positions = await _mt5.GetPositionsAsync().ConfigureAwait(true);
-        var owned = positions.Where(p => Core.Fx.FxExitBrain.Owns(p.Comment)).ToList();
+        // Only positions this host's own symbol: a symbol-host's ATR is the
+            // risk yardstick, and using e.g. EURUSD's tiny ATR on a USDJPY
+            // position made every tick read as hundreds of R (2026-09-28
+            // live incident: MAE 207R emergency close on a healthy trade).
+            var owned = positions
+                .Where(p => Core.Fx.FxExitBrain.Owns(p.Comment) && p.Symbol == Symbol)
+                .ToList();
         if (owned.Count == 0)
         {
             return;
