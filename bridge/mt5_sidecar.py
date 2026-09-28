@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -607,6 +608,7 @@ class SidecarServer:
 
     def __init__(self, handlers: BridgeHandlers, port: int = DEFAULT_PORT) -> None:
         self._handlers = handlers
+        self._mt5_lock = threading.Lock()  # MT5 API is not thread-safe
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -615,75 +617,88 @@ class SidecarServer:
 
             def _send(self, code: int, payload: dict) -> None:
                 raw = json.dumps(payload).encode()
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+                try:
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                except OSError:
+                    # Client went away mid-response (its own timeout aborts
+                    # the socket) — not a server fault; drop it quietly.
+                    self.close_connection = True
 
             def _route_get(self, path: str, qs: dict) -> None:
                 h = outer._handlers
-                try:
-                    if path == "/health":
-                        self._send(200, h.health())
-                    elif path == "/account":
-                        self._send(200, h.account())
-                    elif path == "/symbols":
-                        self._send(200, h.symbols())
-                    elif path.startswith("/ticks/"):
-                        self._send(200, h.ticks(path.split("/", 2)[2]))
-                    elif path.startswith("/book/"):
-                        self._send(200, h.book(path.split("/", 2)[2]))
-                    elif path.startswith("/candles/"):
-                        sym = path.split("/", 2)[2]
-                        self._send(200, {"candles": h.candles(
-                            sym, (qs.get("tf") or ["M1"])[0], (qs.get("n") or ["120"])[0])})
-                    elif path == "/positions":
-                        self._send(200, {"positions": h.positions()})
-                    elif path == "/orders":
-                        self._send(200, {"orders": h.orders()})
-                    elif path == "/deals":
-                        self._send(200, {"deals": h.deals(
-                            (qs.get("days") or ["7"])[0],
-                            (qs.get("from") or [None])[0],
-                            (qs.get("to") or [None])[0])})
-                    else:
-                        self._send(404, {"error": f"no route {path}"})
-                except OrderError as e:
-                    self._send(422, {"error": str(e)})
-                except Exception as e:  # noqa: BLE001 — surface, never crash
-                    self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                # The MetaTrader5 API is not thread-safe: the data fetch runs
+                # under one lock, but the socket write happens OUTSIDE it —
+                # a slow or aborted client write must never stall other
+                # requests (2026-09-28 freeze + crash loop).
+                with outer._mt5_lock:
+                    try:
+                        if path == "/health":
+                            payload, code = h.health(), 200
+                        elif path == "/account":
+                            payload, code = h.account(), 200
+                        elif path == "/symbols":
+                            payload, code = h.symbols(), 200
+                        elif path.startswith("/ticks/"):
+                            payload, code = h.ticks(path.split("/", 2)[2]), 200
+                        elif path.startswith("/book/"):
+                            payload, code = h.book(path.split("/", 2)[2]), 200
+                        elif path.startswith("/candles/"):
+                            sym = path.split("/", 2)[2]
+                            payload, code = {"candles": h.candles(
+                                sym, (qs.get("tf") or ["M1"])[0], (qs.get("n") or ["120"])[0])}, 200
+                        elif path == "/positions":
+                            payload, code = {"positions": h.positions()}, 200
+                        elif path == "/orders":
+                            payload, code = {"orders": h.orders()}, 200
+                        elif path == "/deals":
+                            payload, code = {"deals": h.deals(
+                                (qs.get("days") or ["7"])[0],
+                                (qs.get("from") or [None])[0],
+                                (qs.get("to") or [None])[0])}, 200
+                        else:
+                            payload, code = {"error": f"no route {path}"}, 404
+                    except OrderError as e:
+                        payload, code = {"error": str(e)}, 422
+                    except Exception as e:  # noqa: BLE001 — surface, never crash
+                        payload, code = {"error": f"{type(e).__name__}: {e}"}, 500
+                self._send(code, payload)
 
             def do_GET(self) -> None:  # noqa: N802 (http.server API)
                 parsed = urlparse(self.path)
                 self._route_get(parsed.path.rstrip("/"), parse_qs(parsed.query))
 
-            def do_POST(self) -> None:  # noqa: N802
+            def do_POST(self) -> None:  # noqa: N802 (http.server API)
                 parsed = urlparse(self.path)
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    raw = self.rfile.read(length) if length else b"{}"
-                    body = json.loads(raw or b"{}")
-                    if parsed.path == "/order":
-                        self._send(200, outer._handlers.order(body))
-                    elif parsed.path.startswith("/close/"):
-                        qs = parse_qs(urlparse(self.path).query)
-                        vol = (qs.get("lots") or [None])[0]
-                        self._send(200, outer._handlers.close(
-                            parsed.path.rsplit("/", 1)[1],
-                            float(vol) if vol is not None else None))
-                    elif parsed.path.startswith("/cancel/"):
-                        self._send(200, outer._handlers.cancel(parsed.path.rsplit("/", 1)[1]))
-                    elif parsed.path == "/modify":
-                        self._send(200, outer._handlers.modify(body))
-                    elif parsed.path == "/login":
-                        self._send(200, outer._handlers.login(body))
-                    else:
-                        self._send(404, {"error": f"no route {parsed.path}"})
-                except OrderError as e:
-                    self._send(422, {"error": str(e)})
-                except Exception as e:  # noqa: BLE001
-                    self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                with outer._mt5_lock:
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                        raw = self.rfile.read(length) if length else b"{}"
+                        body = json.loads(raw or b"{}")
+                        if parsed.path == "/order":
+                            payload, code = outer._handlers.order(body), 200
+                        elif parsed.path.startswith("/close/"):
+                            qs = parse_qs(urlparse(self.path).query)
+                            vol = (qs.get("lots") or [None])[0]
+                            payload, code = outer._handlers.close(
+                                parsed.path.rsplit("/", 1)[1],
+                                float(vol) if vol is not None else None), 200
+                        elif parsed.path.startswith("/cancel/"):
+                            payload, code = outer._handlers.cancel(parsed.path.rsplit("/", 1)[1]), 200
+                        elif parsed.path == "/modify":
+                            payload, code = outer._handlers.modify(body), 200
+                        elif parsed.path == "/login":
+                            payload, code = outer._handlers.login(body), 200
+                        else:
+                            payload, code = {"error": f"no route {parsed.path}"}, 404
+                    except OrderError as e:
+                        payload, code = {"error": str(e)}, 422
+                    except Exception as e:  # noqa: BLE001
+                        payload, code = {"error": f"{type(e).__name__}: {e}"}, 500
+                self._send(code, payload)
 
         host = "127.0.0.1"
         self.httpd = ExclusiveHTTPServer((host, port), Handler)

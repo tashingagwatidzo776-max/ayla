@@ -101,7 +101,7 @@ public sealed class Mt5BridgeClient : IDisposable
     private readonly bool _ownsHandler;
 
     public Mt5BridgeClient(int port = DefaultPort)
-        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(8) },
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(15) },
                new Uri($"http://127.0.0.1:{port}/"), ownsHandler: true)
     {
     }
@@ -116,7 +116,7 @@ public sealed class Mt5BridgeClient : IDisposable
                 "the MT5 bridge is loopback-only: refusing " + baseAddress.Host);
         }
 
-        _http = new HttpClient(handler) { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(8) };
+        _http = new HttpClient(handler) { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
         _ownsHandler = false;
     }
 

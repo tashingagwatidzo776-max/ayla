@@ -181,13 +181,19 @@ public sealed class FxPortfolioHost : IDisposable
             return total > 0 ? Math.Min(single, total) : single;
         };
 
+        // Stagger the per-symbol engines by 15s: all four otherwise tick
+        // together and their burst queues behind the sidecar's single MT5
+        // lock, reading as bridge timeouts (2026-09-28 congestion incident).
+        var staggerIndex = 0;
         foreach (var symbol in symbols)
         {
             var host = new FxEngineHost(
                 mt5, journal, symbol, killSwitchEngaged, engineCap, realMoneyUnlocked,
                 riskFraction, Supervisor, webhook: webhook,
                 preOrderVeto: lots => exposure.VetoAsync(lots),
-                newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow));
+                newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow),
+                cycleOffset: TimeSpan.FromSeconds(15 * staggerIndex));
+            staggerIndex++;
             host.StatusChanged += s => StatusChanged?.Invoke($"[{symbol}] {s}");
             _hosts.Add(host);
         }

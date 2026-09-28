@@ -22,6 +22,9 @@ public sealed class FxEngineHost : IDisposable
     private readonly Func<decimal> _equityFloorFloor;
     private readonly Func<bool> _realMoneyUnlocked;
     private readonly System.Windows.Threading.DispatcherTimer _timer;
+    private readonly TimeSpan _cycleOffset;
+    private bool _firstCycle = true;
+    private bool _cycleRunning;
     private readonly FxEngine _engine;
     private bool _busy;
 
@@ -104,8 +107,10 @@ public sealed class FxEngineHost : IDisposable
         Func<decimal>? equityFloor = null,
         WebhookService? webhook = null,
         Func<double, Task<string?>>? preOrderVeto = null,
-        Func<(bool Blackout, string Reason)>? newsVeto = null)
+        Func<(bool Blackout, string Reason)>? newsVeto = null,
+        TimeSpan cycleOffset = default)
     {
+        _cycleOffset = cycleOffset;
         _preOrderVeto = preOrderVeto;
         _newsVeto = newsVeto;
         _mt5 = mt5;
@@ -138,7 +143,31 @@ public sealed class FxEngineHost : IDisposable
         _ = LoadVenueSpecAsync();
 
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
-        _timer.Tick += async (_, _) => await RunCycleAsync().ConfigureAwait(true);
+        _timer.Tick += async (_, _) =>
+        {
+            if (_cycleRunning)
+            {
+                return;   // a slow cycle skips its tick instead of stacking requests
+            }
+            if (_firstCycle)
+            {
+                _firstCycle = false;
+                // Stagger symbols so their requests never hit the bridge in
+                // one burst: the sidecar serializes MT5 access, so four
+                // simultaneous cycles queue behind each other and read as
+                // timeouts (2026-09-28 bridge congestion).
+                await Task.Delay(_cycleOffset).ConfigureAwait(true);
+            }
+            _cycleRunning = true;
+            try
+            {
+                await RunCycleAsync().ConfigureAwait(true);
+            }
+            finally
+            {
+                _cycleRunning = false;
+            }
+        };
     }
 
     public void Start()
@@ -154,7 +183,32 @@ public sealed class FxEngineHost : IDisposable
             _ = AnchorSupervisorAsync();   // first host to start anchors; siblings share
         }
 
-        _ = RunCycleAsync();
+        _ = FirstCycleAsync();
+    }
+
+    /// <summary>The first cycle after Start: delayed by the symbol's
+    /// stagger offset (portfolio hosts must not burst the bridge) and
+    /// guarded against stacking with the timer tick.</summary>
+    private async Task FirstCycleAsync()
+    {
+        if (_cycleRunning)
+        {
+            return;
+        }
+        if (_firstCycle)
+        {
+            _firstCycle = false;
+            await Task.Delay(_cycleOffset).ConfigureAwait(true);
+        }
+        _cycleRunning = true;
+        try
+        {
+            await RunCycleAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _cycleRunning = false;
+        }
     }
 
     /// <summary>Anchor the supervisor's loss baseline to the live balance
