@@ -34,6 +34,10 @@ public class DemoPaperExecutionTests
         public bool AccountUnverified;
         public bool AccountReal;
         public bool AccountMissing;
+        public object[] Positions = Array.Empty<object>();
+        public int CloseCalls;
+        public int ModifyCalls;
+        public string? LastClosePath;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
         {
@@ -87,6 +91,21 @@ public class DemoPaperExecutionTests
                 OrderCalls++;
                 LastOrderBody = req.Content is null ? null : req.Content.ReadAsStringAsync(ct).Result;
                 r = Json(new { ok = true, retcode = 10009, retcode_name = "TRADE_RETCODE_DONE", deal = 999, price = 1.15002 });
+            }
+            else if (path.EndsWith("/positions"))
+            {
+                r = Json(new { positions = Positions });
+            }
+            else if (path.StartsWith("/close/"))
+            {
+                CloseCalls++;
+                LastClosePath = path;
+                r = Json(new { ok = true, retcode = 10009, retcode_name = "TRADE_RETCODE_DONE", deal = 777 });
+            }
+            else if (path.EndsWith("/modify"))
+            {
+                ModifyCalls++;
+                r = Json(new { ok = true, retcode = 10009, retcode_name = "TRADE_RETCODE_DONE" });
             }
             else
             {
@@ -294,4 +313,55 @@ public class DemoPaperExecutionTests
         // switch blocks the fill even on a verified demo.
         Assert.Equal(0, script.OrderCalls);
     }
+
+    [Fact]
+    public async Task ExitBrain_Manages_Owned_Positions_And_Leaves_Others_Alone()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                // Ours: brain-stamped long_crushed far past the emergency
+                // bar -> the drawdown override must close it in full.
+                new { ticket = 111L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1400, profit = -80.0,
+                      sl = 0.0, tp = 0.0, comment = "donggfx-brain" },
+                // Not ours: a manual position in even worse shape — the
+                // brain must never touch what it did not open.
+                new { ticket = 222L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1380, profit = -100.0,
+                      sl = 0.0, tp = 0.0, comment = "manual" },
+            },
+        };
+        var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
+        var host = new FxEngineHost(
+            client, journal, "XAUUSDmicro",
+            killSwitchEngaged: () => false,
+            lotsCap: () => 1.00m,
+            realMoneyUnlocked: () => false,
+            equityFloor: () => 0m);   // floor override silent
+
+        await host.RunCycleAsync();
+
+        // Exactly one close — ours, in full — and no stop modify.
+        Assert.Equal(1, script.CloseCalls);
+        Assert.Equal("/close/111", script.LastClosePath);
+        Assert.Equal(0, script.ModifyCalls);
+
+        // The stamp rides on entries, so the brain can find its children
+        // on the next cycle.
+        if (script.OrderCalls > 0)
+        {
+            Assert.Contains("donggfx-brain", script.LastOrderBody);
+        }
+
+        // The settlement trail: FX_EXIT only for the owned ticket.
+        journal.Flush();
+        var entries = journal.GetRecent(null, 200);
+        var exitLines = entries.Where(e => e.Category == "FX_EXIT").ToList();
+        Assert.Contains(exitLines, e => e.Details.Contains("#111"));
+        Assert.DoesNotContain(exitLines, e => e.Details.Contains("#222"));
+    }
+
 }

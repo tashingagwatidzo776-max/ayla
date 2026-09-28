@@ -334,6 +334,8 @@ class BridgeHandlers:
                 "sl": p.sl,
                 "tp": p.tp,
                 "time": p.time,
+                # Order comment: the exit engine's ownership key ("donggfx-brain").
+                "comment": getattr(p, "comment", ""),
             })
         return out
 

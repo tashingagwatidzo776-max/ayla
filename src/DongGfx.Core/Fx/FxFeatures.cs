@@ -85,6 +85,21 @@ public static class FxFeatures
         return atr;
     }
 
+    /// <summary>Median true range over the trailing window — the robust
+    /// volatility baseline the exit engine's collapse/shock thresholds are
+    /// measured against (a single spike can't drag a median).</summary>
+    public static double AtrMedian(IReadOnlyList<FxBar> bars, int period = 20)
+    {
+        if (bars.Count < period + 1) return double.NaN;
+        var trs = new List<double>(period);
+        for (var i = bars.Count - period; i < bars.Count; i++)
+        {
+            trs.Add(bars[i].TrueRange(bars[i - 1].Close));
+        }
+        trs.Sort();
+        return trs[trs.Count / 2];
+    }
+
     /// <summary>Average Directional Index (Wilder): returns (adx, plusDI, minusDI).</summary>
     public static (double Adx, double PlusDi, double MinusDi) Adx(IReadOnlyList<FxBar> bars, int period = 14)
     {

@@ -19,6 +19,7 @@ public sealed class FxEngineHost : IDisposable
     private readonly TradeJournal _journal;
     private readonly Func<bool> _killSwitchEngaged;
     private readonly Func<decimal> _lotsCap;
+    private readonly Func<decimal> _equityFloorFloor;
     private readonly Func<bool> _realMoneyUnlocked;
     private readonly System.Windows.Threading.DispatcherTimer _timer;
     private readonly FxEngine _engine;
@@ -112,6 +113,7 @@ public sealed class FxEngineHost : IDisposable
         Symbol = symbol;
         _killSwitchEngaged = killSwitchEngaged;
         _lotsCap = lotsCap;
+        _equityFloorFloor = equityFloor ?? (() => 0m);
         _realMoneyUnlocked = realMoneyUnlocked;
         Supervisor = supervisor ?? new FxSupervisor(
             journal,
@@ -280,6 +282,11 @@ public sealed class FxEngineHost : IDisposable
                     }));
             }
 
+            // Exit brain: manage the positions this brain owns (comment-
+            // stamped) BEFORE considering a new entry — risk management
+            // outranks new exposure.
+            await ManageOwnedPositionsAsync(bars, decision.Regime.Regime).ConfigureAwait(true);
+
             if (decision.Action is FxDecisionAction.Ordered or FxDecisionAction.PaperExecuted
                 && decision.Signal is not null)
             {
@@ -430,7 +437,10 @@ public sealed class FxEngineHost : IDisposable
 
         var side = decision.Signal!.Direction == FxDirection.Buy ? "buy" : "sell";
         var result = await _mt5.PlaceOrderAsync(
-            Symbol, side, "market", lots, null, null, null, null).ConfigureAwait(true);
+            Symbol, side, "market", lots, null, null, null, null,
+            comment: Core.Fx.FxExitBrain.OwnershipComment).ConfigureAwait(true);
+        // The comment stamp is how the exit engine recognizes the positions
+        // it owns — manual trades are never managed.
 
         Journal("FX_ORDER",
             result.Ok
@@ -455,6 +465,16 @@ public sealed class FxEngineHost : IDisposable
                     : null,
             }));
 
+        if (result.Ok)
+        {
+            var ticket = result.Order ?? result.Deal ?? 0;
+            if (ticket != 0)
+            {
+                // The thesis engine needs the regime the trade was born in.
+                _entryRegimes[ticket] = decision.Regime.Regime;
+            }
+        }
+
         StatusChanged?.Invoke(result.Ok
             ? $"{(paperExec ? "paper filled (demo): " : "filled: ")}{side} {lots:0.##} {Symbol} @ {result.Price:0.#####}"
             : $"refused: {result.RetcodeName}");
@@ -466,6 +486,12 @@ public sealed class FxEngineHost : IDisposable
     public bool VenueSpecLoaded { get; private set; }
 
     private bool _specWarned;
+
+    // ---- Exit brain state ------------------------------------------------
+    // Per-position tracking (MFE/MAE in R, bars held) keyed by ticket, plus
+    // the entry regime each position was born in (thesis engine input).
+    private readonly Dictionary<long, Core.Fx.FxPositionState> _exitStates = new();
+    private readonly Dictionary<long, Core.Fx.FxRegime> _entryRegimes = new();
 
     /// <summary>One-shot fetch of this symbol's venue spec from the bridge
     /// /symbols snapshot. Fire-and-forget and retry-safe: failures leave the
@@ -524,6 +550,136 @@ public sealed class FxEngineHost : IDisposable
     /// Paper mode keeps the heuristic fallback — the soak is where the gap
     /// gets noticed, the money path refuses to gamble on a guess.</summary>
     internal bool LiveOrderBlockedByMissingSpec => IsLiveEngine && _venueSpec is null;
+
+    /// <summary>Spread guard for the exit override, in pip points — far
+    /// above the venue's normal quote (Deriv gold ~27 pts), so only a
+    /// genuinely abnormal market trips it.</summary>
+    internal const double MaxAbnormalSpreadPoints = 250;
+
+    /// <summary>The Exit Brain's per-cycle pass: evaluate every position
+    /// this brain owns (comment-stamped entries) and act on the resolver's
+    /// decision — full/partial closes via /close, tighten via /modify SL.
+    /// Everything lands in the journal as FX_EXIT (score, votes, MFE/MAE):
+    /// the settlement trail fills, and the data-hungry engines of v2 get
+    /// their substrate. Manual positions (no stamp) are never touched.</summary>
+    private async Task ManageOwnedPositionsAsync(IReadOnlyList<FxBar> bars, FxRegime currentRegime)
+    {
+        var positions = await _mt5.GetPositionsAsync().ConfigureAwait(true);
+        var owned = positions.Where(p => Core.Fx.FxExitBrain.Owns(p.Comment)).ToList();
+        if (owned.Count == 0)
+        {
+            return;
+        }
+
+        var atr = bars.Count >= 15 ? Core.Fx.FxFeatures.Atr(bars, 14) : double.NaN;
+        var atrMedian = Core.Fx.FxFeatures.AtrMedian(bars, 20);
+        var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
+        var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
+        var mid = tick is { } t && t.Ask > t.Bid ? (t.Ask + t.Bid) / 2 : bars[^1].Close;
+        var spreadPoints = tick is { } t2 && t2.Ask > t2.Bid
+            ? (t2.Ask - t2.Bid) / Math.Max(PipSizeFor(mid), 1e-9)
+            : 0;
+
+        foreach (var p in owned)
+        {
+            if (!_exitStates.TryGetValue(p.Ticket, out var st))
+            {
+                // First sighting: seed the tracking state. The entry regime
+                // may be unknown (app restart) — fall back to the current
+                // regime so the thesis engine stays neutral instead of
+                // inventing a flip that never happened.
+                _entryRegimes[p.Ticket] = currentRegime;
+                st = new Core.Fx.FxPositionState(
+                    p.Ticket, p.Symbol, p.Side, p.PriceOpen, p.Volume,
+                    Core.Fx.FxExitBrain.RiskPerLot(p.PriceOpen, p.Sl, double.IsNaN(atr) ? 0 : atr),
+                    MfeR: 0, MaeR: 0, BarsHeld: 0);
+            }
+
+            var price = p.PriceCurrent > 0 ? p.PriceCurrent : bars[^1].Close;
+            st = Core.Fx.FxExitBrain.UpdateState(st, price, st.BarsHeld + 1);
+            _exitStates[p.Ticket] = st;
+            var entryRegime = _entryRegimes[p.Ticket];
+
+            var decision = Core.Fx.FxExitBrain.Evaluate(
+                st, price, p.Volume,
+                double.IsNaN(atr) ? 0 : atr, atrMedian,
+                spreadPoints, MaxAbnormalSpreadPoints,
+                account?.Equity ?? 0, (double)_equityFloorFloor(),
+                bridgeUp: true,   // a dead bridge never reaches this method
+                bars, currentRegime, entryRegime);
+
+            Journal("FX_EXIT",
+                $"{p.Symbol} #{p.Ticket}: {decision.Action} score {decision.Score:0} — {decision.Reason}",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Ticket = p.Ticket,
+                    p.Symbol,
+                    p.Side,
+                    Action = decision.Action,
+                    Score = Core.Fx.FxJson.Sanitize(decision.Score),
+                    MfeR = Core.Fx.FxJson.Sanitize(decision.MfeR),
+                    MaeR = Core.Fx.FxJson.Sanitize(decision.MaeR),
+                    ProfitR = Core.Fx.FxJson.Sanitize(decision.ProfitR),
+                    Override = decision.OverrideEngine,
+                    Votes = decision.Votes.Select(v => new
+                    {
+                        v.Engine,
+                        Exit = Core.Fx.FxJson.Sanitize(v.Exit),
+                        Reason = v.Reason,
+                    }).ToList(),
+                }));
+
+            if (decision.Action == "full"
+                || (decision.Action == "partial" && decision.LotsToClose > 0))
+            {
+                var lots = decision.Action == "full" ? (double?)null : SnapLots(decision.LotsToClose);
+                var close = await _mt5.ClosePositionAsync(p.Ticket, lots).ConfigureAwait(true);
+                Journal("FX_EXIT",
+                    close.Ok
+                        ? $"closed {(lots.HasValue ? $"{lots:0.##} lots of " : string.Empty)}#{p.Ticket} — deal {close.Deal}"
+                        : $"close refused for #{p.Ticket}: {close.RetcodeName}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = p.Ticket,
+                        Partial = lots.HasValue,
+                        Lots = lots,
+                        close.Retcode,
+                    }));
+                if (close.Ok && decision.Action == "full")
+                {
+                    _exitStates.Remove(p.Ticket);
+                    _entryRegimes.Remove(p.Ticket);
+                }
+            }
+            else if (decision.Action == "tighten" && decision.NewSl > 0)
+            {
+                var mod = await _mt5.ModifyPositionAsync(p.Ticket, sl: decision.NewSl).ConfigureAwait(true);
+                Journal("FX_EXIT",
+                    mod.Ok
+                        ? $"trailed #{p.Ticket} stop to {decision.NewSl:0.#####} (+0.2R)"
+                        : $"stop trail refused for #{p.Ticket}: {mod.RetcodeName}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = p.Ticket,
+                        NewSl = Core.Fx.FxJson.Sanitize(decision.NewSl),
+                        mod.Retcode,
+                    }));
+            }
+        }
+    }
+
+    /// <summary>Snap an exit's lots to the venue's volume step (never below
+    /// one step; /close validates the upper bound).</summary>
+    private double SnapLots(double lots)
+    {
+        var step = _venueSpec is { } spec && spec.VolumeStep > 0 ? spec.VolumeStep : 0.01;
+        return Math.Round(Math.Max(step, Math.Round(lots / step) * step), 2);
+    }
+
+    /// <summary>Pip-size heuristic for the spread override (gold-like 0.1,
+    /// JPY-class 0.01, everything else 0.0001).</summary>
+    private static double PipSizeFor(double price) =>
+        price >= 400 ? 0.1 : price >= 20 ? 0.01 : 0.0001;
 
     private void Journal(string category, string detail, string json) =>
         _journal.Log(Guid.Empty, category, detail, json);

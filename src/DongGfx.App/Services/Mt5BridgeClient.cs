@@ -22,7 +22,12 @@ public sealed record Mt5Symbol(
 public sealed record Mt5Position(
     long Ticket, string Symbol, string Side, double Volume,
     double PriceOpen, double PriceCurrent, double Profit,
-    double Sl = 0, double Tp = 0);
+    double Sl = 0, double Tp = 0,
+    /// <summary>Order comment — the brain stamps "donggfx-brain" on its
+    /// paper-exec entries, which is how the exit engine recognizes the
+    /// positions it owns (vs manual or third-party trades it must leave
+    /// alone).</summary>
+    string Comment = "");
 
 /// <summary>One open (pending) order from the bridge /orders.</summary>
 public sealed record Mt5PendingOrder(
@@ -323,7 +328,7 @@ public sealed class Mt5BridgeClient : IDisposable
     public async Task<Mt5OrderResult> PlaceOrderAsync(
         string symbol, string action, string type, double lots,
         double? price = null, double? stopPrice = null, double? sl = null, double? tp = null,
-        CancellationToken ct = default)
+        string? comment = null, CancellationToken ct = default)
     {
         var body = new Dictionary<string, object?>
         {
@@ -332,6 +337,7 @@ public sealed class Mt5BridgeClient : IDisposable
             ["type"] = type,
             ["lots"] = lots,
         };
+        if (!string.IsNullOrEmpty(comment)) { body["comment"] = comment; }
         if (price.HasValue) { body["price"] = price.Value; }
         if (stopPrice.HasValue) { body["stopprice"] = stopPrice.Value; }
         if (sl.HasValue) { body["sl"] = sl.Value; }
@@ -385,7 +391,8 @@ public sealed class Mt5BridgeClient : IDisposable
                 p.GetProperty("price_current").GetDouble(),
                 p.GetProperty("profit").GetDouble(),
                 p.TryGetProperty("sl", out var slp) && slp.ValueKind == JsonValueKind.Number ? slp.GetDouble() : 0,
-                p.TryGetProperty("tp", out var tpp) && tpp.ValueKind == JsonValueKind.Number ? tpp.GetDouble() : 0));
+                p.TryGetProperty("tp", out var tpp) && tpp.ValueKind == JsonValueKind.Number ? tpp.GetDouble() : 0,
+                p.TryGetProperty("comment", out var com) ? com.GetString() ?? "" : ""));
         }
 
         return positions;
