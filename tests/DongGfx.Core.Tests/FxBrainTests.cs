@@ -258,7 +258,10 @@ public class FxEngineTests
         {
             // A spoken signal with verified equity must SIZE - the old
             // "if Paper" guard is exactly what let zero-lot sizing ship.
-            Assert.Equal(FxDecisionAction.Paper, decision.Action);
+            // Paper signals now route to the demo account (the demo IS the
+            // paper account): the engine returns PaperExecuted and the host
+            // re-verifies the venue is demo before placing.
+            Assert.Equal(FxDecisionAction.PaperExecuted, decision.Action);
             Assert.True(j.Has("FX_SIGNAL"));
             Assert.True(j.Has("FX_DECISION"));
             Assert.True(decision.SuggestedLots > 0);

@@ -65,6 +65,30 @@ public sealed class FxEngineHost : IDisposable
     internal static bool CountsTowardSoak(FxDecision decision, bool engineIsLive)
         => !engineIsLive && decision.Signal is not null;
 
+    /// <summary>The demo account IS the paper account: a paper-exec fill
+    /// is allowed only on a venue the bridge VERIFIED as demo (trade_mode,
+    /// else the demo-server heuristic). Real or unverified refuses — paper
+    /// practice can never leak into real money. Internal static so tests
+    /// pin the rule without fake-market plumbing.</summary>
+    internal static bool PaperExecutionAllowed(bool? verifiedVirtual)
+        => verifiedVirtual is true;
+
+    /// <summary>Per-symbol order cooldown. Each symbol runs its own host,
+    /// so this spacing is per-symbol by construction: after a dispatch
+    /// ATTEMPT (fill or refusal — the point is to stop hammering a venue
+    /// that just refused us), no further order goes out for this symbol
+    /// until the cooldown elapses. Signals still journal and still count
+    /// toward the soak; only the dispatch is throttled.</summary>
+    internal TimeSpan OrderCooldown { get; set; } = TimeSpan.FromMinutes(5);
+
+    private DateTimeOffset? _lastOrderDispatchUtc;
+
+    /// <summary>The pure cooldown rule: null (never dispatched) or an old
+    /// enough last attempt allows a dispatch. Internal static so tests pin
+    /// it without fake-market plumbing.</summary>
+    internal static bool OrderCooldownActive(DateTimeOffset? lastDispatchUtc, DateTimeOffset now, TimeSpan cooldown)
+        => lastDispatchUtc is { } last && now - last < cooldown;
+
     public FxEngineHost(
         Mt5BridgeClient mt5,
         TradeJournal journal,
@@ -98,12 +122,13 @@ public sealed class FxEngineHost : IDisposable
             webhook);
         _engine = new FxEngine(symbol, Timeframe, Journal, lotsCap: (double)_lotsCap(), riskFraction: riskFraction,
             equityProvider: () => _lastEquity);
-        _engine.AddAlpha(new FxMomentum.EmaCross());
-        _engine.AddAlpha(new FxMomentum.DonchianBreakout());
-        _engine.AddAlpha(new FxMomentum.Roc());
-        _engine.AddAlpha(new FxMeanReversion.ZScore());
-        _engine.AddAlpha(new FxMeanReversion.BollingerReversion());
-        _engine.AddAlpha(new FxMeanReversion.VwapReversion());
+        // The canonical 20-family roster (FxFamilies.All): the engine picks
+        // the highest-confidence speaker per regime, so twenty voices widen
+        // the vote without touching the risk model.
+        foreach (var alpha in FxFamilies.All())
+        {
+            _engine.AddAlpha(alpha);
+        }
 
         // Fire-and-forget: the venue's lot geometry (contract size, volume
         // grid) arrives once from the bridge; sizing uses the heuristic
@@ -161,7 +186,7 @@ public sealed class FxEngineHost : IDisposable
     {
         _engine.GoLive();
         _engine.GoPaper();
-        StatusChanged?.Invoke("engine back to paper");
+        StatusChanged?.Invoke("paper: fills route to the connected demo account");
     }
 
     /// <summary>Operator re-arm after a loss stop: forget the latch and
@@ -255,9 +280,29 @@ public sealed class FxEngineHost : IDisposable
                     }));
             }
 
-            if (decision.Action == FxDecisionAction.Ordered && decision.Signal is not null)
+            if (decision.Action is FxDecisionAction.Ordered or FxDecisionAction.PaperExecuted
+                && decision.Signal is not null)
             {
-                await ExecuteOrderAsync(decision).ConfigureAwait(true);
+                var now = DateTimeOffset.UtcNow;
+                if (OrderCooldownActive(_lastOrderDispatchUtc, now, OrderCooldown))
+                {
+                    // Throttle, not censor: the signal already journaled and
+                    // counted toward the soak. Only the dispatch waits —
+                    // re-sending every cycle into a refusing venue is noise,
+                    // not edge (and spams the journal while AutoTrading is
+                    // off, which is exactly what this stops).
+                    Journal("FX_ORDER",
+                        $"dispatch throttled — per-symbol cooldown active ({OrderCooldown.TotalMinutes:0} min), signal kept: {decision.Signal.Alpha}",
+                        "{}");
+                    return;
+                }
+
+                _lastOrderDispatchUtc = now;
+                // Paper-exec: the demo account IS the paper account — the
+                // signal fills as a real (demo) MT5 order.
+                // ExecuteOrderAsync re-verifies the venue is demo first.
+                await ExecuteOrderAsync(decision,
+                    paperExec: decision.Action == FxDecisionAction.PaperExecuted).ConfigureAwait(true);
             }
         }
         catch
@@ -270,8 +315,32 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
-    private async Task ExecuteOrderAsync(FxDecision decision)
+    private async Task ExecuteOrderAsync(FxDecision decision, bool paperExec = false)
     {
+        // Paper-exec hard guard FIRST: the demo account is the paper
+        // account, so a paper fill is only ever allowed on a venue the
+        // bridge has VERIFIED as demo (trade_mode, else the demo-server
+        // heuristic). A real account — even with the session unlock armed —
+        // or an unverified one refuses here: paper practice can never leak
+        // into real money.
+        if (paperExec)
+        {
+            var account0 = await _mt5.GetAccountAsync().ConfigureAwait(true);
+            if (!PaperExecutionAllowed(account0?.GateVerifiedVirtual))
+            {
+                Journal("FX_ORDER",
+                    "refused: paper execution requires a VERIFIED demo account — " +
+                    (account0 is null
+                        ? "bridge unavailable (account unknown)"
+                        : account0.GateVerifiedVirtual is false
+                            ? "connected account is REAL — paper never routes to real money"
+                            : "account demo/real state unverified — connect a demo account"),
+                    "{}");
+                StatusChanged?.Invoke("paper execution refused: connected account is not a verified demo");
+                return;
+            }
+        }
+
         // Rails, in order, at execution time.
         if (_killSwitchEngaged())
         {
@@ -365,12 +434,13 @@ public sealed class FxEngineHost : IDisposable
 
         Journal("FX_ORDER",
             result.Ok
-                ? $"{side} {lots:0.##} lots {Symbol} @ {result.Price:0.#####} — ticket {result.Order ?? result.Deal}"
+                ? $"{(paperExec ? "paper-exec fill (demo): " : string.Empty)}{side} {lots:0.##} lots {Symbol} @ {result.Price:0.#####} — ticket {result.Order ?? result.Deal}"
                 : $"{side} {lots:0.##} lots {Symbol} refused: {result.RetcodeName}",
             System.Text.Json.JsonSerializer.Serialize(new
             {
                 Side = side,
                 Lots = lots,
+                PaperExec = paperExec,
                 result.Retcode,
                 result.Order,
                 result.Deal,
@@ -386,7 +456,7 @@ public sealed class FxEngineHost : IDisposable
             }));
 
         StatusChanged?.Invoke(result.Ok
-            ? $"filled: {side} {lots:0.##} {Symbol} @ {result.Price:0.#####}"
+            ? $"{(paperExec ? "paper filled (demo): " : "filled: ")}{side} {lots:0.##} {Symbol} @ {result.Price:0.#####}"
             : $"refused: {result.RetcodeName}");
     }
 

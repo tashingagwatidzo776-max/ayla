@@ -257,7 +257,7 @@ public class FxSupervisorTests
         await host.RunCycleAsync();
 
         Assert.NotNull(host.LastDecision);          // the brain actually ran
-        Assert.True(host.LastDecision!.Action is FxDecisionAction.Paper or FxDecisionAction.NoSignal
+        Assert.True(host.LastDecision!.Action is FxDecisionAction.Paper or FxDecisionAction.PaperExecuted or FxDecisionAction.NoSignal
                     or FxDecisionAction.SkippedRegime or FxDecisionAction.Ordered);
     }
 
@@ -333,7 +333,13 @@ public class FxSupervisorTests
             .Where(e => e.Category == "FX_ORDER")
             .ToList();
 
-        Assert.DoesNotContain(fxOrderEntries, e => e.Details.Contains("ticket"));
+        // No LIVE ticket without venue geometry. (A PAPER-EXEC fill on the
+        // verified demo may legitimately appear from the pre-go-live paper
+        // cycle — demo execution keeps the heuristic fallback by design;
+        // only the live path refuses on a guessed size.)
+        Assert.DoesNotContain(
+            fxOrderEntries.Where(e => !e.Details.Contains("paper-exec fill")),
+            e => e.Details.Contains("ticket"));
         Assert.Contains(fxOrderEntries, e => e.Details.Contains("pre-flight warning"));
 
         host.Dispose();
