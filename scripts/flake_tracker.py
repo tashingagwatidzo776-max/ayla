@@ -50,7 +50,10 @@ ISSUE_TITLE = "CI flake tracker: tests failing then passing"
 
 
 def gh(*args):
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    # utf-8/replace: gh emits UTF-8 (repo names, test names); the Windows
+    # cp1252 default would raise UnicodeDecodeError on emoji or smart quotes.
+    result = subprocess.run(["gh", *args], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args[:3])}... failed: {result.stderr.strip()[:300]}")
     return result.stdout

@@ -49,7 +49,7 @@ def run_check(tmp, extra_args=None):
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--skip-sidecar", "--data-dir",
          str(Path(tmp) / "data"), "--repo-root", str(Path(tmp) / "repo")] + (extra_args or []),
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     return proc.stdout + proc.stderr, proc.returncode
 
 
@@ -213,7 +213,7 @@ def test_missing_data_dir_is_usage_error():
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--data-dir", "Z:/definitely/not/here",
          "--repo-root", str(HERE.parent)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert proc.returncode == 2
     assert "data dir not found" in proc.stdout + proc.stderr
 
@@ -228,7 +228,7 @@ def test_sidecar_probe_unreachable_reports_clear_hint():
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--data-dir", str(Path(tmp) / "data"),
              "--repo-root", str(Path(tmp) / "repo")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         combined = proc.stdout + proc.stderr
         if "sidecar not healthy" in combined:
             assert proc.returncode == 1

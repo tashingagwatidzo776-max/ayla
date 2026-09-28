@@ -65,6 +65,11 @@ Invoke-Step 'safety-audit' {
 Invoke-Step 'rail-traits' {
     python scripts/check_rail_traits.py
 }
+# Keep the subprocess-decode / UTF-16-log mojibake bug classes extinct
+# (see scripts/check_script_hygiene.py header for the two shipped bugs).
+Invoke-Step 'script-hygiene' {
+    python scripts/check_script_hygiene.py
+}
 # The in-repo portable MT5 terminal (mt5_portable/, git-ignored) must still
 # match the SHA-256 manifest recorded from its source install. Skips cleanly
 # when the copy is absent; fails on any modified/missing/unexpected file.

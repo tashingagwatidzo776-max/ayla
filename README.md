@@ -87,6 +87,12 @@ dotnet run --project src/DongGfx.App
 
 # Start the loopback sidecar (separate console; binds 127.0.0.1 only)
 python bridge/mt5_sidecar.py
+
+# Optional: deliver secrets centrally with Infisical instead of machine-local
+# env vars (docs/secrets-infisical.md has the one-time setup; solo local
+# setups can skip it — the defaults need no key).
+#   infisical login && infisical init
+#   infisical run --env=dev -- dotnet run --project src/DongGfx.App
 ```
 
 ### First Run
@@ -139,6 +145,19 @@ All settings are stored under `%APPDATA%\tf\data\`:
 | `NewsBlackoutMinutes` | 15 | Refuse new brain orders this long before/after high-impact events |
 | `Mt5TerminalPath` | *(empty)* | Pinned `terminal64.exe` (empty = auto-discover); honored by startup, watchdog and sidecar |
 | `ArmStalenessHours` | 4 | Toast+journal+webhook when an unlock stays armed this long (0 disables) |
+
+### Secrets
+
+Credentials do not live in an `.env` file in this repo. The LLM endpoint for
+the analyst/narrator is read from the environment (`TF_LLM_BASE_URL`,
+`TF_LLM_MODEL`, `TF_LLM_API_KEY`) — the key deliberately never touches
+`settings.json` — and shared webhooks (CI) come from the platform's own
+secret store. Defaults need no key at all (local Ollama). For central
+delivery across machines/teams, [`docs/secrets-infisical.md`](docs/secrets-infisical.md)
+covers the optional Infisical setup (`infisical run --env=dev -- dotnet run
+--project src/DongGfx.App`), the machine-identity path for CI/CD, and the
+rotation steps. `.env` files are git-ignored; `.env.example` is the tracked
+placeholder template for that optional import.
 
 ## Project Structure
 

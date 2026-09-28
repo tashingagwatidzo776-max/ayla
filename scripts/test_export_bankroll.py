@@ -31,7 +31,7 @@ def run_export(trades, extra_args=None):
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--store", str(store), "-o", str(out)]
             + (extra_args or []),
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if proc.returncode != 0:
             return None, proc.stdout + proc.stderr, proc.returncode
         with open(out, newline="", encoding="utf-8") as f:
@@ -100,7 +100,7 @@ def test_missing_store_is_not_an_error():
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--store", str(Path(tmp) / "nope.json"),
              "-o", str(Path(tmp) / "out.csv")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert proc.returncode == 0, proc.stderr
     assert "nothing to export" in proc.stderr
     print("  ok: missing store exits 0 (no money axis yet, not a failure)")

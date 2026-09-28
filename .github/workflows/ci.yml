@@ -138,6 +138,9 @@ jobs:
     - name: Test the flake tracker (fail-then-pass visibility)
       run: python scripts/test_flake_tracker.py
 
+    - name: Lint script hygiene (subprocess-decode + UTF-16-log classes stay dead)
+      run: python scripts/check_script_hygiene.py
+
     # Smoke the scheduled flake-tracker's exact invocation (--dry-run: real
     # scan against the real API, zero writes - no issue post, no webhook,
     # no state). The weekly job fires once a Saturday, so its contract with

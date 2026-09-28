@@ -1,6 +1,7 @@
 # AI agent program — six brains, one risk boundary
 
-> Status: **agent 1 (Journal Analyst) shipped**; agents 2–5 specified below.
+> Status: **agents 1 (Journal Analyst) and 2 (Risk Narrator) shipped**; the
+> type-6/7 support lab (`FxLabService`) is shipped; agents 3–4 specified below.
 > This doc is the authority ladder for every AI component in DON G FX. It
 > extends — never weakens — `docs/real-money-safety-audit.md`; the rails
 > there stay the last word on anything that can place a trade.
@@ -39,7 +40,7 @@ L2 is deliberately empty today. Nothing in this program needs it.
 | # | Agent | Authority | Lives where | Shipped |
 |---|---|---|---|---|
 | 1 | **Journal Analyst** | L1 | `JournalAnalystService` | ✅ |
-| 2 | **Risk Narrator** | L1 | phase 2 (digest service) | planned |
+| 2 | **Risk Narrator** | L1 | `RiskNarratorService` | ✅ |
 | 3 | **News Sentinel** | L1 | phase 2 (advisory notes) | planned |
 | 4 | **Setup Grader** | L1→L2 | phase 3 | planned |
 | 5 | **Alpha Researcher** | L1 | `scripts/ai_alpha/` (offline) | ✅ harness |
@@ -71,12 +72,49 @@ narrative digest to the same Discord/Slack webhook settlements use.
   guard, silent when nothing to say, one `AI_CALL` journal entry per
   cycle: model, latency, llm-or-template).
 
-### 2. Risk Narrator — planned (phase 2)
+### 2. Risk Narrator — shipped
 
 When `FxSupervisor` halts (daily-loss cap, equity floor, kill switch,
 bridge-down) or the governor latches, an LLM turns the halt context into a
 human explanation posted within seconds. It narrates halts; it can never
 re-arm, clear, or influence one. Re-arm stays a manual click.
+
+- **Wiring:** subscribes to the journal's `EntryAdded` stream for narratable
+  `FX_RISK` entries; posts to the same webhook settlements use; every call
+  journals `AI_CALL` per the type-7 rules. Same env config as the analyst
+  (`TF_LLM_BASE_URL`/`TF_LLM_MODEL`/`TF_LLM_API_KEY`), same template
+  fallback when the LLM is unreachable.
+- **Toggle:** `RiskNarratorEnabled` (Settings → AI analyst row), applied
+  live through the settings factory.
+
+## Agent-6/7 support: the genetic lab (`FxLabService`)
+
+Nightly, journal-only walk-forward evidence for the alpha families. It
+replays the journal's own `FX_DECISION` bars (no market feed, no bridge),
+optimizes a small momentum blend with `FxGenetic`, and gates every result
+through `FxWalkForward.Approved` (≥60% OOS folds positive, no fold below
+the loss cap). Verdicts land in the journal as `FX_LAB` entries —
+**evidence for a human, never a promotion**: porting an approved parameter
+set is still a reviewed PR into `FxAlphas`. Rails: no order-path reference
+at all, silent under 120 decisions per symbol, `FxLabEnabled` toggle in
+Settings, timer guardrails mirror the digest service.
+
+The full **20-family roster** (`FxFamilies.All`) is what the engine, the
+scorecard, and the lab all evaluate: the 6 original families, the 2 that
+existed but were never wired (`vol-breakout`, `ou-rev`), and 12 new small
+alphas composed from the existing indicator primitives (MACD cross, RSI(2)
+reversion, Keltner, Kalman slope, ADX pullback, Donchian pullback, EMA
+slope, Bollinger squeeze, opening-range breakout, VWAP trend, RSI momentum,
+Hurst-gated momentum). `MultiTimeframe` stays out of the roster — it needs
+a second bar feed the single-stream cycle does not carry.
+
+**Operator tooling:** the Terminal's **LAB RUN** button invokes the same
+walk-forward pass on demand (`FxLabService.RunNowAsync` — the nightly
+toggle does not gate an explicit click; the ≥120-decision guard still
+refuses thin journals with a reason on the FX status line). A weekly
+**`FxLabWeeklyDigest`** rolls the last 7 days of `FX_LAB` entries into one
+webhook post plus an append to `docs/soak/FX-LAB-WEEKLY.md` (uncommitted,
+like every evidence edit).
 
 ### 3. News Sentinel — planned (phase 2)
 
