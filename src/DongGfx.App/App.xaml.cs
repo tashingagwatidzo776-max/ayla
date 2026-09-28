@@ -127,6 +127,29 @@ public partial class App : System.Windows.Application
         services.AddSingleton(sp => new RiskNarratorService(
             sp.GetRequiredService<TradeJournal>(),
             sp.GetRequiredService<WebhookService>()));
+
+        // Genetic lab (agent-6 support): nightly walk-forward replays over
+        // the journal's own decision bars. Journal-only by construction —
+        // no bridge, no order path, no promotion. Approval is evidence for
+        // a human, never an action.
+        services.AddSingleton(sp => new FxLabService(
+            sp.GetRequiredService<TradeJournal>(),
+            log: msg => System.Diagnostics.Debug.WriteLine(msg)));
+
+        // Weekly FX_LAB digest: rolls the genetic lab's journal entries into
+        // one webhook summary + an append to the soak evidence doc. The
+        // append lands as an uncommitted working-copy edit — committing
+        // evidence stays a deliberate human act (soak rules).
+        services.AddSingleton(sp => new FxLabWeeklyDigest(
+            sp.GetRequiredService<TradeJournal>(),
+            sp.GetRequiredService<WebhookService>())
+        {
+            SoakDocPath = FindSoakDocPath(AppContext.BaseDirectory),
+        });
+
+        // Maps tab: one selector-driven canvas over the market surfaces.
+        // Pure read-side over the bridge bars + tick archive; never trades.
+        services.AddSingleton(_ => new MapsViewModel());
         services.AddSingleton(sp => new TerminalViewModel(
             () => sp.GetRequiredService<SettingsViewModel>().BuildSettings(),
             persist: () => _ = sp.GetRequiredService<SettingsViewModel>().SaveSettingsQuietAsync(),
@@ -166,6 +189,7 @@ public partial class App : System.Windows.Application
             sp.GetRequiredService<UpdateViewModel>(),
             sp.GetRequiredService<PerformanceViewModel>(),
             sp.GetRequiredService<TerminalViewModel>(),
+            sp.GetRequiredService<MapsViewModel>(),
             sp.GetRequiredService<TradeJournal>(),
             sp.GetRequiredService<ManualRealMoneyGate>()));
 
@@ -235,6 +259,25 @@ public partial class App : System.Windows.Application
     }
 
     /// <summary>Starts the fire-and-forget services after configuration.</summary>
+    /// <summary>Walks up from the app directory to the enclosing checkout
+    /// (docs/ + .git/ markers, same protocol as SafetyAuditDigest) and
+    /// returns the soak evidence doc path for the weekly FX lab digest.
+    /// Null when running outside a checkout — the append leg no-ops and
+    /// only the webhook posts.</summary>
+    private static string? FindSoakDocPath(string startDirectory)
+    {
+        for (var dir = Path.GetFullPath(startDirectory); dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            var soak = Path.Combine(dir, "docs", "soak");
+            if (Directory.Exists(soak) && Directory.Exists(Path.Combine(dir, ".git")))
+            {
+                return Path.Combine(soak, "FX-LAB-WEEKLY.md");
+            }
+        }
+
+        return null;
+    }
+
     private static void StartBackgroundServices(IServiceProvider provider)
     {
         // Scorecard service (nightly 03:00 walk-forward verdicts per family).
@@ -285,10 +328,21 @@ public partial class App : System.Windows.Application
         provider.GetRequiredService<RiskNarratorService>().NarratorEnabledToggle =
             () => settingsFactory().RiskNarratorEnabled;
 
+        // Nightly genetic lab: same live-toggle pattern; Start() no-ops
+        // while the toggle reports off.
+        var lab = provider.GetRequiredService<FxLabService>();
+        lab.Disabled = !settingsFactory().FxLabEnabled;
+        lab.EnabledToggle = () => settingsFactory().FxLabEnabled;
+        lab.Start();
+
         // Unlock-staleness alert: an armed session unlock past the
         // configured threshold journals REAL_MONEY_UNLOCK_STALE + toast +
         // webhook (the rail the removed hub used to own).
         provider.GetRequiredService<UnlockStalenessMonitor>().Start();
+
+        // Weekly FX lab digest (webhook + soak doc append; silence with no
+        // lab runs is correct — the lab journals FX_LAB only when it runs).
+        provider.GetRequiredService<FxLabWeeklyDigest>().Start();
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -314,6 +368,8 @@ public partial class App : System.Windows.Application
             Ioc.Default.GetService<MetricsDigestService>(),
             Ioc.Default.GetService<JournalAnalystService>(),
             Ioc.Default.GetService<RiskNarratorService>(),
+            Ioc.Default.GetService<FxLabService>(),
+            Ioc.Default.GetService<FxLabWeeklyDigest>(),
             Ioc.Default.GetService<TickArchive>()
         ];
 

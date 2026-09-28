@@ -52,6 +52,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool riskNarratorEnabled = true;
 
+    /// <summary>Nightly genetic lab (journal-only walk-forward evidence).
+    /// Default mirrors AppSettings.</summary>
+    [ObservableProperty]
+    private bool fxLabEnabled = true;
+
+    /// <summary>Maps colormap picker: "Auto" or a colormap name.</summary>
+    [ObservableProperty]
+    private string mapsColormap = "Auto";
+
     [ObservableProperty]
     private int metricsDigestIntervalHours = 6;
 
@@ -190,6 +199,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         AnalystEnabled = settings.AnalystEnabled;
         AnalystMemoryEnabled = settings.AnalystMemoryEnabled;
         RiskNarratorEnabled = settings.RiskNarratorEnabled;
+        FxLabEnabled = settings.FxLabEnabled;
+        MapsColormap = settings.MapsColormap;
         ArmStalenessHours = settings.ArmStalenessHours;
         LogLevel = settings.LogLevel;
         StatusMessage = "Settings loaded.";
@@ -223,6 +234,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         AnalystEnabled = AnalystEnabled,
         AnalystMemoryEnabled = AnalystMemoryEnabled,
         RiskNarratorEnabled = RiskNarratorEnabled,
+        FxLabEnabled = FxLabEnabled,
+        MapsColormap = MapsColormap,
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         LogLevel = LogLevel
     };

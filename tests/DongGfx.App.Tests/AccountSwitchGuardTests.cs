@@ -70,8 +70,9 @@ public class AccountSwitchGuardTests : IDisposable
         new UpdateViewModel(new AutoUpdater("0.0.0-test", updateDir: Path.Combine(_dir, "updates"))),
         new PerformanceViewModel(new PerformanceTracker(Path.Combine(_dir, "perf"))),
         terminal,
-        _journal,
-        _gate);
+        mapsVm: new MapsViewModel(),
+        journal: _journal,
+        gate: _gate);
 
     private FxPortfolioHost NewFxPortfolio() => new(
         new Mt5BridgeClient(new DeadHandler(), new Uri("http://127.0.0.1:1/")),

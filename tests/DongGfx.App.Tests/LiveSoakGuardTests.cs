@@ -15,6 +15,12 @@ namespace DongGfx.App.Tests;
 /// running session.
 /// </summary>
 [Trait("Category", "Unit")]
+// The three fixture-behavior tests at the bottom flip the static
+// LiveSoakFixture.ProbeOverride seam; xunit runs classes in parallel by
+// default, so those flips raced the Shared-DataDir collection's fixture
+// ctor and aborted its entire run ("A live soak session appears...").
+// Joining the collection serializes them with every consumer of the seam.
+[Collection("Shared-DataDir-Directory")]
 public class LiveSoakGuardTests : IDisposable
 {
     private readonly string _dir;

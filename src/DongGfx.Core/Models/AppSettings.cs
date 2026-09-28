@@ -126,6 +126,16 @@ public sealed class AppSettings
     /// or influence a halt.</summary>
     public bool RiskNarratorEnabled { get; set; } = true;
 
+    /// <summary>Nightly genetic lab (docs/ai-agent-program.md agent-6
+    /// support): walk-forward replays of the journal's own decision bars,
+    /// approval-gated and journal-only. It narrates; it never trades and
+    /// never promotes — a human port is still a reviewed PR.</summary>
+    public bool FxLabEnabled { get; set; } = true;
+
+    /// <summary>Maps tab colormap: "Auto" (per-map defaults) or an explicit
+    /// FxCmapKind name (Turbo, Viridis, Inferno, Plasma, Magma, CoolHot).</summary>
+    public string MapsColormap { get; set; } = "Auto";
+
     // ── Logging ────────────────────────────────────────────────────
     /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>
     public int LogLevel { get; set; } = 1;

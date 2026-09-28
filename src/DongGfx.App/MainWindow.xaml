@@ -265,6 +265,7 @@
                             <RowDefinition Height="Auto" />  <!-- 35 News blackout -->
                             <RowDefinition Height="Auto" />  <!-- 36 MT5 terminal path -->
                             <RowDefinition Height="Auto" />  <!-- 39 AI analyst -->
+                            <RowDefinition Height="Auto" />  <!-- 40 Genetic lab -->
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ACCOUNT" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
@@ -376,6 +377,13 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                       ToolTip="When the FX supervisor halts, an AI explanation posts to the webhook within seconds. Read-only: it can never re-arm or influence the halt." />
                         </StackPanel>
 
+                        <TextBlock Grid.Row="40" Grid.Column="0" Text="Genetic lab" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   ToolTip="Nightly walk-forward replays of the journal's own decision bars (FxGenetic + FxWalkForward). Approval-gated evidence only: it never trades and never promotes — a human port is still a reviewed PR. Evidence lands in the journal as FX_LAB." />
+                        <StackPanel Grid.Row="40" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <CheckBox Content="Nightly lab run" IsChecked="{Binding SettingsVm.FxLabEnabled}"
+                                      ToolTip="Journal-only genetic optimization + walk-forward approval gate, once per day. Off = no lab ticks." />
+                        </StackPanel>
+
                         <TextBlock Grid.Row="37" Grid.ColumnSpan="2" Text="APPEARANCE" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
                         <TextBlock Grid.Row="38" Grid.Column="0" Text="Theme" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
                                    ToolTip="Classic mimics the original MetaTrader 5 gray; Dark is the modern default. Applies immediately." />
@@ -436,8 +444,11 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                 <Button Content="PAPER" Style="{StaticResource GhostButton}"
                                         Command="{Binding FxGoPaperCommand}" Margin="0,0,6,0" />
                                 <Button Content="RE-ARM" Style="{StaticResource GhostButton}"
-                                        Command="{Binding FxReArmCommand}" Margin="0,0,12,0"
+                                        Command="{Binding FxReArmCommand}" Margin="0,0,6,0"
                                         ToolTip="After a supervisor loss stop: clear the halt and re-anchor the session loss baseline to the live MT5 balance." />
+                                <Button Content="LAB RUN" Style="{StaticResource GhostButton}"
+                                        Command="{Binding FxLabRunCommand}" Margin="0,0,12,0"
+                                        ToolTip="Genetic lab walk-forward over the journal's own decision bars — evidence for a human, never an auto-promotion. Needs FX_DECISION entries to replay." />
                                 <!-- ── THE BRAIN SWITCH ── -->
                                 <Button Content="🧠 BRAIN: ON" Command="{Binding TurnBrainOnCommand}"
                                         Margin="0,0,6,0" />
@@ -977,6 +988,39 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                             </Border>
                             <TextBlock Text="Running P&amp;L over time" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,6,0,0" />
                         </StackPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="MapsTabItem" Header="Maps">
+                <Grid Margin="12" DataContext="{Binding MapsVm}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- map selector + refresh -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Padding="10" Margin="0,0,0,10">
+                        <DockPanel>
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                <TextBlock Text="MAPS" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" Margin="0,0,18,0" />
+                                <ComboBox ItemsSource="{Binding Maps}" SelectedItem="{Binding SelectedMap}"
+                                          Width="200" Margin="0,0,10,0"
+                                          ToolTip="Market surface: volume surface/profile, liquidity, order flow, volatility, correlation, SMC/ICT sweeps, AI probability." />
+                                <Button Content="REFRESH" Command="{Binding RefreshCommand}" Margin="0,0,10,0" />
+                                <ComboBox ItemsSource="{Binding ColormapChoices}" SelectedItem="{Binding SelectedColormap}"
+                                          Width="100" Margin="0,0,10,0" VerticalAlignment="Center"
+                                          ToolTip="Color scale: Auto picks the perceptual default per surface (Turbo for diverging, Viridis/Magma for magnitude, Inferno for AI probability)." />
+                                <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
+                                           FontFamily="Consolas" FontSize="11"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- the single canvas: every map renders here -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="10">
+                        <controls:HeatMapControl x:Name="MapsCanvas" />
                     </Border>
                 </Grid>
             </TabItem>

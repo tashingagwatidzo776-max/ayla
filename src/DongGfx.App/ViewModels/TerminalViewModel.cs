@@ -227,6 +227,34 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxStatusText = "loss stop re-armed — baseline re-anchored to live balance";
     }
 
+    private FxLabService? _fxLab;
+    private System.Windows.Input.ICommand? _fxLabRunCommand;
+
+    /// <summary>LAB RUN button (explicit command, not generator-emitted —
+    /// the Maps refresh command proved generated async commands are a
+    /// silent-binding hazard).</summary>
+    public System.Windows.Input.ICommand FxLabRunCommand =>
+        _fxLabRunCommand ??= new CommunityToolkit.Mvvm.Input.RelayCommand(() => _ = FxLabRunAsync());
+
+    /// <summary>Operator-invoked lab run: walk-forward evidence over the
+    /// journal's own decision bars, right now. The nightly schedule and
+    /// its Settings toggle are untouched; the service's busy lock prevents
+    /// overlap with a scheduled run. Journal-only — no bridge, no orders,
+    /// evidence for a human, never a promotion.</summary>
+    private async Task FxLabRunAsync()
+    {
+        if (_fxLab is null)
+        {
+            _fxLab = new FxLabService(_journal);
+        }
+
+        FxStatusText = "lab running — replaying the journal's decisions…";
+        var results = await _fxLab.RunNowAsync().ConfigureAwait(true);
+        OnUiThread(() => FxStatusText = results.Count == 0
+            ? "lab: nothing to replay yet — needs FX_DECISION entries (brain cycles build them)"
+            : "lab: " + string.Join(" | ", results.Select(r => $"[{r.Symbol}] {r.Verdict}")));
+    }
+
     /// <summary>Kill-switch leg for the FX brain: stop it, force paper, and
     /// flatten every open MT5 position. Called by the dashboard's kill
     /// switch and by a governor trip.</summary>
@@ -924,6 +952,29 @@ public sealed partial class TerminalViewModel : ObservableObject
         }
 
         RenderCandles();
+    }
+
+    /// <summary>Read-only bridge candle fetch for the Maps surfaces
+    /// (MTF confluence, correlation). Returns whatever the bridge holds —
+    /// empty on outage; callers degrade row-by-row. Never touches the
+    /// chart's own candle buffer.</summary>
+    public async Task<IReadOnlyList<(long Time, double Open, double High, double Low, double Close)>> BridgeCandles(
+        string symbol, string timeframe, int count)
+    {
+        try
+        {
+            var fromBridge = await _mt5.GetCandlesAsync(symbol, timeframe, count).ConfigureAwait(false);
+            var list = new List<(long, double, double, double, double)>(fromBridge.Count);
+            foreach (var c in fromBridge)
+            {
+                list.Add((c.Time, c.Open, c.High, c.Low, c.Close));
+            }
+            return list;
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private async Task LoadCandlesFromBridgeAsync(string symbol)

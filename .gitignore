@@ -8,6 +8,12 @@ publish/
 data/
 secrets/
 
+# Env files: real values live in Infisical (docs/secrets-infisical.md).
+# .env.example stays tracked as the placeholder template.
+.env
+.env.*
+!.env.example
+
 # Rider/VS
 .idea/
 .vs/
@@ -36,3 +42,6 @@ bin-verify/
 # Portable MT5 terminal copied into the repo tree (never enters git history:
 # its terminal64.exe / MetaEditor64.exe exceed GitHub's 100 MB per-file limit)
 mt5_portable/
+
+# Desktop-tool runtime state (session dirs, never source)
+.freebuff/
