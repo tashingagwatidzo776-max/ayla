@@ -316,6 +316,21 @@ public class TerminalViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Mt5Poll_WhenAutoTradingOff_Says_So_At_A_Glance()
+    {
+        using var http = new FakeMt5SidecarHttp { TradeAllowed = false };
+        var vm = CreateVm(mt5Client: new Mt5BridgeClient(
+            http, new Uri($"http://127.0.0.1:{http.Port}/")));
+
+        await vm.PollMt5ForTestsAsync();
+
+        // The whole point: a disabled AutoTrading terminal refuses every
+        // order with client-disabled — the status line must say why.
+        Assert.Contains("AutoTrading OFF", vm.Mt5StatusText);
+        Assert.True(vm.IsMt5Connected);
+    }
+
+    [Fact]
     public async Task Mt5Poll_WhenSidecarDown_ReportsDown()
     {
         var vm = CreateVm();
@@ -406,13 +421,19 @@ public class TerminalViewModelTests : IDisposable
 
         public int Port { get; }
 
+        /// <summary>Set to simulate the terminal's autotrading verdict in
+        /// /health (null = old sidecar that omits the field).</summary>
+        public bool? TradeAllowed;
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? "";
             object payload = path switch
             {
-                "/health" => new { ok = true, login = 201587365L, server = "Deriv-Demo", terminal_connected = true },
+                "/health" => TradeAllowed is { } ta
+                    ? new { ok = true, login = 201587365L, server = "Deriv-Demo", terminal_connected = true, trade_allowed = ta }
+                    : (object)new { ok = true, login = 201587365L, server = "Deriv-Demo", terminal_connected = true },
                 "/account" => new { login = 201587365L, server = "Deriv-Demo", currency = "USD",
                                      balance = 2610.55, equity = 2610.55, margin = 0.0,
                                      margin_free = 2610.55, leverage = 1000, trade_mode = 0 },

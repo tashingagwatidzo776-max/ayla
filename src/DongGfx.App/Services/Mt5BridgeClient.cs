@@ -125,7 +125,7 @@ public sealed class Mt5BridgeClient : IDisposable
     public bool IsLoopback => _http.BaseAddress?.Host is "127.0.0.1" or "localhost";
 
     /// <summary>Liveness + attached-account snapshot. Null = sidecar down.</summary>
-    public async Task<(bool Ok, long? Login, string? Server)?> HealthAsync(CancellationToken ct = default)
+    public async Task<(bool Ok, long? Login, string? Server, bool? TradeAllowed)?> HealthAsync(CancellationToken ct = default)
     {
         using var doc = await GetJson("health", ct).ConfigureAwait(false);
         if (doc is null)
@@ -137,11 +137,18 @@ public sealed class Mt5BridgeClient : IDisposable
         // rather than omitting the fields — TryGetProperty still matches, so
         // the ValueKind must be checked before the typed read (a raw
         // GetInt64/GetString on a null threw and killed the startup poll).
+        // TradeAllowed (older sidecars omit it) is the terminal's own
+        // autotrading verdict — null = unknown, never treated as off.
         return (doc.RootElement.GetProperty("ok").GetBoolean(),
                 doc.RootElement.TryGetProperty("login", out var login) && login.ValueKind == JsonValueKind.Number
                     ? login.GetInt64() : null,
                 doc.RootElement.TryGetProperty("server", out var server) && server.ValueKind == JsonValueKind.String
-                    ? server.GetString() : null);
+                    ? server.GetString() : null,
+                doc.RootElement.TryGetProperty("trade_allowed", out var allowed) && allowed.ValueKind == JsonValueKind.True
+                    ? true
+                    : doc.RootElement.TryGetProperty("trade_allowed", out var allowed2) && allowed2.ValueKind == JsonValueKind.False
+                        ? false
+                        : null);
     }
 
     public async Task<Mt5Account?> GetAccountAsync(CancellationToken ct = default)

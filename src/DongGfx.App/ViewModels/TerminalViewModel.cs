@@ -1305,7 +1305,13 @@ public sealed partial class TerminalViewModel : ObservableObject
             OnUiThread(() =>
             {
                 IsMt5Connected = true;
-                Mt5StatusText = "MT5 bridge: connected";
+                // A disabled AutoTrading terminal refuses every order with
+                // client-disabled (10027) — say so at a glance, right where
+                // the connection state lives. Unknown (old sidecar) shows
+                // nothing rather than a false alarm.
+                Mt5StatusText = health.Value.TradeAllowed is false
+                    ? "MT5 bridge: connected — AutoTrading OFF in the terminal (orders will be refused)"
+                    : "MT5 bridge: connected";
                 if (account is not null)
                 {
                     Mt5AccountText = $"{account.Login} @ {account.Server} · {account.Equity:0.##} {account.Currency}";

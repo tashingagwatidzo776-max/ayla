@@ -166,6 +166,11 @@ class BridgeHandlers:
             "login": getattr(acc, "login", None),
             "server": getattr(acc, "server", None),
             "terminal_connected": getattr(term, "connected", False),
+            # The terminal's OWN autotrading verdict (the green ▶ button AND
+            # the Tools→Options master switch combined). Orders fail with
+            # TRADE_RETCODE_CLIENT_DISABLED (10027) while this is false, so
+            # the app surfaces it in the bridge status line at a glance.
+            "trade_allowed": getattr(term, "trade_allowed", None),
         }
 
     _login_attempts: list[float] = []   # module-level rate-limit state
