@@ -589,6 +589,17 @@ class BridgeHandlers:
         }
 
 
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    """HTTP server that REFUSES to share its port. Python's default
+    allow_reuse_address=True (SO_REUSEADDR) lets a second instance bind a
+    port already in use on Windows — four double-bound sidecars meant
+    connections landed on a random one (transient 'bridge unreachable',
+    split-brain health, 2026-09-28). With reuse disabled the second bind
+    fails loudly here, and main() exits gracefully instead."""
+
+    allow_reuse_address = False
+
+
 class SidecarServer:
     """Maps HTTP routes onto BridgeHandlers; binds loopback only."""
 
@@ -673,7 +684,7 @@ class SidecarServer:
                     self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
         host = "127.0.0.1"
-        self.httpd = ThreadingHTTPServer((host, port), Handler)
+        self.httpd = ExclusiveHTTPServer((host, port), Handler)
         self.port = self.httpd.server_address[1]
 
     def serve_forever(self) -> None:
@@ -696,8 +707,32 @@ def parse_args(argv: list[str]) -> tuple[int, str | None]:
     return port, path
 
 
+def already_running(port: int) -> bool:
+    """True when a live sidecar already serves this port. A simple HTTP
+    GET — the authoritative check: a bound-but-dead socket fails the
+    request, a live responder answers. The watchdog's respawn of an
+    already-healthy sidecar then exits 0 quietly instead of double-binding
+    (which ExclusiveHTTPServer would now refuse anyway — this check just
+    makes the common case silent)."""
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=2
+        ) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001 — nothing listening / not a sidecar
+        return False
+
+
 def main() -> int:
     port, terminal_path = parse_args(sys.argv[1:])
+    if already_running(port):
+        # Watchdog respawn while a healthy sidecar holds the port: exit
+        # quietly with success. Never kill the existing instance — the app
+        # is using it right now.
+        print(f"sidecar already running on 127.0.0.1:{port} — nothing to do")
+        return 0
     target = f" (terminal: {terminal_path})" if terminal_path else ""
     print(f"attaching to MetaTrader 5{target} (retries on IPC timeout)…")
     if not attach(terminal_path=terminal_path):
