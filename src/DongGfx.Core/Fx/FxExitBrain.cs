@@ -121,6 +121,16 @@ public static class FxExitBrain
         votes.Add(ThesisVote(currentRegime, entryRegime, isBuy));
         votes.Add(DrawdownVote(maeR));
 
+        // ---- Shadow engines (observation only) ----------------------------
+        // Future engines ride at weight 0: journaled every cycle but never
+        // moving the score, until their recorded accuracy earns real weight
+        // (FxExitShadow.Grade -> Promote; a human PR ships the change after
+        // the Monte-Carlo harness reports stable).
+        foreach (var sv in ShadowVotes(bars, isBuy, plR, mfeR))
+        {
+            votes.Add(new FxExitVote(sv.Engine, sv.Exit, 0, sv.Reason));
+        }
+
         // ---- Weighted ensemble score --------------------------------------
         double weightSum = 0, weighted = 0;
         foreach (var v in votes)
@@ -211,6 +221,52 @@ public static class FxExitBrain
         >= MonitorScore => "monitor",
         _ => "hold",
     };
+
+    /// <summary>The canonical engine -> weight roster. The vote builders
+    /// inline the same numbers; FxExitBrainTests pins them in sync so a
+    /// weight edit in one place cannot silently drift from the other.
+    /// Shadow engines ride at 0 until promoted from recorded accuracy.</summary>
+    public static readonly IReadOnlyDictionary<string, double> EngineWeights =
+        new Dictionary<string, double>
+        {
+            ["structure"] = 1.6,
+            ["momentum"] = 1.0,
+            ["volatility"] = 1.2,
+            ["time"] = 1.1,
+            ["thesis"] = 1.4,
+            ["drawdown"] = 2.0,
+            ["counterfactual"] = 0,   // shadow: the opposite entry's verdict
+            ["giveback"] = 0,         // shadow: peak give-back ratio
+        };
+
+    /// <summary>The shadow engines: computed every cycle, journaled with
+    /// their reasons, weight 0 — pure observation until promoted.</summary>
+    public static IReadOnlyList<FxExitVote> ShadowVotes(
+        IReadOnlyList<FxBar> bars, bool isBuy, double plR, double mfeR) =>
+        [
+            CounterfactualVote(plR),
+            GivebackVote(plR, mfeR),
+        ];
+
+    /// <summary>Counterfactual shadow (spec engine 15, v1 form): had the
+    /// brain entered the OPPOSITE side at the same time, it would now be
+    /// up exactly the trade's loss. Persistent counter-evidence that the
+    /// thesis is losing its bet.</summary>
+    private static FxExitVote CounterfactualVote(double plR) =>
+        plR < 0
+            ? new FxExitVote("counterfactual", Math.Min(1.0, -plR / 1.5), 0,
+                $"counterfactual: the opposite entry would be {-plR:0.00}R up — the thesis is losing its bet")
+            : new FxExitVote("counterfactual", 0, 0, "counterfactual: the thesis is winning; no counter-evidence");
+
+    /// <summary>Give-back shadow: how much of the trade's peak it has
+    /// returned. A large round-trip from a real peak is the classic
+    /// "should have taken it" pattern; measuring it now is how the
+    /// promotion data accumulates.</summary>
+    private static FxExitVote GivebackVote(double plR, double mfeR) =>
+        mfeR >= 0.5 && plR < mfeR * 0.4
+            ? new FxExitVote("giveback", Math.Min(1.0, 1.0 - (plR / mfeR)), 0,
+                $"giveback: returned {1.0 - plR / mfeR:P0} of its {mfeR:0.00}R peak")
+            : new FxExitVote("giveback", 0, 0, "giveback: holding most of its peak");
 
     private static string Top(IReadOnlyList<FxExitVote> votes)
     {

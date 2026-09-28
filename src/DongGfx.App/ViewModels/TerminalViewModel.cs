@@ -141,6 +141,7 @@ public sealed partial class TerminalViewModel : ObservableObject
             FxStatusText = "engine stopped";
             FxSoakBadge = "";   // the pill must not outlive a stopped brain
             _lastSoakSeen = -1;
+            PersistBrainRunning(running: false);
             return;
         }
 
@@ -157,6 +158,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: PAPER";
         FxStatusText = $"engine running on {string.Join(", ", _fxHost.Symbols)} (paper mode)";
         UpdateFxSoakBadge();
+        PersistBrainRunning(running: true);
     }
 
     [RelayCommand]
@@ -355,6 +357,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         : "MT5 bridge: down — auto-restart pending";
 
     private readonly Action<bool>? _setAutonomyBound;
+    private readonly Action<bool>? _setBrainRunningBound;
     private readonly Action<string>? _setSymbolBound;
     private readonly PriceAlertEngine _alerts;   // Market Watch → Create Alert
     private readonly Dispatcher _dispatcher;
@@ -372,6 +375,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         TradeJournal? journal = null,
         Mt5BridgeClient? mt5 = null,
         Action<bool>? setAutonomyBound = null,
+        Action<bool>? setBrainRunningBound = null,
         Action<string>? setSymbolBound = null,
         TickArchive? tickArchive = null,
         Func<FxPortfolioHost?>? fxHostFactory = null,
@@ -390,6 +394,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         _tickArchive = tickArchive ?? new TickArchive();
         _fxHostFactory = fxHostFactory;
         _setAutonomyBound = setAutonomyBound;
+        _setBrainRunningBound = setBrainRunningBound;
         _setSymbolBound = setSymbolBound;
         // Market Watch right-click → Create Alert arms PriceAlertEngine
         // alerts; a test-injected engine is used as-is (no toast plumbing).
@@ -1699,6 +1704,30 @@ public sealed partial class TerminalViewModel : ObservableObject
     /// places its allowed trades. The terminal's ON/OFF button writes this —
     /// one switch governs the brain on every surface.</summary>
     public bool BrainIsOn => _settings().AutonomyEnabled;
+
+    /// <summary>Records the engine loop's running state so the next launch
+    /// auto-restores it. Deliberately NOT the autonomy flag: this is "was
+    /// the toggle on", autonomy stays the safety master.</summary>
+    private void PersistBrainRunning(bool running)
+    {
+        // The settings VM's mirror is the save source of truth (same bridge
+        // as autonomy): BuildSettings() reconstructs the object, so writing
+        // only the built snapshot would be lost on the next save.
+        _setBrainRunningBound?.Invoke(running);
+        _settings().FxBrainRunning = running;
+        _persist();
+    }
+
+    /// <summary>Auto-restore: restarts the engine loop when it was running
+    /// at the last persist. Called once at startup by the app shell; a
+    /// restored loop is still paper-mode until the human go-lives again.</summary>
+    public void RestoreBrainIfPersistedRunning()
+    {
+        if (_settings().FxBrainRunning && _fxHost is not { } h)
+        {
+            ToggleFxBrain();
+        }
+    }
 
     public string BrainStateText => BrainIsOn
         ? "AUTONOMY ON — the brain places its allowed trades"

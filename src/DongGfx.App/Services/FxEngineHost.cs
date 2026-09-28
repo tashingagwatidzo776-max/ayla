@@ -108,7 +108,8 @@ public sealed class FxEngineHost : IDisposable
         WebhookService? webhook = null,
         Func<double, Task<string?>>? preOrderVeto = null,
         Func<(bool Blackout, string Reason)>? newsVeto = null,
-        TimeSpan cycleOffset = default)
+        TimeSpan cycleOffset = default,
+        string? shadowLedgerPath = null)
     {
         _cycleOffset = cycleOffset;
         _preOrderVeto = preOrderVeto;
@@ -127,6 +128,9 @@ public sealed class FxEngineHost : IDisposable
             dailyLossCap ?? (() => 0m),
             equityFloor ?? (() => 0m),
             webhook);
+        _shadowLedger = shadowLedgerPath is null
+            ? null
+            : new Core.Fx.FxShadowLedger(shadowLedgerPath);
         _engine = new FxEngine(symbol, Timeframe, Journal, lotsCap: (double)_lotsCap(), riskFraction: riskFraction,
             equityProvider: () => _lastEquity);
         // The canonical 20-family roster (FxFamilies.All): the engine picks
@@ -544,6 +548,7 @@ public sealed class FxEngineHost : IDisposable
     // ---- Exit brain state ------------------------------------------------
     // Per-position tracking (MFE/MAE in R, bars held) keyed by ticket, plus
     // the entry regime each position was born in (thesis engine input).
+    private readonly Core.Fx.FxShadowLedger? _shadowLedger;
     private readonly Dictionary<long, Core.Fx.FxPositionState> _exitStates = new();
     private readonly Dictionary<long, Core.Fx.FxRegime> _entryRegimes = new();
 
@@ -685,6 +690,7 @@ public sealed class FxEngineHost : IDisposable
                     {
                         v.Engine,
                         Exit = Core.Fx.FxJson.Sanitize(v.Exit),
+                        Weight = Core.Fx.FxJson.Sanitize(v.Weight),
                         Reason = v.Reason,
                     }).ToList(),
                 }));
@@ -707,6 +713,14 @@ public sealed class FxEngineHost : IDisposable
                     }));
                 if (close.Ok && decision.Action == "full")
                 {
+                    // The engines-earn-votes loop: grade every shadow
+                    // engine's final vote into the promotion ledger (won or
+                    // lost — the ledger, not this call, computes accuracy).
+                    var won = decision.ProfitR > 0;
+                    _shadowLedger?.Append(
+                        p.Ticket, p.Symbol,
+                        decision.Votes.Where(v => v.Weight == 0).ToList(),
+                        decision.Action, won, DateTimeOffset.UtcNow);
                     _exitStates.Remove(p.Ticket);
                     _entryRegimes.Remove(p.Ticket);
                 }

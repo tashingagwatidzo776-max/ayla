@@ -147,6 +147,17 @@ public partial class App : System.Windows.Application
             SoakDocPath = FindSoakDocPath(AppContext.BaseDirectory),
         });
 
+        // Weekly FX_EXIT digest: the exit brain's evidence — override vs
+        // consensus, exit reasons, MAE at exit, round-trips — plus the
+        // shadow engines' promotion-ledger rollup. Journal-only, never trades.
+        services.AddSingleton(sp => new FxExitWeeklyDigest(
+            sp.GetRequiredService<TradeJournal>(),
+            sp.GetRequiredService<WebhookService>())
+        {
+            SoakDocPath = FindSoakDocPath(AppContext.BaseDirectory),
+            LedgerPath = Path.Combine(SettingsService.DataDir, "fx-shadow"),
+        });
+
         // Maps tab: one selector-driven canvas over the market surfaces.
         // Pure read-side over the bridge bars + tick archive; never trades.
         services.AddSingleton(_ => new MapsViewModel());
@@ -158,6 +169,7 @@ public partial class App : System.Windows.Application
             journal: sp.GetRequiredService<TradeJournal>(),
             mt5: sp.GetRequiredService<Mt5BridgeClient>(),
             setAutonomyBound: v => sp.GetRequiredService<SettingsViewModel>().AutonomyEnabled = v,
+            setBrainRunningBound: v => sp.GetRequiredService<SettingsViewModel>().FxBrainRunning = v,
             setSymbolBound: s => sp.GetRequiredService<SettingsViewModel>().FxSymbol = s,
             tickArchive: sp.GetRequiredService<TickArchive>(),
             alerts: sp.GetRequiredService<PriceAlertEngine>(),
@@ -179,7 +191,8 @@ public partial class App : System.Windows.Application
                     webhook: sp.GetRequiredService<WebhookService>(),
                     newsCalendarPath: () => Path.Combine(SettingsService.DataDir, "news-calendar.json"),
                     newsWindow: () => TimeSpan.FromMinutes(
-                        sp.GetRequiredService<Func<AppSettings>>()().NewsBlackoutMinutes));
+                        sp.GetRequiredService<Func<AppSettings>>()().NewsBlackoutMinutes),
+                    shadowLedgerDir: Path.Combine(SettingsService.DataDir, "fx-shadow"));
             }));
         services.AddSingleton(sp => new MainViewModel(
             sp.GetRequiredService<SettingsService>(),
@@ -343,6 +356,30 @@ public partial class App : System.Windows.Application
         // Weekly FX lab digest (webhook + soak doc append; silence with no
         // lab runs is correct — the lab journals FX_LAB only when it runs).
         provider.GetRequiredService<FxLabWeeklyDigest>().Start();
+
+        // Weekly FX exit digest: the exit brain's settlement evidence.
+        provider.GetRequiredService<FxExitWeeklyDigest>().Start();
+
+        // The brain toggle persists its state: a relaunch restores the
+        // engine loop the user left running (paper mode; go-live stays a
+        // human act). Delayed so the terminal view finishes constructing,
+        // and marshaled to the UI thread — the toggle touches the VM's
+        // observable properties (StartBackgroundServices runs on it).
+        var ui = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            try
+            {
+                await ui.InvokeAsync(() =>
+                    provider.GetRequiredService<TerminalViewModel>()
+                        .RestoreBrainIfPersistedRunning()).Task.ConfigureAwait(false);
+            }
+            catch
+            {
+                // auto-restore is a convenience — never a startup risk
+            }
+        });
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -370,6 +407,7 @@ public partial class App : System.Windows.Application
             Ioc.Default.GetService<RiskNarratorService>(),
             Ioc.Default.GetService<FxLabService>(),
             Ioc.Default.GetService<FxLabWeeklyDigest>(),
+            Ioc.Default.GetService<FxExitWeeklyDigest>(),
             Ioc.Default.GetService<TickArchive>()
         ];
 

@@ -52,7 +52,7 @@ public class FxExitBrainTests
         var d = Eval(LongState(), price: 2400.5);
         Assert.Equal("hold", d.Action);
         Assert.Null(d.OverrideEngine);
-        Assert.Equal(6, d.Votes.Count);
+        Assert.Equal(8, d.Votes.Count);   // 6 active engines + 2 shadows (weight 0)
     }
 
     [Fact]
@@ -235,4 +235,114 @@ public class FxExitBrainTests
         bars[^1] = new FxBar(1790000000L + 60 * 39, 2399.9, 2400.1, 2399.0, 2399.2, 100);
         return bars;
     }
+    [Fact]
+    public void Shadow_Engines_Ride_At_Weight_Zero()
+    {
+        var d = Eval(LongState(), price: 2400.5);
+        var shadows = d.Votes.Where(v => v.Weight == 0).ToList();
+        Assert.Equal(["counterfactual", "giveback"], shadows.Select(v => v.Engine).OrderBy(e => e).ToArray());
+        // They never move the score: a re-score without them is identical.
+        var without = d.Votes.Where(v => v.Weight > 0).ToList();
+        double w = 0, acc = 0;
+        foreach (var v in without) { acc += v.Exit * v.Weight; w += v.Weight; }
+        Assert.Equal(acc / w * 100.0, d.Score, 6);
+    }
+
+    [Fact]
+    public void EngineWeights_Roster_Matches_The_Vote_Builders()
+    {
+        var d = Eval(LongState(), price: 2399.0, bars: CrashBars());
+        foreach (var v in d.Votes)
+        {
+            Assert.True(FxExitBrain.EngineWeights.ContainsKey(v.Engine), $"unregistered engine {v.Engine}");
+            Assert.Equal(FxExitBrain.EngineWeights[v.Engine], v.Weight);
+        }
+    }
+
+    [Fact]
+    public void Shadow_Promotion_Needs_Trades_And_Accuracy()
+    {
+        // Not enough trades: observation only, even with a perfect hit rate.
+        Assert.Equal(0, FxExitShadow.WeightFor(1.0, FxExitShadow.PromotionTrades - 1));
+        // Enough trades but weak accuracy: still zero.
+        Assert.Equal(0, FxExitShadow.WeightFor(0.3, FxExitShadow.PromotionTrades + 10));
+        // Both bars met: earned weight, capped at the lightest real engine.
+        var w = FxExitShadow.WeightFor(0.75, FxExitShadow.PromotionTrades + 10);
+        Assert.Equal(0.75, w, 6);
+        Assert.True(w <= 1.0);
+
+        // "Helped" = conviction to exit a held WINNER (the rescue evidence).
+        Assert.True(FxExitShadow.Helped(
+            new FxExitVote("giveback", 0.8, 0, "r"), "hold", won: true));
+        Assert.False(FxExitShadow.Helped(
+            new FxExitVote("giveback", 0.8, 0, "r"), "hold", won: false));  // losers need no rescue
+        Assert.False(FxExitShadow.Helped(
+            new FxExitVote("giveback", 0.2, 0, "r"), "hold", won: true));   // no conviction
+        Assert.False(FxExitShadow.Helped(
+            new FxExitVote("giveback", 0.8, 0, "r"), "full", won: true));   // ensemble already acted
+
+        var report = FxExitShadow.Grade("giveback", 65, 100);
+        Assert.True(report.Eligible);
+        Assert.Contains("reviewed PR", report.Verdict);
+    }
+
+    [Fact]
+    public void MonteCarlo_Reports_Stability_On_A_Robust_Roster()
+    {
+        // A trade whose consensus sits mid-band: ±20% weight noise cannot
+        // move it across a band edge.
+        var votes = new List<FxExitVote>
+        {
+            new("structure", 0.3, 1.6, "x"), new("momentum", 0.3, 1.0, "x"),
+            new("volatility", 0.3, 1.2, "x"), new("time", 0.3, 1.1, "x"),
+            new("thesis", 0.3, 1.4, "x"), new("drawdown", 0.3, 2.0, "x"),
+        };
+        var report = FxExitMonteCarlo.Run([new FxSettledExit(1, "XAUUSD", "monitor", votes)], 200);
+        Assert.Equal(0, report.ActionFlipRate);
+        Assert.StartsWith("stable", report.Verdict);
+    }
+
+    [Fact]
+    public void MonteCarlo_Flags_A_Roster_That_Rides_Band_Edges()
+    {
+        // A trade parked exactly on the TIGHTEN/MONITOR boundary (score
+        // 55.06): ±20% weight noise redistributes between the high-exit and
+        // low-exit engines, flipping it across the edge — the harness must
+        // refuse to bless that change. (Uniform exits would be weight-
+        // invariant and prove nothing.)
+        var votes = new List<FxExitVote>
+        {
+            new("structure", 0.9, 1.6, "x"), new("momentum", 0.9, 1.0, "x"),
+            new("volatility", 0.5, 1.2, "x"), new("time", 0.5, 1.1, "x"),
+            new("thesis", 0.5, 1.4, "x"), new("drawdown", 0.19, 2.0, "x"),
+        };
+        var report = FxExitMonteCarlo.Run([new FxSettledExit(2, "XAUUSD", "tighten", votes)], 200);
+        Assert.True(report.ActionFlipRate > 0.10, $"flip rate {report.ActionFlipRate:P1}");
+        Assert.StartsWith("UNSTABLE", report.Verdict);
+    }
+
+    [Fact]
+    public void MonteCarlo_Is_Deterministic_Under_A_Seed()
+    {
+        var votes = new List<FxExitVote>
+        {
+            new("structure", 0.9, 1.6, "x"), new("momentum", 0.2, 1.0, "x"),
+            new("volatility", 0.4, 1.2, "x"), new("time", 0.1, 1.1, "x"),
+            new("thesis", 0.5, 1.4, "x"), new("drawdown", 0.2, 2.0, "x"),
+        };
+        var trade = new FxSettledExit(3, "XAUUSD", "partial", votes);
+        var a = FxExitMonteCarlo.Run([trade], 50, seed: 7);
+        var b = FxExitMonteCarlo.Run([trade], 50, seed: 7);
+        Assert.Equal(a.ActionFlipRate, b.ActionFlipRate);
+        Assert.Equal(a.MeanAbsScoreDelta, b.MeanAbsScoreDelta, 12);
+    }
+
+    [Fact]
+    public void MonteCarlo_Is_Silent_Without_Settled_Trades()
+    {
+        var report = FxExitMonteCarlo.Run([], 100);
+        Assert.Equal(0, report.Trades);
+        Assert.Contains("FX_EXIT trail is still filling", report.Verdict);
+    }
+
 }

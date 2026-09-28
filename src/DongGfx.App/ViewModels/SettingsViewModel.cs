@@ -25,6 +25,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool autonomyEnabled;
 
+    /// <summary>Pass-through mirror of the brain engine loop's persisted
+    /// running state (TerminalViewModel owns it; the settings editor never
+    /// shows it). BuildSettings copies it back so a settings save can never
+    /// silently stop the restored loop.</summary>
+    [ObservableProperty]
+    private bool fxBrainRunning;
+
     [ObservableProperty]
     private bool webhookOnTrade = true;
 
@@ -177,6 +184,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsDemo = settings.IsDemo;
         Theme = Infrastructure.ThemeManager.Normalize(settings.Theme);
         AutonomyEnabled = settings.AutonomyEnabled;
+        FxBrainRunning = settings.FxBrainRunning;
         Mt5MaxLots = settings.Mt5MaxLots;
         Mt5DailyLossCap = settings.Mt5DailyLossCap;
         Mt5EquityFloor = settings.Mt5EquityFloor;
@@ -212,6 +220,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsDemo = IsDemo,
         Theme = Theme,
         AutonomyEnabled = AutonomyEnabled,
+        FxBrainRunning = FxBrainRunning,
         Mt5MaxLots = Math.Max(0m, Mt5MaxLots),
         Mt5DailyLossCap = Math.Max(0m, Mt5DailyLossCap),
         Mt5EquityFloor = Math.Max(0m, Mt5EquityFloor),

@@ -163,7 +163,8 @@ public sealed class FxPortfolioHost : IDisposable
         WebhookService? webhook,
         Func<string> newsCalendarPath,
         Func<TimeSpan> newsWindow,
-        double riskFraction = 0.02)
+        double riskFraction = 0.02,
+        string? shadowLedgerDir = null)
     {
         Symbols = symbols;
         Supervisor = new FxSupervisor(journal, killSwitchEngaged, governorTripped,
@@ -192,7 +193,10 @@ public sealed class FxPortfolioHost : IDisposable
                 riskFraction, Supervisor, webhook: webhook,
                 preOrderVeto: lots => exposure.VetoAsync(lots),
                 newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow),
-                cycleOffset: TimeSpan.FromSeconds(15 * staggerIndex));
+                cycleOffset: TimeSpan.FromSeconds(15 * staggerIndex),
+                shadowLedgerPath: shadowLedgerDir is null
+                    ? null
+                    : Path.Combine(shadowLedgerDir, $"fx-shadow-{symbol}.jsonl"));
             staggerIndex++;
             host.StatusChanged += s => StatusChanged?.Invoke($"[{symbol}] {s}");
             _hosts.Add(host);

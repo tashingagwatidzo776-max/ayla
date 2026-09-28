@@ -23,6 +23,14 @@ public sealed class AppSettings
     /// trades (the Terminal tab's brain switch writes this).</summary>
     public bool AutonomyEnabled { get; set; }
 
+    /// <summary>Whether the FX brain's engine loop was RUNNING at the last
+    /// persist — the toggle's state, not an autonomy grant. On launch the
+    /// app auto-restarts the engine loop when this is true, so a relaunch
+    /// never silently leaves a running brain stopped (or vice versa).
+    /// Autonomy stays the safety master: a restored loop with autonomy off
+    /// journals decisions and places nothing.</summary>
+    public bool FxBrainRunning { get; set; }
+
     // ── MT5 / FX brain safety ──────────────────────────────────────
     /// <summary>Maximum volume (lots) for a single MT5 order placed through
     /// the bridge. 0 disables MT5 order placement entirely (fail-closed).</summary>
