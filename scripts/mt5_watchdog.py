@@ -44,7 +44,7 @@ def healthy(timeout: float = PROBE_TIMEOUT, path: str = PROBE_PATH) -> bool:
 
 def port_owner(runner=None) -> int:
     """PID listening on the port, or DEAD_PID when nothing is bound."""
-    run = runner or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True))
+    run = runner or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"))
     out = run(["netstat", "-ano"]).stdout
     for line in out.splitlines():
         parts = line.split()
