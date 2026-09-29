@@ -42,17 +42,26 @@ public sealed class FxExposureGuard
         try
         {
             // GetPositionsAsync degrades to an EMPTY list when the bridge is
-            // down — indistinguishable from a flat account. Probe /account
-            // first: null there means unreachable, so we fail closed instead
-            // of happily allowing orders against unknown exposure.
+            // down — indistinguishable from a flat account, and the 2026-09-29
+            // congestion incident rode exactly that hole: /account probed fine
+            // while /positions timed out, the guard read a flat book, and the
+            // cap failed OPEN (7 fills past a 0.10 cap). Rule: a position read
+            // only counts when TWO reads AGREE; any disagreement or a null
+            // account is unknown exposure → refuse.
             var account = await _mt5.GetAccountAsync().ConfigureAwait(false);
             if (account is null)
             {
                 return "bridge unreachable (exposure unknown)";
             }
 
-            var positions = await _mt5.GetPositionsAsync().ConfigureAwait(false);
-            open = positions.Where(p => _symbols.Contains(p.Symbol)).Sum(p => p.Volume);
+            var first = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            var second = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            open = first.Where(p => _symbols.Contains(p.Symbol)).Sum(p => p.Volume);
+            var open2 = second.Where(p => _symbols.Contains(p.Symbol)).Sum(p => p.Volume);
+            if (Math.Abs(open - open2) > 1e-9)
+            {
+                return $"exposure reads disagree ({open:0.##} vs {open2:0.##}) — refusing while unknown";
+            }
         }
         catch
         {
@@ -169,9 +178,17 @@ public sealed class FxSmallAccountGuard
                 return null;   // large account: this rail is dormant
             }
 
-            var positions = await _mt5.GetPositionsAsync().ConfigureAwait(false);
-            var ours = positions.FirstOrDefault(p =>
-                Core.Fx.FxExitBrain.Owns(p.Comment));
+            // Same discipline as the exposure guard: one degraded read
+            // reads as a free slot. Two agreeing reads, or refuse.
+            var first = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            var second = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            var ours = first.FirstOrDefault(p => Core.Fx.FxExitBrain.Owns(p.Comment));
+            var ours2 = second.FirstOrDefault(p => Core.Fx.FxExitBrain.Owns(p.Comment));
+            if ((ours is null) != (ours2 is null) || ours?.Ticket != ours2?.Ticket)
+            {
+                return "small-account mode — position reads disagree (bridge flaked)";
+            }
+
             if (ours is not null)
             {
                 return $"small-account mode — one brain trade at a time " +

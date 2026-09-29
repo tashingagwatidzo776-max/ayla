@@ -14,7 +14,11 @@ public sealed record Mt5Symbol(
     string Symbol, string Description, double? Bid, double? Ask,
     int SpreadPoints, int Digits, int TradeMode,
     double VolumeMin = 0, double VolumeStep = 0, double VolumeMax = 0,
-    double ContractSize = 0);
+    double ContractSize = 0,
+    // Stop geometry (2026-09-29 sidecar): the venue's minimum stop distance
+    // in points and the price per point. Missing on an old sidecar = 0, and
+    // callers fall back to the price-scale pip heuristic.
+    int StopsLevel = 0, double Point = 0);
 
 /// <summary>One open MT5 position (bridge /positions). Sl/Tp feed the
 /// chart's draggable price lines; 0 = no leg set. Optional so older
@@ -202,7 +206,9 @@ public sealed class Mt5BridgeClient : IDisposable
                 e.TryGetProperty("volume_min", out var vmin) && vmin.ValueKind == JsonValueKind.Number ? vmin.GetDouble() : 0,
                 e.TryGetProperty("volume_step", out var vstep) && vstep.ValueKind == JsonValueKind.Number ? vstep.GetDouble() : 0,
                 e.TryGetProperty("volume_max", out var vmx) && vmx.ValueKind == JsonValueKind.Number ? vmx.GetDouble() : 0,
-                e.TryGetProperty("contract_size", out var csz) && csz.ValueKind == JsonValueKind.Number ? csz.GetDouble() : 0));
+                e.TryGetProperty("contract_size", out var csz) && csz.ValueKind == JsonValueKind.Number ? csz.GetDouble() : 0,
+                e.TryGetProperty("stops_level", out var stl) && stl.ValueKind == JsonValueKind.Number ? stl.GetInt32() : 0,
+                e.TryGetProperty("point", out var pt) && pt.ValueKind == JsonValueKind.Number ? pt.GetDouble() : 0));
         }
         return list;
     }

@@ -49,6 +49,10 @@ public class FxPortfolioTests
         public string SymbolsJson = "{\"symbols\":[]}";
         public double Equity = 2632.19;
         public bool Down;
+        // Scripted /positions behavior: each entry is one read — a JSON
+        // body (served verbatim) or "!fail" (transport error, which the
+        // client degrades to an empty list — exactly the production hazard).
+        public Queue<string>? PositionsReads;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
         {
@@ -58,6 +62,20 @@ public class FxPortfolioTests
             }
 
             var path = req.RequestUri!.AbsolutePath;
+            if (path.Contains("/positions") && PositionsReads is { } plan && plan.Count > 0)
+            {
+                var scripted = plan.Dequeue();
+                if (scripted == "!fail")
+                {
+                    return Task.FromException<HttpResponseMessage>(new HttpRequestException("flaky read"));
+                }
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(scripted, Encoding.UTF8, "application/json")
+                });
+            }
+
             var eq = Equity.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var json = path.Contains("/positions") ? PositionsJson
                 : path.Contains("/symbols") ? SymbolsJson
@@ -132,6 +150,61 @@ public class FxPortfolioTests
         var veto = await guard.VetoAsync(0.01);
         Assert.NotNull(veto);
         Assert.Contains("unreachable", veto);
+    }
+
+    [Fact]
+    public async Task Exposure_FlakyPositionRead_FailsClosed_NotOpen()
+    {
+        // The 2026-09-29 cap-failure mechanism: /account answers while a
+        // /positions read times out; the degraded-empty read made a loaded
+        // book look flat and the cap failed open. Now the second read must
+        // disagree with the first (0.3 vs 0) and refuse.
+        var loaded = $"{{\"positions\":[{Pos("XAUUSDmicro", 0.3)}]}}";
+        var h = new PositionsHandler
+        {
+            PositionsReads = new Queue<string>(new[] { loaded, "!fail" }),
+        };
+        var guard = new FxExposureGuard(NewClient(h), () => 0.10m, new[] { "XAUUSDmicro" });
+        var veto = await guard.VetoAsync(0.01);
+        Assert.NotNull(veto);
+        Assert.Contains("disagree", veto);
+    }
+
+    [Fact]
+    public async Task Exposure_ChangingBook_Between_Reads_Refuses()
+    {
+        // Two healthy-looking reads that disagree (a fill landed in
+        // between): the exposure number is not trustworthy — refuse.
+        var h = new PositionsHandler
+        {
+            PositionsReads = new Queue<string>(new[]
+            {
+                $"{{\"positions\":[{Pos("XAUUSDmicro", 0.05)}]}}",
+                $"{{\"positions\":[{Pos("XAUUSDmicro", 0.09)}]}}",
+            }),
+        };
+        var guard = new FxExposureGuard(NewClient(h), () => 0.10m, new[] { "XAUUSDmicro" });
+        var veto = await guard.VetoAsync(0.01);
+        Assert.NotNull(veto);
+        Assert.Contains("disagree", veto);
+    }
+
+    [Fact]
+    public async Task SmallAccount_FlakyPositionRead_FailsClosed()
+    {
+        // Same mechanism on the one-slot rail: a degraded read must not
+        // present a used slot as free.
+        var brainPos = $"{{\"positions\":[{Pos("EURUSD", 0.01, "donggfx-brain")}]}}";
+        var h = new PositionsHandler
+        {
+            SymbolsJson = SmallAccountSymbolsJson,
+            Equity = 20,
+            PositionsReads = new Queue<string>(new[] { brainPos, "!fail" }),
+        };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD" });
+        var veto = await guard.VetoAsync("EURUSD", 0.01);
+        Assert.NotNull(veto);
+        Assert.Contains("small-account mode", veto);
     }
 
     // ── small-account guard ───────────────────────────────────────────

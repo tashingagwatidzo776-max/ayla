@@ -530,8 +530,16 @@ public sealed class FxEngineHost : IDisposable
         var vspec = _venueSpec ?? Core.Fx.FxVenueSymbolSpec.Heuristic(mid);
         var stopDistance = Core.Fx.FxExitBrain.NormalizedStopDistance(
             decision.Signal.StopDistanceHint, vspec.StopsLevel, vspec.Point);
-        var sl = mid > 0 && stopDistance is { } dist
-            ? Math.Round(side == "buy" ? mid - dist : mid + dist, 6)
+        // Anchor the stop on the side the venue will measure it from: a
+        // buy's SL is checked against BID (which is below mid by half the
+        // spread), a sell's against ASK — anchoring on mid once landed
+        // stops inside the venue's forbidden band and MT5 refused the
+        // order outright (invalid-stops).
+        var anchor = tick is { } tk
+            ? (side == "buy" ? tk.Bid : tk.Ask)
+            : 0;
+        var sl = anchor > 0 && stopDistance is { } dist
+            ? Math.Round(side == "buy" ? anchor - dist : anchor + dist, 6)
             : (double?)null;
         if (sl is null)
         {
@@ -629,7 +637,14 @@ public sealed class FxEngineHost : IDisposable
                 ContractSize: match.ContractSize,
                 VolumeMin: match.VolumeMin > 0 ? match.VolumeMin : 0.01,
                 VolumeStep: match.VolumeStep > 0 ? match.VolumeStep : 0.01,
-                VolumeMax: match.VolumeMax > 0 ? match.VolumeMax : 100.0);
+                VolumeMax: match.VolumeMax > 0 ? match.VolumeMax : 100.0,
+                // Stop geometry travels with the spec — dropping it here
+                // (the 2026-09-29 invalid-stops incident) left the SL floor
+                // on the default point size, 20x too small on JPY pairs.
+                StopsLevel: match.StopsLevel,
+                Point: match.Point > 0
+                    ? match.Point
+                    : Core.Fx.FxExitBrain.PipSizeOf(match.Bid ?? 0) / 10);
             _engine.SetVenueSpec(_venueSpec);
             VenueSpecLoaded = true;
         }
