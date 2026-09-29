@@ -52,7 +52,9 @@ public sealed record FxVenueSymbolSpec(
     double ContractSize,
     double VolumeMin,
     double VolumeStep,
-    double VolumeMax)
+    double VolumeMax,
+    double StopsLevel = 0,        // venue's min stop distance, in points
+    double Point = 0.0001)        // the symbol's point (price per point)
 {
     /// <summary>Fallback for symbols the venue has not described yet: the
     /// historic heuristic (100k units FX, 100 oz for gold-like prices,
@@ -62,7 +64,9 @@ public sealed record FxVenueSymbolSpec(
         ContractSize: midPrice > 500 ? 100.0 : 100_000.0,
         VolumeMin: 0.01,
         VolumeStep: 0.01,
-        VolumeMax: 100.0);
+        VolumeMax: 100.0,
+        StopsLevel: 0,
+        Point: midPrice > 500 ? 0.01 : 0.00001);
 }
 
 public sealed class FxEngine

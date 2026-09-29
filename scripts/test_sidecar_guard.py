@@ -138,6 +138,92 @@ def test_already_running_false_on_a_dead_port():
     assert mt5_sidecar.already_running(port) is False
 
 
+class _Info:
+    """Minimal stand-in for an MT5 symbol_info object."""
+
+    def __init__(self, stops_level, point, digits):
+        self.name = "EURUSD"
+        self.description = "Euro vs US Dollar"
+        self.visible = True
+        self.spread = 10
+        self.trade_mode = 4
+        self.volume_min = 0.01
+        self.volume_step = 0.01
+        self.volume_max = 100.0
+        self.filling_mode = 1
+        self.trade_contract_size = 100_000.0
+        self.trade_stops_level = stops_level
+        self.point = point
+        self.digits = digits
+
+
+class _SymbolFacade:
+    """Facade exposing only symbols() with a canned symbol_info."""
+
+    # MT5 trade-action constants the order path reads off the facade.
+    TRADE_ACTION_DEAL = 1
+    TRADE_ACTION_PENDING = 5
+
+    def __init__(self, info):
+        self._info = info
+
+    def symbols_get(self):
+        return [self._info]
+
+    def symbol_select(self, _symbol, enable=True):
+        return True
+
+    def symbol_info(self, _symbol):
+        return self._info
+
+    def symbol_info_tick(self, _symbol):
+        return None
+
+
+def test_symbols_payload_includes_stop_geometry():
+    import mt5_sidecar
+
+    handlers = mt5_sidecar.BridgeHandlers(_SymbolFacade(_Info(25, 0.00001, 5)))
+    out = handlers.symbols()
+    sym = out["symbols"][0]
+    assert sym["stops_level"] == 25
+    assert sym["point"] == 0.00001
+
+
+def test_order_normalizes_sl_to_symbol_digits():
+    import mt5_sidecar
+
+    calls = {}
+
+    class OrderFacade(_SymbolFacade):
+        def __init__(self, info):
+            super().__init__(info)
+
+        def symbol_info_tick(self, _symbol):
+            class Tick:
+                bid = 1.15000
+                ask = 1.15003
+            return Tick()
+
+        def order_send(self, request):
+            calls["sl"] = request.get("sl")
+            calls["tp"] = request.get("tp")
+
+            class R:
+                retcode = 10009  # TRADE_RETCODE_DONE
+
+            return R()
+
+    info = _Info(0, 0.00001, 5)
+    handlers = mt5_sidecar.BridgeHandlers(OrderFacade(info))
+
+    body = {"action": "buy", "type": "market", "symbol": "EURUSD",
+            "lots": 0.01, "sl": 1.1494823711, "tp": 1.1530099999}
+    handlers.order(body)
+    assert calls["sl"] == 1.14948, calls
+    assert calls["tp"] == 1.15301, calls
+
+
 def main() -> int:
     tests = [
         test_sidecar_compiles,
@@ -146,6 +232,8 @@ def main() -> int:
         test_default_server_documents_the_windows_hazard,
         test_already_running_true_against_a_live_health,
         test_already_running_false_on_a_dead_port,
+        test_symbols_payload_includes_stop_geometry,
+        test_order_normalizes_sl_to_symbol_digits,
     ]
     print("sidecar single-instance guard tests")
     for t in tests:

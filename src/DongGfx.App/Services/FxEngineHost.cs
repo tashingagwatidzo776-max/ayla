@@ -503,8 +503,36 @@ public sealed class FxEngineHost : IDisposable
         }
 
         var side = decision.Signal!.Direction == FxDirection.Buy ? "buy" : "sell";
+
+        // The order carries the stop the trade was sized with: the alpha's
+        // stop-distance hint IS the R unit, so it goes to the venue as an
+        // SL (floored at the venue's stops_level — a stop inside that band
+        // is rejected outright). Sizing, the exit brain's MAE ruler and the
+        // broker's own risk accounting then all measure the same distance;
+        // with no SL the exit brain fell back to a sub-pip ATR ruler and
+        // the 1.6R emergency bar fired within a pip of entry.
+        var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
+        var mid = tick is { } t && t.Ask > 0 && t.Bid > 0 ? (t.Ask + t.Bid) / 2 : 0;
+        var vspec = _venueSpec ?? Core.Fx.FxVenueSymbolSpec.Heuristic(mid);
+        var stopDistance = Core.Fx.FxExitBrain.NormalizedStopDistance(
+            decision.Signal.StopDistanceHint, vspec.StopsLevel, vspec.Point);
+        var sl = mid > 0 && stopDistance is { } dist
+            ? Math.Round(side == "buy" ? mid - dist : mid + dist, 6)
+            : (double?)null;
+        if (sl is null)
+        {
+            // Fail closed: without a stop the position's risk is unsized —
+            // the exit brain would fall back to a guess and the venue would
+            // hold an unprotected position. Never dispatch one.
+            Journal("FX_ORDER",
+                "refused: no usable tick/stop distance for the sized risk " +
+                $"(hint {decision.Signal.StopDistanceHint:0.#####}, stopsLevel {vspec.StopsLevel:0.#})", "{}");
+            StatusChanged?.Invoke("order refused: stop distance unusable");
+            return;
+        }
+
         var result = await _mt5.PlaceOrderAsync(
-            Symbol, side, "market", lots, null, null, null, null,
+            Symbol, side, "market", lots, null, null, sl, null,
             comment: Core.Fx.FxExitBrain.OwnershipComment).ConfigureAwait(true);
         // The comment stamp is how the exit engine recognizes the positions
         // it owns — manual trades are never managed.
@@ -517,6 +545,7 @@ public sealed class FxEngineHost : IDisposable
             {
                 Side = side,
                 Lots = lots,
+                Sl = sl,
                 PaperExec = paperExec,
                 result.Retcode,
                 result.Order,

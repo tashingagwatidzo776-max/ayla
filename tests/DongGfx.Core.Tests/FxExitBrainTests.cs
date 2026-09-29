@@ -43,7 +43,44 @@ public class FxExitBrainTests
     public void RiskPerLot_Uses_The_Stop_Or_The_Atr_Fallback()
     {
         Assert.Equal(1.5, FxExitBrain.RiskPerLot(2400, 2398.5, 99));
-        Assert.Equal(1.5, FxExitBrain.RiskPerLot(2400, 0, 1.0));   // 1.0 * 1.5
+        Assert.Equal(10.0, FxExitBrain.RiskPerLot(2400, 0, 1.0));  // pip floor, not 1.0 * 1.5
+    }
+
+    [Fact]
+    public void RiskPerLot_Fallback_Is_Floored_At_A_Pip()
+    {
+        // A sub-pip ATR on gold's price scale must never shrink the
+        // emergency bar below one pip (10 on the >500 price scale) — a
+        // sub-pip ruler once made 1.6R mean "one spread of adverse tick".
+        Assert.Equal(10.0, FxExitBrain.RiskPerLot(2400, 0, 0.001));
+        Assert.Equal(10.0, FxExitBrain.RiskPerLot(2400, 0, 0));      // no ATR at all
+        Assert.Equal(0.0001, FxExitBrain.RiskPerLot(1.15, 0, 0.0000001)); // EURUSD scale
+        // A real SL always wins over the floor.
+        Assert.Equal(2.0, FxExitBrain.RiskPerLot(2400, 2398, 0.001));
+    }
+
+    [Fact]
+    public void NormalizedStopDistance_Clamps_To_The_Venue_Band()
+    {
+        // Above the band: the desired distance passes untouched.
+        Assert.Equal(2.5, FxExitBrain.NormalizedStopDistance(2.5, stopsLevel: 30, point: 0.01));
+        // Below the band (0.2 < 30 × 0.01 = 0.3): floored up to 0.3.
+        Assert.Equal(0.3, FxExitBrain.NormalizedStopDistance(0.2, stopsLevel: 30, point: 0.01));
+        // Degenerate inputs: nothing sane to place.
+        Assert.Null(FxExitBrain.NormalizedStopDistance(0, 30, 0.01));
+        Assert.Null(FxExitBrain.NormalizedStopDistance(-1, 30, 0.01));
+        Assert.Null(FxExitBrain.NormalizedStopDistance(double.NaN, 30, 0.01));
+    }
+
+    [Fact]
+    public void VenueSpec_Carries_Stop_Geometry_With_Safe_Defaults()
+    {
+        var spec = new FxVenueSymbolSpec(100_000, 0.01, 0.01, 100);
+        Assert.Equal(0, spec.StopsLevel);
+        Assert.Equal(0.0001, spec.Point);
+        // Heuristic follows the price scale.
+        Assert.Equal(0.01, FxVenueSymbolSpec.Heuristic(2400).Point);
+        Assert.Equal(0.00001, FxVenueSymbolSpec.Heuristic(1.15).Point);
     }
 
     [Fact]

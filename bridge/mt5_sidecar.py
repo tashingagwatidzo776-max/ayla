@@ -265,6 +265,11 @@ class BridgeHandlers:
                 "volume_step": float(info.volume_step),
                 "volume_max": float(info.volume_max),
                 "contract_size": float(info.trade_contract_size),
+                # Stop geometry: the app floors its stop distances at the
+                # venue's stops_level (an SL inside the band is rejected
+                # outright by order_send). point converts points → price.
+                "stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+                "point": float(info.point or 0.00001),
             })
         return {"symbols": out}
 
@@ -527,10 +532,15 @@ class BridgeHandlers:
             request["price"] = float(price)
         if price is not None and kind != "stoplimit":
             request["price"] = float(price)
+        # Normalize stop prices to the symbol's own digit count: a float
+        # arriving from JSON can sit inside the stops_level band purely by
+        # representation (…00000001), and MT5 rounds to digits anyway —
+        # explicit normalization keeps rejections honest.
+        digits = int(getattr(info, "digits", 5) or 5)
         if body.get("sl") is not None:
-            request["sl"] = float(body["sl"])
+            request["sl"] = round(float(body["sl"]), digits)
         if body.get("tp") is not None:
-            request["tp"] = float(body["tp"])
+            request["tp"] = round(float(body["tp"]), digits)
 
         result = self._m.order_send(request)
         if result is None:

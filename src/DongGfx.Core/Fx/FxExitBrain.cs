@@ -75,17 +75,49 @@ public static class FxExitBrain
     public static bool Owns(string positionComment) =>
         positionComment.Contains(OwnershipComment, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>R-unit per lot: the initial-stop distance in price terms.
-    /// Falls back to an ATR multiple when no SL was set at entry — the
-    /// honest unit the trade actually risks.</summary>
+    /// <summary>Approximate pip size by price scale — mirrors the engine's
+    /// own heuristic (FxEngine.PipSizeOf). Used only to keep fallback risk
+    /// units at sane market scale.</summary>
+    public static double PipSizeOf(double price) => price switch
+    {
+        > 500 => 10,      // XAU-like
+        > 20 => 0.01,     // index-ish
+        _ => 0.0001,      // EURUSD-like
+    };
+
+    /// <summary>The exit brain's R-unit: the initial-stop distance in price
+    /// terms. When no SL was set at entry it falls back to an ATR multiple
+    /// floored at one pip — a sub-pip ATR (quiet M1 micro-bars, thin
+    /// sessions) once made the 1.6R emergency bar measure less than a pip
+    /// of adverse movement, cutting positions on spread noise.</summary>
     public static double RiskPerLot(double entry, double initialSl, double atrAtEntry)
     {
         // initialSl == 0 means "no stop was set" — never treat the whole
         // entry price as risk distance.
         var stopDist = initialSl > 0 ? Math.Abs(entry - initialSl) : 0;
-        return stopDist > 1e-9
-            ? stopDist
-            : Math.Max(atrAtEntry, 1e-9) * 1.5;
+        if (stopDist > 1e-9)
+        {
+            return stopDist;
+        }
+
+        var pip = PipSizeOf(entry);
+        return Math.Max(Math.Max(atrAtEntry, 0) * 1.5, pip);
+    }
+
+    /// <summary>Clamp a desired stop distance up to what the venue accepts:
+    /// stops_level points (converted to price by the symbol's point). A
+    /// stop inside that band is rejected outright by MT5, so flooring here
+    /// is cheaper than a refused order. Returns null when the distance is
+    /// degenerate (nothing sane to place).</summary>
+    public static double? NormalizedStopDistance(double desired, double stopsLevel, double point)
+    {
+        if (!double.IsFinite(desired) || desired <= 0)
+        {
+            return null;
+        }
+
+        var floor = Math.Max(stopsLevel, 0) * Math.Max(point, 1e-9);
+        return double.IsFinite(floor) ? Math.Max(desired, floor) : null;
     }
 
     /// <summary>Evaluate one open position: engines vote, the resolver

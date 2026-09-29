@@ -34,6 +34,7 @@ public class DemoPaperExecutionTests
         public bool AccountUnverified;
         public bool AccountReal;
         public bool AccountMissing;
+        public bool TicksDown;
         public object[] Positions = Array.Empty<object>();
         public int CloseCalls;
         public int ModifyCalls;
@@ -84,7 +85,9 @@ public class DemoPaperExecutionTests
             }
             else if (path.Contains("/ticks/"))
             {
-                r = Json(new { bid = 1.15000, ask = 1.15003, time = 1_700_000_000L + 120 * 60 });
+                r = TicksDown
+                    ? Json(new { error = "no tick" }, HttpStatusCode.NotFound)
+                    : Json(new { bid = 1.15000, ask = 1.15003, time = 1_700_000_000L + 120 * 60 });
             }
             else if (path.EndsWith("/order"))
             {
@@ -241,6 +244,42 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Order_Carries_The_Sized_Stop_As_Sl()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        Assert.Equal(1, script.OrderCalls);
+        Assert.NotNull(script.LastOrderBody);
+        // Buy 0.1 at mid 1.150015, hint = ATR(14) of the rising tape ≈
+        // 0.0006 → SL = mid − hint, ≈ 1.1494 and comfortably below entry.
+        Assert.Contains("\"sl\":1.149", script.LastOrderBody);
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 200),
+            e => e.Category == "FX_ORDER" && e.Details.Contains("\"Sl\":1.149"));
+    }
+
+    [Fact]
+    public async Task Order_Refused_FailClosed_When_No_Tick_For_The_Stop()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript { TicksDown = true };
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        // Without a tick there is no honest stop: an unprotected order
+        // never leaves the app.
+        Assert.Equal(0, script.OrderCalls);
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 200), e =>
+            e.Category == "FX_ORDER" && e.Details.Contains("no usable tick/stop distance"));
+    }
+
+    [Fact]
     public void OrderCooldown_Rule_Pins()
     {
         var now = DateTimeOffset.UtcNow;
@@ -334,7 +373,7 @@ public class DemoPaperExecutionTests
                 // bar -> the drawdown override must close it in full.
                 new { ticket = 111L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
                       price_open = 1.1480, price_current = 1.1400, profit = -80.0,
-                      sl = 0.0, tp = 0.0, comment = "donggfx-brain" },
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
                 // Not ours: a manual position in even worse shape — the
                 // brain must never touch what it did not open.
                 new { ticket = 222L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
