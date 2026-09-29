@@ -24,6 +24,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "bridge"))
 
+# CI has no MetaTrader5 package (Windows-runner-only dependency), and the
+# guard surface under test here never touches a terminal — stub the module
+# before any mt5_sidecar import, exactly like bridge/test_mt5_sidecar.py
+# does. On machines WITH the package the real module is used untouched.
+try:
+    import MetaTrader5  # noqa: F401
+except ImportError:
+    import types as _types
+    sys.modules["MetaTrader5"] = _types.SimpleNamespace(
+        TIMEFRAME_M1=1, TIMEFRAME_M2=2, TIMEFRAME_M3=3, TIMEFRAME_M4=4,
+        TIMEFRAME_M5=5, TIMEFRAME_M6=6, TIMEFRAME_M10=10, TIMEFRAME_M12=12,
+        TIMEFRAME_M15=15, TIMEFRAME_M20=20, TIMEFRAME_M30=30,
+        TIMEFRAME_H1=16385, TIMEFRAME_H2=16386, TIMEFRAME_H3=16387,
+        TIMEFRAME_H4=16388, TIMEFRAME_H6=16390, TIMEFRAME_H8=16392,
+        TIMEFRAME_H12=16396, TIMEFRAME_D1=16408, TIMEFRAME_W1=32769,
+        TIMEFRAME_MN1=49153,
+        ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1, ORDER_TYPE_BUY_LIMIT=2,
+        ORDER_TYPE_SELL_LIMIT=3, ORDER_TYPE_BUY_STOP=4, ORDER_TYPE_SELL_STOP=5,
+        ORDER_TYPE_BUY_STOP_LIMIT=6, ORDER_TYPE_SELL_STOP_LIMIT=7,
+        BOOK_TYPE_ASK=1, BOOK_TYPE_BID=2, POSITION_TYPE_BUY=0,
+        TRADE_ACTION_DEAL=1, TRADE_ACTION_PENDING=5, TRADE_ACTION_SLTP=6,
+        TRADE_ACTION_REMOVE=8, ORDER_FILLING_FOK=0,
+        DEAL_TYPE_BUY=0)
+
 PASS = 0
 FAIL = 0
 FAILURES: list[tuple[str, str]] = []
