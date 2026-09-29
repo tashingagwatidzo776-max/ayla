@@ -8,3 +8,14 @@
 - exit reasons (decisive): drawdown ×5
 - MAE at exit: <0.5R ×0, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×5
 - round-trips (MFE ≥1R, closed ≤0.2R): 2/5 (40%)
+
+
+## FX exit weekly digest — 2026-09-28
+
+- evaluations: 165 (override 5 / consensus 160)
+- close confirmations (no evaluation): 4
+- overrides: drawdown ×5
+- consensus bands: hold ×153, monitor ×7
+- exit reasons (decisive): drawdown ×5
+- MAE at exit: <0.5R ×0, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×5
+- round-trips (MFE ≥1R, closed ≤0.2R): 2/5 (40%)
