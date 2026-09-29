@@ -165,9 +165,9 @@ public sealed class FxEngineHost : IDisposable
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += async (_, _) =>
         {
-            if (_cycleRunning)
+            if (!TryBeginCycle("timer"))
             {
-                return;   // a slow cycle skips its tick instead of stacking requests
+                return;
             }
             if (_firstCycle)
             {
@@ -211,7 +211,7 @@ public sealed class FxEngineHost : IDisposable
     /// guarded against stacking with the timer tick.</summary>
     private async Task FirstCycleAsync()
     {
-        if (_cycleRunning)
+        if (!TryBeginCycle("first-cycle"))
         {
             return;
         }
@@ -229,6 +229,22 @@ public sealed class FxEngineHost : IDisposable
         {
             _cycleRunning = false;
         }
+    }
+
+    /// <summary>Shared re-entrancy guard for the timer tick and the first
+    /// cycle: refuses while a cycle is in flight and JOURNALS the skip —
+    /// 2026-09-29 saw a wedged cycle silently swallow every tick for an
+    /// hour, with journal silence as the only symptom. Returns false when
+    /// the cycle is skipped.</summary>
+    internal bool TryBeginCycle(string source)
+    {
+        if (_cycleRunning)
+        {
+            Journal("FX_CYCLE", $"cycle skipped ({source}) — previous cycle still running", "{}");
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>Anchor the supervisor's loss baseline to the live balance

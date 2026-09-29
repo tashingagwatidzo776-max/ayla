@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using DongGfx.App.Infrastructure;
@@ -399,6 +400,26 @@ public class DemoPaperExecutionTests
         };
         await host.RunCycleAsync();
         Assert.Equal(0.1, host.LocalBookLots);
+    }
+
+    [Fact]
+    public void Reentrant_Cycle_Skip_Is_Journaled_Not_Silent()
+    {
+        // 2026-09-29: a wedged cycle swallowed every timer tick for an
+        // hour with zero journal trace. The guard must now SHOUT when it
+        // refuses a cycle.
+        var journal = NewJournal();
+        var host = NewHost(new BridgeScript(), journal);
+
+        Assert.True(host.TryBeginCycle("timer"));   // free → runs
+
+        typeof(FxEngineHost).GetField("_cycleRunning",
+            BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(host, true);                       // a cycle in flight
+        Assert.False(host.TryBeginCycle("timer"));   // must refuse…
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 200),
+            e => e.Category == "FX_CYCLE" && e.Details.Contains("cycle skipped (timer)"));
     }
 
     [Fact]

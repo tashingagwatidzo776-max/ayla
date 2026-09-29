@@ -494,8 +494,11 @@ public class FxPortfolioTests
     }
 
     private static FxPortfolioHost NewPortfolio(PositionsHandler handler, params string[] symbols) =>
+        NewPortfolio(handler, journal: null, symbols);
+
+    private static FxPortfolioHost NewPortfolio(PositionsHandler handler, TradeJournal? journal, params string[] symbols) =>
         new(
-            NewClient(handler), NewJournal(), symbols,
+            NewClient(handler), journal ?? NewJournal(), symbols,
             killSwitchEngaged: () => false,
             lotsCap: () => 1.00m,
             realMoneyUnlocked: () => false,
@@ -515,6 +518,41 @@ public class FxPortfolioTests
         Assert.All(p.Hosts, h => Assert.Same(p.Supervisor, h.Supervisor));
         Assert.Equal(3, p.Symbols.Count);
         p.Dispose();
+    }
+
+    [Fact]
+    public void Exposure_Audit_Warns_When_Journal_Book_Exceeds_The_Cap()
+    {
+        // 2026-09-29 signature: a book above the cap with zero refusals in
+        // the journal. The audit is the smoke detector — it must WARN with
+        // both books' numbers, and stay silent when everything is inside.
+        var journal = NewJournal();
+        // Yesterday's file: Compute scans all journal_*.jsonl, but the
+        // journal's own flush only ever writes TODAY's file — a same-day
+        // fixture file would be deleted along with the audit's evidence.
+        var fillFile = Path.Combine(journal.JournalDir,
+            $"journal_{DateTime.UtcNow.AddDays(-1):yyyyMMdd}.jsonl");
+        File.WriteAllLines(fillFile,
+            new[] { FillLine("2026-09-29T08:00:00Z", "buy", "0.30", "XAUUSDmicro", 777) });
+
+        var p = NewPortfolio(new PositionsHandler(), journal, "XAUUSDmicro");
+        p.AuditExposure();
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 200),
+            e => e.Category == "FX_RISK" && e.Details.Contains("exposure audit")
+                 && e.Details.Contains("0.30") && e.Details.Contains("0.10"));
+
+        // Inside the cap → no further warning line (audit journal stays
+        // quiet). A fresh portfolio: the journal book caches ~30 s, so the
+        // same instance would re-report the deleted fixture.
+        File.Delete(fillFile);
+        var p2 = NewPortfolio(new PositionsHandler(), journal, "XAUUSDmicro");
+        p2.AuditExposure();
+        journal.Flush();
+        Assert.Single(journal.GetRecent(null, 200)
+            .Where(e => e.Category == "FX_RISK" && e.Details.Contains("exposure audit: book")));
+        p.Dispose();
+        p2.Dispose();
     }
 
     [Fact]

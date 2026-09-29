@@ -326,6 +326,10 @@ public sealed class FxNewsVeto
 public sealed class FxPortfolioHost : IDisposable
 {
     private readonly List<FxEngineHost> _hosts = new();
+    private readonly Func<double> _journalBookLots;
+    private readonly TradeJournal _journal;
+    private readonly Func<decimal> _portfolioMaxLots;
+    private readonly System.Threading.Timer? _exposureAudit;
 
     public IReadOnlyList<FxEngineHost> Hosts => _hosts;
     public IReadOnlyList<string> Symbols { get; }
@@ -362,10 +366,18 @@ public sealed class FxPortfolioHost : IDisposable
         // before any venue round-trip can lie about it. The 09:45-09:51
         // relaunch leak rode (1): fresh hosts + degraded reads = zero floor.
         // The journal book cannot forget what the venue claims is gone.
-        var journalBook = new FxJournalBook(
-            System.IO.Path.Combine(Infrastructure.SettingsService.DataDir, "journal"));
+        var journalBook = new FxJournalBook(journal.JournalDir);
         Func<double> floor = () => Math.Max(
             _hosts.Sum(h => h.LocalBookLots), journalBook.OpenLots());
+
+        // Self-audit: the 2026-09-29 cap leaks ran ~4 hours before a human
+        // read the journal. A periodic WARN makes an over-cap book
+        // self-reporting — it trades nothing, it only shouts.
+        _journalBookLots = journalBook.OpenLots;
+        _journal = journal;
+        _portfolioMaxLots = portfolioMaxLots;
+        _exposureAudit = new System.Threading.Timer(
+            _ => AuditExposure(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
         var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols,
             localBookLots: floor);
         var news = new FxNewsVeto(newsCalendarPath, newsWindow);
@@ -443,6 +455,37 @@ public sealed class FxPortfolioHost : IDisposable
         }
     }
 
+    /// <summary>Self-audit: when the book (venue-derived hosts, or the
+    /// journal's own — whichever reads higher) sits ABOVE the portfolio
+    /// cap, that is the exact signature of the three 2026-09-29 leaks.
+    /// WARN in the journal; never throws, never trades.</summary>
+    internal void AuditExposure()
+    {
+        try
+        {
+            var cap = (double)_portfolioMaxLots();
+            if (cap <= 0)
+            {
+                return;   // cap 0 disables trading entirely — no book check
+            }
+
+            var hostLots = _hosts.Sum(h => h.LocalBookLots);
+            var journalLots = _journalBookLots();
+            var worst = Math.Max(hostLots, journalLots);
+            if (worst > cap)
+            {
+                _journal.Log(Guid.Empty, "FX_RISK",
+                    $"exposure audit: book {worst:0.00} lots exceeds the {cap:0.00} cap " +
+                    $"(host {hostLots:0.00} / journal {journalLots:0.00}) — new orders must refuse",
+                    "{}");
+            }
+        }
+        catch
+        {
+            // The audit must never crash its timer.
+        }
+    }
+
     public void GoLive()
     {
         if (!PaperSoakComplete)
@@ -478,6 +521,7 @@ public sealed class FxPortfolioHost : IDisposable
 
     public void Dispose()
     {
+        _exposureAudit?.Dispose();
         foreach (var h in _hosts)
         {
             h.Dispose();
