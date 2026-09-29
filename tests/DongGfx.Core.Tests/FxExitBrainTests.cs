@@ -1,3 +1,4 @@
+using System.Globalization;
 using DongGfx.Core.Fx;
 using Xunit;
 
@@ -380,6 +381,24 @@ public class FxExitBrainTests
         var report = FxExitMonteCarlo.Run([], 100);
         Assert.Equal(0, report.Trades);
         Assert.Contains("FX_EXIT trail is still filling", report.Verdict);
+    }
+
+    [Fact]
+    public void EngineWeights_Are_Fingerprinted_Against_The_MonteCarlo_Artifact()
+    {
+        // The structural gate: no engine-weight change ships without the
+        // ±20% Monte-Carlo verdict (tools/McDrill) recorded in
+        // docs/soak/MC-DRILL.md. This pin fails the build the moment
+        // EngineWeights changes, and the fix is: run the drill, land the
+        // artifact, update the pin in the same commit — a reviewed act,
+        // never an accidental one.
+        var fingerprint = string.Join(";", FxExitBrain.EngineWeights
+            .OrderBy(k => k.Key, StringComparer.Ordinal)
+            .Select(k => $"{k.Key}={k.Value.ToString(CultureInfo.InvariantCulture)}"));
+        Assert.Equal(
+            "counterfactual=0;drawdown=2;giveback=0;momentum=1;structure=1.6;" +
+            "thesis=1.4;time=1.1;volatility=1.2",
+            fingerprint);
     }
 
 }

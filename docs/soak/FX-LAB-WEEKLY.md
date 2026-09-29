@@ -19,3 +19,36 @@
 - exit reasons (decisive): drawdown ×5
 - MAE at exit: <0.5R ×0, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×5
 - round-trips (MFE ≥1R, closed ≤0.2R): 2/5 (40%)
+
+
+## FX exit weekly digest — 2026-09-29
+
+- evaluations: 872 (override 14 / consensus 858)
+- close confirmations (no evaluation): 12
+- overrides: drawdown ×14
+- consensus bands: hold ×834, monitor ×22, tighten ×2
+- exit reasons (decisive): drawdown ×14
+- MAE at exit: <0.5R ×0, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×14
+- round-trips (MFE ≥1R, closed ≤0.2R): 6/14 (43%)
+
+
+## FX exit weekly digest — 2026-09-29
+
+- evaluations: 932 (override 14 / consensus 918)
+- close confirmations (no evaluation): 12
+- overrides: drawdown ×14
+- consensus bands: hold ×894, monitor ×22, tighten ×2
+- exit reasons (decisive): drawdown ×14
+- MAE at exit: <0.5R ×0, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×14
+- round-trips (MFE ≥1R, closed ≤0.2R): 6/14 (43%)
+
+
+## FX exit weekly digest — 2026-09-29
+
+- evaluations: 1050 (override 14 / consensus 1036)
+- close confirmations (no evaluation): 12
+- overrides: drawdown ×14
+- consensus bands: hold ×1012, monitor ×22, tighten ×2
+- exit reasons (decisive): drawdown ×14
+- MAE at exit: <0.5R ×0, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×14
+- round-trips (MFE ≥1R, closed ≤0.2R): 6/14 (43%)
