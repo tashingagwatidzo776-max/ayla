@@ -817,14 +817,18 @@ public sealed class FxEngineHost : IDisposable
         }
 
         // Bookkeeping: prune tracking state for tickets that vanished from
-        // a TRUSTED positions read (closed at the venue by its SL, or by
-        // the operator). Trust requires agreement — two reads naming the
-        // same tickets — because a degraded-empty read (the 2026-09-29
-        // congestion mode) must never wipe the book: the guards floor the
-        // exposure at this book, so a wrongful wipe reopens the cap hole.
+        // the venue — but ONLY on reads that are certainly real. A degraded
+        // read degrades to EMPTY, and two degraded reads agree on the lie:
+        // SetEquals(∅,∅) wiped the whole book during the 08:21-09:06
+        // congestion, the local-book floor hit zero, and the cap failed
+        // open AGAIN. So pruning demands both reads NON-empty and agreeing;
+        // an empty read never shrinks the book. Cost: after a genuine
+        // flatten the floor stays high until a non-empty read re-grounds
+        // it — refusing trades is the safe direction.
         var confirm = await _mt5.GetPositionsAsync().ConfigureAwait(true);
-        if (owned.Select(p => p.Ticket).ToHashSet()
-            .SetEquals(confirm.Select(p => p.Ticket)))
+        if (owned.Count > 0 && confirm.Count > 0
+            && owned.Select(p => p.Ticket).ToHashSet()
+                .SetEquals(confirm.Select(p => p.Ticket)))
         {
             var live = owned.Select(p => p.Ticket).ToHashSet();
             foreach (var gone in _exitStates.Keys.Where(k => !live.Contains(k)).ToList())

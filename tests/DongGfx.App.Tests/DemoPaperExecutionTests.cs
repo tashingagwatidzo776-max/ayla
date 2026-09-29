@@ -362,6 +362,46 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task LocalBook_Survives_DegradedEmpty_PositionReads()
+    {
+        // The 08:21-09:06 cap-failure mechanism, pinned: cycle 1 seeds the
+        // book from a real positions read; cycle 2's reads degrade to EMPTY
+        // and agree on the lie — the book must NOT wipe, because the guards
+        // floor exposure at it.
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                // Near entry (mae ~0.1R): the brain must HOLD it, so the
+                // book survives cycle 1 and can be tested for wiping.
+                new { ticket = 111L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1475, profit = -5.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var host = NewHost(script, journal);
+        await host.RunCycleAsync();
+        var seeded = host.LocalBookLots;
+        Assert.True(seeded > 0, "the book must seed from a real read");
+
+        script.Positions = Array.Empty<object>();   // degraded-empty both reads
+        await host.RunCycleAsync();
+        Assert.Equal(seeded, host.LocalBookLots);   // the lie must not wipe it
+
+        // A healthy NON-empty read that agrees the ticket is gone prunes:
+        // a different brain ticket seeds, the vanished one is dropped.
+        script.Positions = new object[]
+        {
+            new { ticket = 555L, symbol = "XAUUSDmicro", side = "sell", volume = 0.1,
+                  price_open = 1.1480, price_current = 1.1475, profit = 5.0,
+                  sl = 1.1500, tp = 0.0, comment = "donggfx-brain" },
+        };
+        await host.RunCycleAsync();
+        Assert.Equal(0.1, host.LocalBookLots);
+    }
+
+    [Fact]
     public async Task ExitBrain_Manages_Owned_Positions_And_Leaves_Others_Alone()
     {
         var journal = NewJournal();
