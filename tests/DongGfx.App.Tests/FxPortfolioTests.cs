@@ -208,6 +208,26 @@ public class FxPortfolioTests
     }
 
     [Fact]
+    public async Task Exposure_Chained_After_Dormant_Small_Guard_Still_Vetoes()
+    {
+        // The 2026-09-29 10:33 fill: `smallTask ?? exposureTask` coalesced
+        // on the TASK REFERENCE (always non-null), so the exposure guard
+        // never ran at all once the small guard was wired in. The chain
+        // must coalesce on the RESULT.
+        var h = new PositionsHandler
+        {
+            PositionsJson = $"{{\"positions\":[{Pos("XAUUSDmicro", 0.3)}]}}",
+        };
+        var small = new FxSmallAccountGuard(NewClient(h), new[] { "XAUUSDmicro" });   // dormant: large account
+        var exposure = new FxExposureGuard(NewClient(h), () => 0.10m, new[] { "XAUUSDmicro" });
+
+        var veto = await small.VetoAsync("XAUUSDmicro", 0.1)
+                  ?? await exposure.VetoAsync(0.1);
+        Assert.NotNull(veto);
+        Assert.Contains("portfolio exposure", veto);
+    }
+
+    [Fact]
     public async Task Exposure_DegradedAgreeingEmptyReads_Are_Floored_By_The_LocalBook()
     {
         // The 07:19 mechanism exactly: both reads return a healthy-looking

@@ -390,7 +390,8 @@ public sealed class FxPortfolioHost : IDisposable
             var host = new FxEngineHost(
                 mt5, journal, symbol, killSwitchEngaged, engineCap, realMoneyUnlocked,
                 riskFraction, Supervisor, webhook: webhook,
-                preOrderVeto: lots => small.VetoAsync(symbol, lots) ?? exposure.VetoAsync(lots),
+                preOrderVeto: async lots => await small.VetoAsync(symbol, lots).ConfigureAwait(true)
+                                         ?? await exposure.VetoAsync(lots).ConfigureAwait(true),
                 newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow),
                 smallAccountClamp: (sym, lots) => small.ClampedLots(sym, lots),
                 cycleOffset: TimeSpan.FromSeconds(15 * staggerIndex),
