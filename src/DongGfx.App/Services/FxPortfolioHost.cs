@@ -71,6 +71,153 @@ public sealed class FxExposureGuard
 }
 
 /// <summary>
+/// Small-account guard: on a balance where ONE minimum-lot trade already
+/// risks more than <see cref="MaxRiskFraction"/> of equity, the portfolio
+/// drops to one brain trade at a time at each symbol's venue minimum lot —
+/// a small account cannot diversify its way out of a bad night, so the
+/// point is to slow the bleed, not to size up. The "small" threshold is
+/// deliberately auto-detected (no fixed dollar number): it compares the
+/// venue's own minimum-lot notional against live equity, so the mode
+/// activates on whatever account is actually connected. Brain-stamped
+/// positions only consume the slot — manual/legacy trades don't block the
+/// brain, but the portfolio exposure cap still bounds them. Bridge-down
+/// fails closed exactly like <see cref="FxExposureGuard"/>.
+/// </summary>
+public sealed class FxSmallAccountGuard
+{
+    /// <summary>Representative stop distance when the venue's real stop is
+    /// unknown: 15 pips — a conventional swing-size stop on FX majors.
+    /// Only used to DECIDE the mode (auto small-account detection), never
+    /// to place an order.</summary>
+    public const int RepresentativeStopPips = 15;
+
+    /// <summary>One minimum-lot trade costing more than this fraction of
+    /// equity trips small-account mode.</summary>
+    public const double MaxRiskFraction = 0.05;
+
+    private readonly Mt5BridgeClient _mt5;
+    private readonly HashSet<string> _symbols;
+    private readonly Func<DateTimeOffset>? _clock;
+
+    public FxSmallAccountGuard(Mt5BridgeClient mt5, IEnumerable<string> symbols,
+        Func<DateTimeOffset>? clock = null)
+    {
+        _mt5 = mt5;
+        _symbols = new HashSet<string>(symbols, StringComparer.OrdinalIgnoreCase);
+        _clock = clock;
+    }
+
+    /// <summary>True when the connected account is "small": at least one
+    /// brain symbol's minimum-lot trade (contract size × volume min × a
+    /// representative stop) would cost more than 5% of live equity. Bridge
+    /// or parse failures THROW — callers decide the fail-closed policy
+    /// (the veto rail must never fail open on a flaky bridge); missing
+    /// per-symbol geometry merely can't vote.</summary>
+    public bool SmallAccountDetected() =>
+        SmallAccountDetected(
+            _mt5.GetAccountAsync().ConfigureAwait(false).GetAwaiter().GetResult());
+
+    /// <summary>Account-taking overload: lets the veto rail probe the
+    /// bridge itself and fail closed on "unreachable" before deciding the
+    /// mode (the client degrades transport errors to null, so "null" is
+    /// the only honest signal of a dead bridge).</summary>
+    public bool SmallAccountDetected(Mt5Account? account)
+    {
+        if (account is null || account.Equity <= 0)
+        {
+            return false;   // no account ≠ small account; the veto rail fails closed separately
+        }
+
+        var symbols = _mt5.GetSymbolsAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+        var equity = account.Equity;
+        foreach (var s in symbols.Where(s => _symbols.Contains(s.Symbol)))
+        {
+            if (s.ContractSize <= 0 || s.VolumeMin <= 0)
+            {
+                continue;   // unknown geometry — cannot declare "small" from it
+            }
+
+            var minNotional = s.ContractSize * s.VolumeMin;
+            var minRisk = minNotional * RepresentativeStopPips * FxExitBrain.PipSizeOf(s.Bid ?? 0);
+            if (minRisk > equity * MaxRiskFraction)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Rail: in small-account mode at most ONE brain-owned
+    /// position may exist portfolio-wide. Returns a refusal reason, or
+    /// null when the order may proceed (also null when the mode is not
+    /// active — large accounts are unlimited by this rail).</summary>
+    public async Task<string?> VetoAsync(string symbol, double requestedLots)
+    {
+        try
+        {
+            // Probe the bridge FIRST: an unreachable bridge must refuse —
+            // the veto must never fail open on a flaky connection.
+            var account = await _mt5.GetAccountAsync().ConfigureAwait(false);
+            if (account is null)
+            {
+                return "small-account mode — bridge unreachable (account unknown)";
+            }
+
+            if (!SmallAccountDetected(account))
+            {
+                return null;   // large account: this rail is dormant
+            }
+
+            var positions = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            var ours = positions.FirstOrDefault(p =>
+                Core.Fx.FxExitBrain.Owns(p.Comment));
+            if (ours is not null)
+            {
+                return $"small-account mode — one brain trade at a time " +
+                       $"(slot used by #{ours.Ticket} {ours.Symbol})";
+            }
+        }
+        catch
+        {
+            // Unknown state in an active mode: fail closed.
+            return "small-account mode — account state unknown (bridge flaked)";
+        }
+
+        return null;
+    }
+
+    /// <summary>In small-account mode an order is clamped DOWN to the
+    /// symbol's venue minimum ("the lowest minimum lot size"); normal
+    /// accounts pass through untouched. Unknown geometry clamps to the
+    /// engine-wide 0.01 floor — the smallest size a 0.01-step venue can
+    /// accept — never up.</summary>
+    public double ClampedLots(string symbol, double lots)
+    {
+        if (!SmallAccountDetected())
+        {
+            return lots;
+        }
+
+        try
+        {
+            var s = _mt5.GetSymbolsAsync().ConfigureAwait(false).GetAwaiter().GetResult()
+                .FirstOrDefault(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
+            if (s is { } spec && spec.VolumeMin > 0)
+            {
+                return Math.Min(lots, spec.VolumeMin);
+            }
+        }
+        catch
+        {
+            // fall through to the conservative floor
+        }
+
+        return Math.Min(lots, 0.01);
+    }
+}
+
+/// <summary>
 /// News veto with a file cache: re-reads the operator-maintained calendar
 /// only when its mtime changes (cheap enough for an order-time check), and
 /// never throws — a missing/rotated file just means no known events.
@@ -172,6 +319,7 @@ public sealed class FxPortfolioHost : IDisposable
 
         var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols);
         var news = new FxNewsVeto(newsCalendarPath, newsWindow);
+        var small = new FxSmallAccountGuard(mt5, symbols);
 
         // Per-engine sizing cap never exceeds the portfolio's total cap -
         // otherwise every live order would self-veto at the exposure guard.
@@ -191,8 +339,9 @@ public sealed class FxPortfolioHost : IDisposable
             var host = new FxEngineHost(
                 mt5, journal, symbol, killSwitchEngaged, engineCap, realMoneyUnlocked,
                 riskFraction, Supervisor, webhook: webhook,
-                preOrderVeto: lots => exposure.VetoAsync(lots),
+                preOrderVeto: lots => small.VetoAsync(symbol, lots) ?? exposure.VetoAsync(lots),
                 newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow),
+                smallAccountClamp: (sym, lots) => small.ClampedLots(sym, lots),
                 cycleOffset: TimeSpan.FromSeconds(15 * staggerIndex),
                 shadowLedgerPath: shadowLedgerDir is null
                     ? null

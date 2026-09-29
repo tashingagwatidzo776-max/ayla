@@ -46,6 +46,8 @@ public class FxPortfolioTests
     private sealed class PositionsHandler : HttpMessageHandler
     {
         public string PositionsJson = "{\"positions\":[]}";
+        public string SymbolsJson = "{\"symbols\":[]}";
+        public double Equity = 2632.19;
         public bool Down;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
@@ -56,10 +58,13 @@ public class FxPortfolioTests
             }
 
             var path = req.RequestUri!.AbsolutePath;
+            var eq = Equity.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var json = path.Contains("/positions") ? PositionsJson
+                : path.Contains("/symbols") ? SymbolsJson
                 : path.Contains("/account")
                     ? "{\"ok\":true,\"login\":201587365,\"server\":\"Deriv-Demo\",\"currency\":\"USD\"," +
-                       "\"balance\":2632.19,\"equity\":2632.19,\"margin_free\":2632.19,\"leverage\":1000,\"trade_mode\":0}"
+                       "\"balance\":" + eq + ",\"equity\":" + eq +
+                       ",\"margin_free\":" + eq + ",\"leverage\":1000,\"trade_mode\":0}"
                     : "{\"ok\":true}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -71,8 +76,15 @@ public class FxPortfolioTests
     private static Mt5BridgeClient NewClient(PositionsHandler handler) =>
         new(handler, new Uri("http://127.0.0.1:1/"));
 
-    private static string Pos(string symbol, double volume) =>
-        $"{{\"ticket\":{symbol.Length * 100},\"symbol\":\"{symbol}\",\"side\":\"buy\",\"volume\":{volume.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"price_open\":1,\"price_current\":1,\"profit\":0}}";
+    private static string Pos(string symbol, double volume, string comment = "") =>
+        $"{{\"ticket\":{symbol.Length * 100},\"symbol\":\"{symbol}\",\"side\":\"buy\",\"volume\":{volume.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"price_open\":1,\"price_current\":1,\"profit\":0,\"comment\":\"{comment}\"}}";
+
+    /// <summary>One brain symbol with real Deriv-like geometry: 0.01 lot
+    /// minimum on a 100k contract — the case where a minimum trade risks
+    /// a noticeable slice of a small account.</summary>
+    private const string SmallAccountSymbolsJson =
+        "{\"symbols\":[{\"symbol\":\"EURUSD\",\"description\":\"Euro\",\"digits\":5," +
+        "\"volume_min\":0.01,\"volume_step\":0.01,\"volume_max\":100.0,\"contract_size\":100000.0}]}";
 
     [Fact]
     public async Task Exposure_Within_Cap_Allows()
@@ -120,6 +132,97 @@ public class FxPortfolioTests
         var veto = await guard.VetoAsync(0.01);
         Assert.NotNull(veto);
         Assert.Contains("unreachable", veto);
+    }
+
+    // ── small-account guard ───────────────────────────────────────────
+
+    [Fact]
+    public async Task SmallAccount_LargeEquity_Stays_Dormant()
+    {
+        // 0.01 lot EURUSD at a 15-pip stop risks ~$1.50 (1,000 units ×
+        // 0.0015) — well under 5% of the fixture equity. Normal behavior.
+        // (On gold-like geometry the same check trips far sooner: contract
+        // size is what makes an account "small" for a symbol.)
+        var h = new PositionsHandler { SymbolsJson = SmallAccountSymbolsJson };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD" });
+        Assert.False(guard.SmallAccountDetected());
+        Assert.Null(await guard.VetoAsync("EURUSD", 0.1));
+        Assert.Equal(0.1, guard.ClampedLots("EURUSD", 0.1));   // pass-through
+    }
+
+    [Fact]
+    public async Task SmallAccount_MinLotRisk_Over_FivePercent_Trips_The_Mode()
+    {
+        // At $20 equity, 5% is $1.00 — the same 0.01-lot trade's ~$1.50
+        // risk trips it. No fixed dollar threshold anywhere: the venue's
+        // own geometry vs live equity decides.
+        var h = new PositionsHandler { SymbolsJson = SmallAccountSymbolsJson, Equity = 20 };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD" });
+        Assert.True(guard.SmallAccountDetected());
+    }
+
+    [Fact]
+    public async Task SmallAccount_OneBrainSlot_BrainOwnedOnly()
+    {
+        var h = new PositionsHandler
+        {
+            SymbolsJson = SmallAccountSymbolsJson,
+            Equity = 20,
+            PositionsJson = $"{{\"positions\":[{Pos("GBPUSD", 0.1, "donggfx")}]}}",
+        };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD", "GBPUSD" });
+        // A legacy donggfx (non-brain) trade does NOT consume the slot.
+        Assert.Null(await guard.VetoAsync("EURUSD", 0.01));
+        // The clamp still applies: small mode = venue minimum lot.
+        Assert.Equal(0.01, guard.ClampedLots("EURUSD", 0.1));
+    }
+
+    [Fact]
+    public async Task SmallAccount_Second_Brain_Trade_Refused()
+    {
+        var h = new PositionsHandler
+        {
+            SymbolsJson = SmallAccountSymbolsJson,
+            Equity = 20,
+            PositionsJson = $"{{\"positions\":[{Pos("EURUSD", 0.01, "donggfx-brain")}]}}",
+        };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD", "GBPUSD" });
+        var veto = await guard.VetoAsync("GBPUSD", 0.01);
+        Assert.NotNull(veto);
+        Assert.Contains("one brain trade at a time", veto);
+    }
+
+    [Fact]
+    public void SmallAccount_NoSpecs_Never_Trips_From_Ignorance()
+    {
+        // No /symbols data at all: "small" cannot be declared from
+        // ignorance — normal (unclamped) behavior until geometry says so.
+        var h = new PositionsHandler { Equity = 100 };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD" });
+        Assert.False(guard.SmallAccountDetected());
+        Assert.Equal(0.1, guard.ClampedLots("EURUSD", 0.1));
+    }
+
+    [Fact]
+    public void SmallAccount_Symbol_Missing_From_Specs_Clamps_To_Engine_Floor()
+    {
+        // Small mode tripped by EURUSD's geometry; a clamp for a symbol
+        // the snapshot doesn't describe falls to the engine-wide 0.01
+        // floor — conservative, and never up.
+        var h = new PositionsHandler { SymbolsJson = SmallAccountSymbolsJson, Equity = 20 };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD", "USDJPY" });
+        Assert.True(guard.SmallAccountDetected());
+        Assert.Equal(0.01, guard.ClampedLots("USDJPY", 0.1));
+    }
+
+    [Fact]
+    public async Task SmallAccount_BridgeDown_FailsClosed_On_The_Veto()
+    {
+        var h = new PositionsHandler { Down = true };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD" });
+        var veto = await guard.VetoAsync("EURUSD", 0.01);
+        Assert.NotNull(veto);
+        Assert.Contains("small-account mode", veto);
     }
 
     // ── news veto ───────────────────────────────────────────────────────

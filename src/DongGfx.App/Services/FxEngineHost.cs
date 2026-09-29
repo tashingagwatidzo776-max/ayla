@@ -49,6 +49,11 @@ public sealed class FxEngineHost : IDisposable
     /// <summary>News veto: high-impact calendar window refusal.</summary>
     private readonly Func<(bool Blackout, string Reason)>? _newsVeto;
 
+    /// <summary>Small-account mode: clamps the order size DOWN to the
+    /// venue's minimum lot (one trade at a time at smallest size). Null on
+    /// large accounts — sizing passes through untouched.</summary>
+    private readonly Func<string, double, double>? _smallAccountClamp;
+
     /// <summary>Bridge equity refreshed every cycle - the engine's sizing
     /// budget reads it and fails closed at 0 while it is unknown.</summary>
     private double _lastEquity;
@@ -115,6 +120,7 @@ public sealed class FxEngineHost : IDisposable
         WebhookService? webhook = null,
         Func<double, Task<string?>>? preOrderVeto = null,
         Func<(bool Blackout, string Reason)>? newsVeto = null,
+        Func<string, double, double>? smallAccountClamp = null,
         TimeSpan cycleOffset = default,
         string? shadowLedgerPath = null,
         Func<DateTimeOffset>? clock = null)
@@ -122,6 +128,7 @@ public sealed class FxEngineHost : IDisposable
         _cycleOffset = cycleOffset;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _preOrderVeto = preOrderVeto;
+        _smallAccountClamp = smallAccountClamp;
         _newsVeto = newsVeto;
         _mt5 = mt5;
         _journal = journal;
@@ -432,6 +439,13 @@ public sealed class FxEngineHost : IDisposable
         }
 
         var lots = Math.Min((double)cap, decision.SuggestedLots);
+
+        // Small-account mode: one trade at a time at the venue's minimum —
+        // shrink the size before anything else consumes it, so the trade's
+        // real risk follows the clamp (the stop distance stays the sized
+        // hint; only the lot count shrinks).
+        lots = _smallAccountClamp?.Invoke(Symbol, lots) ?? lots;
+
         if (lots < 0.01)
         {
             Journal("FX_ORDER", $"refused: sized {decision.SuggestedLots:0.##} lots below minimum", "{}");
