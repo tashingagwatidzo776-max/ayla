@@ -80,6 +80,54 @@ public class FxSupervisorTests
     }
 
     [Fact]
+    public void FloatingDrawdown_Beyond_Cap_Stands_Down_Transiently()
+    {
+        // Balance flat (no closes), equity underwater beyond the cap: the
+        // brain must STAND DOWN — this is how paper-exec sessions exercise
+        // the loss rail while positions are still open. It is transient:
+        // recovery clears it without operator action.
+        var s = NewSupervisor(NewJournal(), cap: 25m);
+        s.AnchorSession(10000m);
+
+        var breach = s.Evaluate(true, balance: 10000m, equity: 9970m);
+        Assert.False(breach.TradingAllowed);
+        Assert.Equal(FxHaltReason.FloatingLoss, breach.Halt);
+
+        // Still underwater: stays halted (quietly, same reason).
+        Assert.False(s.Evaluate(true, 10000m, 9965m).TradingAllowed);
+
+        // Market gives it back: auto-recovers (transient, unlike the
+        // realized DailyLossCap latch which needs ReAnchor).
+        var recovered = s.Evaluate(true, balance: 10000m, equity: 10002m);
+        Assert.True(recovered.TradingAllowed);
+        Assert.Equal(FxHaltReason.None, recovered.Halt);
+    }
+
+    [Fact]
+    public void FloatingDrawdown_Within_Cap_Trades()
+    {
+        var s = NewSupervisor(NewJournal(), cap: 25m);
+        s.AnchorSession(10000m);
+        var v = s.Evaluate(true, balance: 10000m, equity: 9980m);   // -20 floating, cap 25
+        Assert.True(v.TradingAllowed);
+        Assert.Equal(FxHaltReason.None, v.Halt);
+    }
+
+    [Fact]
+    public void Realized_Breach_Still_Latches_Even_If_Equity_Recovers()
+    {
+        // The two rails keep their distinct characters: a REALIZED loss
+        // beyond the cap latches even when equity later looks fine, while
+        // the floating rail never latches.
+        var s = NewSupervisor(NewJournal(), cap: 25m);
+        s.AnchorSession(10000m);
+        Assert.False(s.Evaluate(true, balance: 9970m, equity: 9990m).TradingAllowed);  // realized -30
+        var after = s.Evaluate(true, balance: 9970m, equity: 10050m);                   // floating fine now
+        Assert.False(after.TradingAllowed);
+        Assert.Equal(FxHaltReason.DailyLossCap, after.Halt);   // latched, not floating
+    }
+
+    [Fact]
     public void EquityFloor_Halts_WhenEnabled()
     {
         var s = NewSupervisor(NewJournal(), floor: 2000m);
@@ -93,7 +141,10 @@ public class FxSupervisorTests
     [Fact]
     public void EquityFloor_Disabled_AtZero()
     {
-        var s = NewSupervisor(NewJournal(), floor: 0m);
+        // Cap raised out of the way so ONLY the floor is under test:
+        // equity 5 vs a 2650 anchor would otherwise trip the floating
+        // stand-down (a different rail) and mask the floor's absence.
+        var s = NewSupervisor(NewJournal(), cap: 1_000_000m, floor: 0m);
         s.AnchorSession(2650m);
         Assert.True(s.Evaluate(true, 2650m, 5m).TradingAllowed);
     }
@@ -257,7 +308,7 @@ public class FxSupervisorTests
         await host.RunCycleAsync();
 
         Assert.NotNull(host.LastDecision);          // the brain actually ran
-        Assert.True(host.LastDecision!.Action is FxDecisionAction.Paper or FxDecisionAction.NoSignal
+        Assert.True(host.LastDecision!.Action is FxDecisionAction.Paper or FxDecisionAction.PaperExecuted or FxDecisionAction.NoSignal
                     or FxDecisionAction.SkippedRegime or FxDecisionAction.Ordered);
     }
 
@@ -333,7 +384,13 @@ public class FxSupervisorTests
             .Where(e => e.Category == "FX_ORDER")
             .ToList();
 
-        Assert.DoesNotContain(fxOrderEntries, e => e.Details.Contains("ticket"));
+        // No LIVE ticket without venue geometry. (A PAPER-EXEC fill on the
+        // verified demo may legitimately appear from the pre-go-live paper
+        // cycle — demo execution keeps the heuristic fallback by design;
+        // only the live path refuses on a guessed size.)
+        Assert.DoesNotContain(
+            fxOrderEntries.Where(e => !e.Details.Contains("paper-exec fill")),
+            e => e.Details.Contains("ticket"));
         Assert.Contains(fxOrderEntries, e => e.Details.Contains("pre-flight warning"));
 
         host.Dispose();

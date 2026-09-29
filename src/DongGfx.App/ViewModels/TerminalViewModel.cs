@@ -141,6 +141,7 @@ public sealed partial class TerminalViewModel : ObservableObject
             FxStatusText = "engine stopped";
             FxSoakBadge = "";   // the pill must not outlive a stopped brain
             _lastSoakSeen = -1;
+            PersistBrainRunning(running: false);
             return;
         }
 
@@ -157,6 +158,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: PAPER";
         FxStatusText = $"engine running on {string.Join(", ", _fxHost.Symbols)} (paper mode)";
         UpdateFxSoakBadge();
+        PersistBrainRunning(running: true);
     }
 
     [RelayCommand]
@@ -187,8 +189,14 @@ public sealed partial class TerminalViewModel : ObservableObject
     /// app shutdown paths): no engine cycle may fire against an MT5 account
     /// the engines were not sized and authorized for — after a switch the
     /// brain's open positions, exposure cap and real-money authorization
-    /// all belong to the previous login.</summary>
-    public void ShutdownFxBrain()
+    /// all belong to the previous login. An account switch also persists
+    /// "not running": the stop is safety, not the user's intent, so it must
+    /// not auto-restore the loop against a different account. A plain app
+    /// exit leaves the persisted intent alone — a running brain relaunches
+    /// where it left off.</summary>
+    /// <param name="accountSwitched">True when the caller is the MT5
+    /// account-switch guard rather than the shutdown path.</param>
+    public void ShutdownFxBrain(bool accountSwitched = false)
     {
         try
         {
@@ -204,6 +212,11 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: OFF";
         _lastSoakSeen = -1;
         FxSoakBadge = "";
+
+        if (accountSwitched)
+        {
+            PersistBrainRunning(running: false);
+        }
     }
 
     [RelayCommand]
@@ -225,6 +238,34 @@ public sealed partial class TerminalViewModel : ObservableObject
 
         host.ReArmLossStop();
         FxStatusText = "loss stop re-armed — baseline re-anchored to live balance";
+    }
+
+    private FxLabService? _fxLab;
+    private System.Windows.Input.ICommand? _fxLabRunCommand;
+
+    /// <summary>LAB RUN button (explicit command, not generator-emitted —
+    /// the Maps refresh command proved generated async commands are a
+    /// silent-binding hazard).</summary>
+    public System.Windows.Input.ICommand FxLabRunCommand =>
+        _fxLabRunCommand ??= new CommunityToolkit.Mvvm.Input.RelayCommand(() => _ = FxLabRunAsync());
+
+    /// <summary>Operator-invoked lab run: walk-forward evidence over the
+    /// journal's own decision bars, right now. The nightly schedule and
+    /// its Settings toggle are untouched; the service's busy lock prevents
+    /// overlap with a scheduled run. Journal-only — no bridge, no orders,
+    /// evidence for a human, never a promotion.</summary>
+    private async Task FxLabRunAsync()
+    {
+        if (_fxLab is null)
+        {
+            _fxLab = new FxLabService(_journal);
+        }
+
+        FxStatusText = "lab running — replaying the journal's decisions…";
+        var results = await _fxLab.RunNowAsync().ConfigureAwait(true);
+        OnUiThread(() => FxStatusText = results.Count == 0
+            ? "lab: nothing to replay yet — needs FX_DECISION entries (brain cycles build them)"
+            : "lab: " + string.Join(" | ", results.Select(r => $"[{r.Symbol}] {r.Verdict}")));
     }
 
     /// <summary>Kill-switch leg for the FX brain: stop it, force paper, and
@@ -327,6 +368,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         : "MT5 bridge: down — auto-restart pending";
 
     private readonly Action<bool>? _setAutonomyBound;
+    private readonly Action<bool>? _setBrainRunningBound;
     private readonly Action<string>? _setSymbolBound;
     private readonly PriceAlertEngine _alerts;   // Market Watch → Create Alert
     private readonly Dispatcher _dispatcher;
@@ -344,6 +386,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         TradeJournal? journal = null,
         Mt5BridgeClient? mt5 = null,
         Action<bool>? setAutonomyBound = null,
+        Action<bool>? setBrainRunningBound = null,
         Action<string>? setSymbolBound = null,
         TickArchive? tickArchive = null,
         Func<FxPortfolioHost?>? fxHostFactory = null,
@@ -362,6 +405,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         _tickArchive = tickArchive ?? new TickArchive();
         _fxHostFactory = fxHostFactory;
         _setAutonomyBound = setAutonomyBound;
+        _setBrainRunningBound = setBrainRunningBound;
         _setSymbolBound = setSymbolBound;
         // Market Watch right-click → Create Alert arms PriceAlertEngine
         // alerts; a test-injected engine is used as-is (no toast plumbing).
@@ -926,6 +970,29 @@ public sealed partial class TerminalViewModel : ObservableObject
         RenderCandles();
     }
 
+    /// <summary>Read-only bridge candle fetch for the Maps surfaces
+    /// (MTF confluence, correlation). Returns whatever the bridge holds —
+    /// empty on outage; callers degrade row-by-row. Never touches the
+    /// chart's own candle buffer.</summary>
+    public async Task<IReadOnlyList<(long Time, double Open, double High, double Low, double Close)>> BridgeCandles(
+        string symbol, string timeframe, int count)
+    {
+        try
+        {
+            var fromBridge = await _mt5.GetCandlesAsync(symbol, timeframe, count).ConfigureAwait(false);
+            var list = new List<(long, double, double, double, double)>(fromBridge.Count);
+            foreach (var c in fromBridge)
+            {
+                list.Add((c.Time, c.Open, c.High, c.Low, c.Close));
+            }
+            return list;
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
     private async Task LoadCandlesFromBridgeAsync(string symbol)
     {
         var fromBridge = await _mt5.GetCandlesAsync(symbol, SelectedTimeframe, 90).ConfigureAwait(true);
@@ -1254,7 +1321,13 @@ public sealed partial class TerminalViewModel : ObservableObject
             OnUiThread(() =>
             {
                 IsMt5Connected = true;
-                Mt5StatusText = "MT5 bridge: connected";
+                // A disabled AutoTrading terminal refuses every order with
+                // client-disabled (10027) — say so at a glance, right where
+                // the connection state lives. Unknown (old sidecar) shows
+                // nothing rather than a false alarm.
+                Mt5StatusText = health.Value.TradeAllowed is false
+                    ? "MT5 bridge: connected — AutoTrading OFF in the terminal (orders will be refused)"
+                    : "MT5 bridge: connected";
                 if (account is not null)
                 {
                     Mt5AccountText = $"{account.Login} @ {account.Server} · {account.Equity:0.##} {account.Currency}";
@@ -1642,6 +1715,30 @@ public sealed partial class TerminalViewModel : ObservableObject
     /// places its allowed trades. The terminal's ON/OFF button writes this —
     /// one switch governs the brain on every surface.</summary>
     public bool BrainIsOn => _settings().AutonomyEnabled;
+
+    /// <summary>Records the engine loop's running state so the next launch
+    /// auto-restores it. Deliberately NOT the autonomy flag: this is "was
+    /// the toggle on", autonomy stays the safety master.</summary>
+    private void PersistBrainRunning(bool running)
+    {
+        // The settings VM's mirror is the save source of truth (same bridge
+        // as autonomy): BuildSettings() reconstructs the object, so writing
+        // only the built snapshot would be lost on the next save.
+        _setBrainRunningBound?.Invoke(running);
+        _settings().FxBrainRunning = running;
+        _persist();
+    }
+
+    /// <summary>Auto-restore: restarts the engine loop when it was running
+    /// at the last persist. Called once at startup by the app shell; a
+    /// restored loop is still paper-mode until the human go-lives again.</summary>
+    public void RestoreBrainIfPersistedRunning()
+    {
+        if (_settings().FxBrainRunning && _fxHost is not { } h)
+        {
+            ToggleFxBrain();
+        }
+    }
 
     public string BrainStateText => BrainIsOn
         ? "AUTONOMY ON — the brain places its allowed trades"

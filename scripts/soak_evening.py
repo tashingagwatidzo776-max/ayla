@@ -100,7 +100,8 @@ def run_analyst(model: str) -> tuple[str | None, str]:
         build = subprocess.run(
             ["dotnet", "build", str(REPO / "tools" / "AnalystSmoke"),
              "-p:OutputPath=bin/lockfree3/", "-v", "q", "--nologo"],
-            capture_output=True, text=True, timeout=600)
+            capture_output=True, text=True, timeout=600,
+            encoding="utf-8", errors="replace")
         if build.returncode != 0 or not ANALYST_EXE.exists():
             return None, "AnalystSmoke unavailable (build failed)"
     warm_llm(model)
@@ -145,7 +146,8 @@ def convert_bars(symbol: str, tick_dir: pathlib.Path, out_dir: pathlib.Path) -> 
         r = subprocess.run(
             [sys.executable, str(REPO / "scripts" / "ai_alpha" / "ticks_to_bars.py"),
              symbol, "--tick-dir", str(tick_dir), "--out", str(out)],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, timeout=300,
+            encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0 or not out.exists():
@@ -166,7 +168,8 @@ def backtest(proposal: pathlib.Path, bars: pathlib.Path,
         r = subprocess.run(
             [sys.executable, str(ai / "backtest.py"), str(proposal),
              "--bars", str(bars)],
-            capture_output=True, text=True, timeout=600)
+            capture_output=True, text=True, timeout=600,
+            encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return None
     # backtest.py writes its plain report next to its own harness dir,
@@ -194,7 +197,8 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
     r = None
     try:
         r = subprocess.run([sys.executable, str(ai / "propose.py")],
-                           capture_output=True, text=True, timeout=600)
+                           capture_output=True, text=True, timeout=600,
+                           encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         pass  # missing script or hung daemon: proceed with what exists
     new = {p.name for p in proposals_dir.glob("PROP-*.json")} - before

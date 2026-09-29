@@ -18,7 +18,7 @@ GATE = float(os.environ.get("GATE", "60"))
 MAX_POINTS = 30
 
 rows = []
-with open("./site/coverage-trend.csv", newline="") as f:
+with open("./site/coverage-trend.csv", newline="", encoding="utf-8") as f:
     for r in csv.DictReader(f):
         try:
             rows.append((int(r["epoch_seconds"]), r["run_id"], float(r["line_coverage"])))
@@ -38,7 +38,7 @@ data = json.dumps(pts)
 # codebase. Missing file simply means no annotations.
 events = []
 if os.path.exists("./docs/coverage-events.csv"):
-    with open("./docs/coverage-events.csv", newline="") as f:
+    with open("./docs/coverage-events.csv", newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             try:
                 events.append((int(r["epoch_seconds"]), r["label"], r.get("detail", "")))
@@ -58,7 +58,7 @@ events_js = json.dumps(
 # no bankroll layer yet.
 bank = []
 if os.path.exists("./site/growth-bankroll.csv"):
-    with open("./site/growth-bankroll.csv", newline="") as f:
+    with open("./site/growth-bankroll.csv", newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             try:
                 bank.append((int(r["epoch_seconds"]), r["account"], float(r["bankroll"])))

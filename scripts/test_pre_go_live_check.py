@@ -24,12 +24,19 @@ TODAY = datetime.now(timezone.utc).date()
 
 
 def make_repo(tmp, soak_days_ago=1, verdict="SOAK CLEAN - gate silent, telemetry intact."):
-    """A synthetic repo root with docs/soak evidence."""
+    """A synthetic repo root with docs/soak evidence (including the v2
+    artifacts: Monte-Carlo verdict and stopped-path verification)."""
     root = Path(tmp) / "repo"
     (root / "docs" / "soak").mkdir(parents=True)
     date = (TODAY - timedelta(days=soak_days_ago)).isoformat()
     (root / "docs" / "soak" / f"SOAK-{date}.md").write_text(
         f"# Demo soak report\n\n## Verdict\n\n{verdict}\n", encoding="utf-8")
+    (root / "docs" / "soak" / "MC-DRILL.md").write_text(
+        "## Monte-Carlo fire drill\n\n- baseline flip rate 5.00% — stable\n",
+        encoding="utf-8")
+    (root / "docs" / "soak" / "STOPPED-PATH-2026-09-29.md").write_text(
+        "## Stopped-order path — PROVEN live\n\n7/7 fills carried SLs.\n",
+        encoding="utf-8")
     return root
 
 
@@ -49,7 +56,7 @@ def run_check(tmp, extra_args=None):
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--skip-sidecar", "--data-dir",
          str(Path(tmp) / "data"), "--repo-root", str(Path(tmp) / "repo")] + (extra_args or []),
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     return proc.stdout + proc.stderr, proc.returncode
 
 
@@ -96,10 +103,12 @@ class LiveHook:
 def test_all_green_passes():
     with tempfile.TemporaryDirectory() as tmp, LiveHook() as hook:
         make_repo(tmp, soak_days_ago=1)
-        make_data_dir(tmp, {**GOOD_SETTINGS, "WebhookUrl": hook}, [journal_line("FX_DECISION", "XAUUSDmicro")])
+        make_data_dir(tmp, {**GOOD_SETTINGS, "WebhookUrl": hook},
+                      [journal_line("FX_DECISION", "XAUUSDmicro"),
+                       journal_line("FX_REGIME", "dead tape — ATR% 0.01 below 0.02")])
         out, rc = run_check(tmp)
         assert rc == 0, out
-        assert out.count("[PASS]") == 5, out   # sidecar leg skipped-but-passing
+        assert out.count("[PASS]") == 9, out   # v2: 5 original + shadow/MC/stopped-path/dead-tape
         assert "HTTP 404" in out   # exists-but-404 counts as reachable
 
 
@@ -157,7 +166,8 @@ def test_per_symbol_soak_progress_reported_and_worst_decides():
 
 
 def test_per_symbol_soak_complete_when_every_symbol_at_bar():
-    lines = ([journal_line("FX_DECISION", "XAUUSDmicro")]
+    lines = ([journal_line("FX_DECISION", "XAUUSDmicro"),
+              journal_line("FX_REGIME", "dead tape — ATR% 0.01 below 0.02")]
              + [journal_line("FX_SIGNAL", "XAUUSDmicro") for _ in range(10)]
              + [journal_line("FX_SIGNAL", "EURUSD") for _ in range(10)])
     with tempfile.TemporaryDirectory() as tmp, LiveHook() as hook:
@@ -213,7 +223,7 @@ def test_missing_data_dir_is_usage_error():
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--data-dir", "Z:/definitely/not/here",
          "--repo-root", str(HERE.parent)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert proc.returncode == 2
     assert "data dir not found" in proc.stdout + proc.stderr
 
@@ -228,7 +238,7 @@ def test_sidecar_probe_unreachable_reports_clear_hint():
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--data-dir", str(Path(tmp) / "data"),
              "--repo-root", str(Path(tmp) / "repo")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         combined = proc.stdout + proc.stderr
         if "sidecar not healthy" in combined:
             assert proc.returncode == 1

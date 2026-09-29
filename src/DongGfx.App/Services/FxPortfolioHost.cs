@@ -19,12 +19,15 @@ public sealed class FxExposureGuard
     private readonly Mt5BridgeClient _mt5;
     private readonly Func<decimal> _maxTotalLots;
     private readonly HashSet<string> _symbols;
+    private readonly Func<double>? _localBookLots;
 
-    public FxExposureGuard(Mt5BridgeClient mt5, Func<decimal> maxTotalLots, IEnumerable<string> symbols)
+    public FxExposureGuard(Mt5BridgeClient mt5, Func<decimal> maxTotalLots,
+        IEnumerable<string> symbols, Func<double>? localBookLots = null)
     {
         _mt5 = mt5;
         _maxTotalLots = maxTotalLots;
         _symbols = new HashSet<string>(symbols, StringComparer.OrdinalIgnoreCase);
+        _localBookLots = localBookLots;
     }
 
     /// <summary>Returns a refusal reason when adding <paramref name="requestedLots"/>
@@ -42,17 +45,33 @@ public sealed class FxExposureGuard
         try
         {
             // GetPositionsAsync degrades to an EMPTY list when the bridge is
-            // down — indistinguishable from a flat account. Probe /account
-            // first: null there means unreachable, so we fail closed instead
-            // of happily allowing orders against unknown exposure.
+            // down — indistinguishable from a flat account, and the 2026-09-29
+            // congestion incident rode exactly that hole: /account probed fine
+            // while /positions timed out, the guard read a flat book, and the
+            // cap failed OPEN (7 fills past a 0.10 cap). Rule: a position read
+            // only counts when TWO reads AGREE; any disagreement or a null
+            // account is unknown exposure → refuse.
             var account = await _mt5.GetAccountAsync().ConfigureAwait(false);
             if (account is null)
             {
                 return "bridge unreachable (exposure unknown)";
             }
 
-            var positions = await _mt5.GetPositionsAsync().ConfigureAwait(false);
-            open = positions.Where(p => _symbols.Contains(p.Symbol)).Sum(p => p.Volume);
+            var first = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            var second = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            open = first.Where(p => _symbols.Contains(p.Symbol)).Sum(p => p.Volume);
+            var open2 = second.Where(p => _symbols.Contains(p.Symbol)).Sum(p => p.Volume);
+            if (Math.Abs(open - open2) > 1e-9)
+            {
+                return $"exposure reads disagree ({open:0.##} vs {open2:0.##}) — refusing while unknown";
+            }
+
+            // The agreeing-reads rule still has a hole: both reads can
+            // degrade to EMPTY in agreement (the 2026-09-29 07:19 fills),
+            // reading a loaded book as flat. Floor the exposure at the
+            // brain's own book — the engines' tracking of what THEY hold,
+            // which no bridge flake can erase.
+            open = Math.Max(open, _localBookLots?.Invoke() ?? 0);
         }
         catch
         {
@@ -67,6 +86,172 @@ public sealed class FxExposureGuard
         }
 
         return null;
+    }
+}
+
+/// <summary>
+/// Small-account guard: on a balance where ONE minimum-lot trade already
+/// risks more than <see cref="MaxRiskFraction"/> of equity, the portfolio
+/// drops to one brain trade at a time at each symbol's venue minimum lot —
+/// a small account cannot diversify its way out of a bad night, so the
+/// point is to slow the bleed, not to size up. The "small" threshold is
+/// deliberately auto-detected (no fixed dollar number): it compares the
+/// venue's own minimum-lot notional against live equity, so the mode
+/// activates on whatever account is actually connected. Brain-stamped
+/// positions only consume the slot — manual/legacy trades don't block the
+/// brain, but the portfolio exposure cap still bounds them. Bridge-down
+/// fails closed exactly like <see cref="FxExposureGuard"/>.
+/// </summary>
+public sealed class FxSmallAccountGuard
+{
+    /// <summary>Representative stop distance when the venue's real stop is
+    /// unknown: 15 pips — a conventional swing-size stop on FX majors.
+    /// Only used to DECIDE the mode (auto small-account detection), never
+    /// to place an order.</summary>
+    public const int RepresentativeStopPips = 15;
+
+    /// <summary>One minimum-lot trade costing more than this fraction of
+    /// equity trips small-account mode.</summary>
+    public const double MaxRiskFraction = 0.05;
+
+    private readonly Mt5BridgeClient _mt5;
+    private readonly HashSet<string> _symbols;
+    private readonly Func<DateTimeOffset>? _clock;
+    private readonly Func<double>? _localBookLots;
+
+    public FxSmallAccountGuard(Mt5BridgeClient mt5, IEnumerable<string> symbols,
+        Func<DateTimeOffset>? clock = null, Func<double>? localBookLots = null)
+    {
+        _mt5 = mt5;
+        _symbols = new HashSet<string>(symbols, StringComparer.OrdinalIgnoreCase);
+        _clock = clock;
+        _localBookLots = localBookLots;
+    }
+
+    /// <summary>True when the connected account is "small": at least one
+    /// brain symbol's minimum-lot trade (contract size × volume min × a
+    /// representative stop) would cost more than 5% of live equity. Bridge
+    /// or parse failures THROW — callers decide the fail-closed policy
+    /// (the veto rail must never fail open on a flaky bridge); missing
+    /// per-symbol geometry merely can't vote.</summary>
+    public bool SmallAccountDetected() =>
+        SmallAccountDetected(
+            _mt5.GetAccountAsync().ConfigureAwait(false).GetAwaiter().GetResult());
+
+    /// <summary>Account-taking overload: lets the veto rail probe the
+    /// bridge itself and fail closed on "unreachable" before deciding the
+    /// mode (the client degrades transport errors to null, so "null" is
+    /// the only honest signal of a dead bridge).</summary>
+    public bool SmallAccountDetected(Mt5Account? account)
+    {
+        if (account is null || account.Equity <= 0)
+        {
+            return false;   // no account ≠ small account; the veto rail fails closed separately
+        }
+
+        var symbols = _mt5.GetSymbolsAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+        var equity = account.Equity;
+        foreach (var s in symbols.Where(s => _symbols.Contains(s.Symbol)))
+        {
+            if (s.ContractSize <= 0 || s.VolumeMin <= 0)
+            {
+                continue;   // unknown geometry — cannot declare "small" from it
+            }
+
+            var minNotional = s.ContractSize * s.VolumeMin;
+            var minRisk = minNotional * RepresentativeStopPips * FxExitBrain.PipSizeOf(s.Bid ?? 0);
+            if (minRisk > equity * MaxRiskFraction)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Rail: in small-account mode at most ONE brain-owned
+    /// position may exist portfolio-wide. Returns a refusal reason, or
+    /// null when the order may proceed (also null when the mode is not
+    /// active — large accounts are unlimited by this rail).</summary>
+    public async Task<string?> VetoAsync(string symbol, double requestedLots)
+    {
+        try
+        {
+            // Probe the bridge FIRST: an unreachable bridge must refuse —
+            // the veto must never fail open on a flaky connection.
+            var account = await _mt5.GetAccountAsync().ConfigureAwait(false);
+            if (account is null)
+            {
+                return "small-account mode — bridge unreachable (account unknown)";
+            }
+
+            if (!SmallAccountDetected(account))
+            {
+                return null;   // large account: this rail is dormant
+            }
+
+            // Same discipline as the exposure guard: one degraded read
+            // reads as a free slot. Two agreeing reads, or refuse.
+            var first = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            var second = await _mt5.GetPositionsAsync().ConfigureAwait(false);
+            var ours = first.FirstOrDefault(p => Core.Fx.FxExitBrain.Owns(p.Comment));
+            var ours2 = second.FirstOrDefault(p => Core.Fx.FxExitBrain.Owns(p.Comment));
+            if ((ours is null) != (ours2 is null) || ours?.Ticket != ours2?.Ticket)
+            {
+                return "small-account mode — position reads disagree (bridge flaked)";
+            }
+
+            if (ours is not null)
+            {
+                return $"small-account mode — one brain trade at a time " +
+                       $"(slot used by #{ours.Ticket} {ours.Symbol})";
+            }
+
+            // Both reads can agree on EMPTY while degraded (the same
+            // congestion mode that broke the cap): if the brain's own book
+            // still tracks a position, the slot is NOT free.
+            if (_localBookLots?.Invoke() > 0)
+            {
+                return "small-account mode — one brain trade at a time " +
+                       "(slot held by the brain's own book; venue read could not confirm it)";
+            }
+        }
+        catch
+        {
+            // Unknown state in an active mode: fail closed.
+            return "small-account mode — account state unknown (bridge flaked)";
+        }
+
+        return null;
+    }
+
+    /// <summary>In small-account mode an order is clamped DOWN to the
+    /// symbol's venue minimum ("the lowest minimum lot size"); normal
+    /// accounts pass through untouched. Unknown geometry clamps to the
+    /// engine-wide 0.01 floor — the smallest size a 0.01-step venue can
+    /// accept — never up.</summary>
+    public double ClampedLots(string symbol, double lots)
+    {
+        if (!SmallAccountDetected())
+        {
+            return lots;
+        }
+
+        try
+        {
+            var s = _mt5.GetSymbolsAsync().ConfigureAwait(false).GetAwaiter().GetResult()
+                .FirstOrDefault(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
+            if (s is { } spec && spec.VolumeMin > 0)
+            {
+                return Math.Min(lots, spec.VolumeMin);
+            }
+        }
+        catch
+        {
+            // fall through to the conservative floor
+        }
+
+        return Math.Min(lots, 0.01);
     }
 }
 
@@ -141,6 +326,10 @@ public sealed class FxNewsVeto
 public sealed class FxPortfolioHost : IDisposable
 {
     private readonly List<FxEngineHost> _hosts = new();
+    private readonly Func<double> _journalBookLots;
+    private readonly TradeJournal _journal;
+    private readonly Func<decimal> _portfolioMaxLots;
+    private readonly System.Threading.Timer? _exposureAudit;
 
     public IReadOnlyList<FxEngineHost> Hosts => _hosts;
     public IReadOnlyList<string> Symbols { get; }
@@ -163,14 +352,37 @@ public sealed class FxPortfolioHost : IDisposable
         WebhookService? webhook,
         Func<string> newsCalendarPath,
         Func<TimeSpan> newsWindow,
-        double riskFraction = 0.02)
+        double riskFraction = 0.02,
+        string? shadowLedgerDir = null)
     {
         Symbols = symbols;
         Supervisor = new FxSupervisor(journal, killSwitchEngaged, governorTripped,
             dailyLossCap, equityFloor, webhook);
 
-        var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols);
+        // The local-book floor has two independent sources, and the guard
+        // takes the MAX of both: (1) the per-symbol hosts' own tracking —
+        // which seeds from venue reads and can be lied empty; (2) the
+        // JOURNAL's book — fills minus close confirmations, written locally
+        // before any venue round-trip can lie about it. The 09:45-09:51
+        // relaunch leak rode (1): fresh hosts + degraded reads = zero floor.
+        // The journal book cannot forget what the venue claims is gone.
+        var journalBook = new FxJournalBook(journal.JournalDir);
+        Func<double> floor = () => Math.Max(
+            _hosts.Sum(h => h.LocalBookLots), journalBook.OpenLots());
+
+        // Self-audit: the 2026-09-29 cap leaks ran ~4 hours before a human
+        // read the journal. A periodic WARN makes an over-cap book
+        // self-reporting — it trades nothing, it only shouts.
+        _journalBookLots = journalBook.OpenLots;
+        _journal = journal;
+        _portfolioMaxLots = portfolioMaxLots;
+        _exposureAudit = new System.Threading.Timer(
+            _ => AuditExposure(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols,
+            localBookLots: floor);
         var news = new FxNewsVeto(newsCalendarPath, newsWindow);
+        var small = new FxSmallAccountGuard(mt5, symbols,
+            localBookLots: floor);
 
         // Per-engine sizing cap never exceeds the portfolio's total cap -
         // otherwise every live order would self-veto at the exposure guard.
@@ -181,13 +393,24 @@ public sealed class FxPortfolioHost : IDisposable
             return total > 0 ? Math.Min(single, total) : single;
         };
 
+        // Stagger the per-symbol engines by 15s: all four otherwise tick
+        // together and their burst queues behind the sidecar's single MT5
+        // lock, reading as bridge timeouts (2026-09-28 congestion incident).
+        var staggerIndex = 0;
         foreach (var symbol in symbols)
         {
             var host = new FxEngineHost(
                 mt5, journal, symbol, killSwitchEngaged, engineCap, realMoneyUnlocked,
                 riskFraction, Supervisor, webhook: webhook,
-                preOrderVeto: lots => exposure.VetoAsync(lots),
-                newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow));
+                preOrderVeto: async lots => await small.VetoAsync(symbol, lots).ConfigureAwait(true)
+                                         ?? await exposure.VetoAsync(lots).ConfigureAwait(true),
+                newsVeto: () => news.Evaluate(DateTimeOffset.UtcNow),
+                smallAccountClamp: (sym, lots) => small.ClampedLots(sym, lots),
+                cycleOffset: TimeSpan.FromSeconds(15 * staggerIndex),
+                shadowLedgerPath: shadowLedgerDir is null
+                    ? null
+                    : Path.Combine(shadowLedgerDir, $"fx-shadow-{symbol}.jsonl"));
+            staggerIndex++;
             host.StatusChanged += s => StatusChanged?.Invoke($"[{symbol}] {s}");
             _hosts.Add(host);
         }
@@ -232,6 +455,37 @@ public sealed class FxPortfolioHost : IDisposable
         }
     }
 
+    /// <summary>Self-audit: when the book (venue-derived hosts, or the
+    /// journal's own — whichever reads higher) sits ABOVE the portfolio
+    /// cap, that is the exact signature of the three 2026-09-29 leaks.
+    /// WARN in the journal; never throws, never trades.</summary>
+    internal void AuditExposure()
+    {
+        try
+        {
+            var cap = (double)_portfolioMaxLots();
+            if (cap <= 0)
+            {
+                return;   // cap 0 disables trading entirely — no book check
+            }
+
+            var hostLots = _hosts.Sum(h => h.LocalBookLots);
+            var journalLots = _journalBookLots();
+            var worst = Math.Max(hostLots, journalLots);
+            if (worst > cap)
+            {
+                _journal.Log(Guid.Empty, "FX_RISK",
+                    $"exposure audit: book {worst:0.00} lots exceeds the {cap:0.00} cap " +
+                    $"(host {hostLots:0.00} / journal {journalLots:0.00}) — new orders must refuse",
+                    "{}");
+            }
+        }
+        catch
+        {
+            // The audit must never crash its timer.
+        }
+    }
+
     public void GoLive()
     {
         if (!PaperSoakComplete)
@@ -267,6 +521,7 @@ public sealed class FxPortfolioHost : IDisposable
 
     public void Dispose()
     {
+        _exposureAudit?.Dispose();
         foreach (var h in _hosts)
         {
             h.Dispose();

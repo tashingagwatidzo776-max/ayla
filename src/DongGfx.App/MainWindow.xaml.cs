@@ -11,6 +11,8 @@ namespace DongGfx.App;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private System.Windows.Threading.DispatcherTimer? _mapsTimer;
+
     private TrayIconService? _trayIcon;
 
     public MainWindow()
@@ -147,6 +149,7 @@ public partial class MainWindow : Window
             vm.Dashboard.CandleChart = DashboardCandles;
             vm.TerminalVm.CandleChart = TerminalCandles;
             WireChartTrading(vm.TerminalVm, TerminalCandles);
+            WireMaps(vm);
         }
 
         // Initialize tray icon for headless operation.
@@ -168,6 +171,194 @@ public partial class MainWindow : Window
     {
         WireChartTradingCore(terminal, chart,
             menu => Dispatcher.BeginInvoke(() => menu.IsOpen = true));
+    }
+
+    /// <summary>Maps tab wiring: hand the view-model its data providers
+    /// (bridge candles via the Terminal's window, archived ticks via the
+    /// reader) and the canvas outlet; every Refresh repaints the canvas.
+    /// Pure read-side — no order path anywhere.</summary>
+    private void WireMaps(ViewModels.MainViewModel vm)
+    {
+        var maps = vm.MapsVm;
+        var canvas = MapsCanvas;
+        var settingsFactory = CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+            .GetRequiredService<Func<Core.Models.AppSettings>>();
+        var symbols = (settingsFactory().FxSymbols is { Length: > 0 } csv ? csv : "XAUUSDmicro")
+            .Split(',', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries);
+
+        maps.BarsProvider = () =>
+        {
+            var candles = vm.TerminalVm.Candles;
+            var bars = new Core.Fx.FxBar[candles.Count];
+            var t = 0L;
+            foreach (var c in candles)
+            {
+                bars[t] = new Core.Fx.FxBar(t, c.Open, c.High, c.Low, c.Close, 0);
+                t++;
+            }
+            return bars;
+        };
+        maps.TicksProvider = () =>
+        {
+            var root = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tf", "data", "ticks");
+            return Services.TickArchiveReader.LoadToday(root, "mt5", symbols.Length > 0 ? symbols[0] : "XAUUSDmicro");
+        };
+        maps.QuotesProvider = () =>
+        {
+            var root = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tf", "data", "ticks");
+            return Services.TickArchiveReader.LoadQuotesToday(root, "mt5", symbols.Length > 0 ? symbols[0] : "XAUUSDmicro");
+        };
+        maps.ConfluenceProvider = () =>
+        {
+            // Cache reads only — network fetches happen in the async
+            // preloader, off the UI thread (sync-over-async here deadlocks
+            // the dispatcher — seen live 2026-09-27).
+            var frames = new System.Collections.Generic.List<(string, System.Collections.Generic.IReadOnlyList<Core.Fx.FxBar>)>();
+            foreach (var tf in new[] { "M1", "M5", "M15", "M30", "H1" })
+            {
+                if (maps.CachedCandles.TryGetValue(tf, out var bars) && bars.Count > 0)
+                {
+                    frames.Add((tf, bars));
+                }
+            }
+            return frames;
+        };
+        maps.CorrelationProvider = () =>
+        {
+            // Cache reads only — preloader fills these off the UI thread.
+            var series = new System.Collections.Generic.List<(string, System.Collections.Generic.IReadOnlyList<double>)>();
+            foreach (var s in symbols)
+            {
+                if (maps.CachedCloses.TryGetValue(s, out var closes) && closes.Length >= 2)
+                {
+                    series.Add((s, closes));
+                }
+            }
+            return series;
+        };
+        maps.AiBeliefsProvider = () =>
+        {
+            var scorecard = CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+                .GetService<Services.FxScorecardService>();
+            return scorecard?.LastBeliefs ?? [];
+        };
+
+        maps.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(ViewModels.MapsViewModel.CurrentMap)
+                or nameof(ViewModels.MapsViewModel.CurrentBuyShare))
+            {
+                canvas.Render(maps.CurrentMap, maps.CurrentBuyShare);
+            }
+            else if (args.PropertyName is nameof(ViewModels.MapsViewModel.SelectedColormap))
+            {
+                canvas.SetColormap(DongGfx.Core.Fx.FxCmap.TryParse(maps.SelectedColormap, out var kind) ? kind : null);
+                var settingsVm = CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+                    .GetService<ViewModels.SettingsViewModel>();
+                if (settingsVm is not null && settingsVm.MapsColormap != maps.SelectedColormap)
+                {
+                    settingsVm.MapsColormap = maps.SelectedColormap;
+                    _ = settingsVm.SaveSettingsQuietAsync();
+                }
+            }
+        };
+
+        // Restore the persisted colormap choice (picker fires the same path).
+        var savedCmap = settingsFactory().MapsColormap;
+        if (!string.IsNullOrEmpty(savedCmap) && savedCmap != "Auto"
+            && ViewModels.MapsViewModel.ColormapChoices.Contains(savedCmap))
+        {
+            maps.SelectedColormap = savedCmap;
+        }
+        canvas.Render(maps.CurrentMap);
+        maps.RefreshCommand.Execute(null);
+
+        // Auto-refresh: recompute the selected map every 15s while the
+        // Maps tab is visible. Timer-driven only — the providers never
+        // write anything, so this cannot influence the trading loop.
+        _mapsTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(15),
+        };
+        _mapsTimer.Tick += async (_, _) =>
+        {
+            if (!MapsTabItem.IsSelected)
+            {
+                return;
+            }
+            await PreloadMapsCandlesAsync(vm, maps).ConfigureAwait(true);
+            await maps.RefreshAsync().ConfigureAwait(true);
+        };
+        _mapsTimer.Start();
+        _ = PreloadMapsCandlesAsync(vm, maps).ContinueWith(
+            _ => maps.Refresh(), TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    /// <summary>Fetches the MTF frames (primary symbol) and per-symbol
+    /// closes for the correlation map — every await is configured off the
+    /// dispatcher, so nothing here can deadlock the UI thread. Failures
+    /// leave caches stale and the maps render honest gaps.</summary>
+    private static async Task PreloadMapsCandlesAsync(
+        ViewModels.MainViewModel vm,
+        ViewModels.MapsViewModel maps)
+    {
+        var primary = "XAUUSDmicro";
+        var settingsFactory = CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+            .GetRequiredService<Func<Core.Models.AppSettings>>();
+        var symbols = (settingsFactory().FxSymbols is { Length: > 0 } csv ? csv : primary)
+            .Split(',', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries);
+        if (symbols.Length > 0)
+        {
+            primary = symbols[0];
+        }
+
+        foreach (var tf in new[] { "M1", "M5", "M15", "M30", "H1" })
+        {
+            try
+            {
+                var candles = await vm.TerminalVm.BridgeCandles(primary, tf, 60).ConfigureAwait(false);
+                if (candles.Count > 0)
+                {
+                    var bars = new Core.Fx.FxBar[candles.Count];
+                    var i = 0;
+                    foreach (var c in candles)
+                    {
+                        bars[i] = new Core.Fx.FxBar(c.Time, c.Open, c.High, c.Low, c.Close, 0);
+                        i++;
+                    }
+                    maps.CachedCandles[tf] = bars;
+                }
+            }
+            catch
+            {
+                // bridge down / unsupported tf: leave the cache as-is
+            }
+        }
+
+        foreach (var s in symbols)
+        {
+            try
+            {
+                var candles = await vm.TerminalVm.BridgeCandles(s, "M1", 60).ConfigureAwait(false);
+                if (candles.Count >= 2)
+                {
+                    var closes = new double[candles.Count];
+                    var i = 0;
+                    foreach (var c in candles)
+                    {
+                        closes[i] = c.Close;
+                        i++;
+                    }
+                    maps.CachedCloses[s] = closes;
+                }
+            }
+            catch
+            {
+                // symbol offline: dropped, never faked
+            }
+        }
     }
 
     /// <summary>Chart trading + drawing menu wiring: right-click offers

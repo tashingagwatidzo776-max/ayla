@@ -41,7 +41,7 @@ if (Test-Path $cfg) {
 
 function Log([string]$line) {
     if (-not $Quiet) { Write-Output $line }
-    Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $line)
+    Add-Content -Path $log -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $line) -Encoding utf8
 }
 
 function Test-Health {

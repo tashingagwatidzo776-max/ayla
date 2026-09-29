@@ -61,6 +61,19 @@ public sealed class LiveSoakFixture
             != SettingsService.ResolveDataDir(null, appDataBase);
 
         var dir = SettingsService.DataDir;
+        if (redirected && ProbeOverride is null)
+        {
+            // TF_DATA_DIR scratch dir: ours to wipe BY CONSTRUCTION — the
+            // redirect is what protects the real session, so the freshness
+            // probe here is meaningless noise. It used to assume the scratch
+            // was pristine at fixture-init time, but other collections' DI
+            // tests legitimately journal into it earlier in the same run,
+            // which tripped the guard on our own test writes (2026-09-28).
+            // Without the redirect this does NOT apply: the real dir keeps
+            // the full probe + process signal.
+            return;
+        }
+
         var live = ProbeOverride is { } probe
             ? probe(dir)
             // Real process signal — but under TF_DATA_DIR redirect the

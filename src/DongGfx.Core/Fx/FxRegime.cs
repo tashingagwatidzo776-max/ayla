@@ -46,6 +46,13 @@ public sealed class FxRegimeDetector
     private readonly double _adxTrendFloor;
     private readonly double _spreadMaxPoints;
 
+    /// <summary>Dead-tape floor: ATR% below this (and the alphas reading
+    /// drift as trend above it) means the market has stopped moving — the
+    /// 2026-09-29 reopen losers all fired at 0.00-0.01. Sits far under the
+    /// healthy-tape fixtures (0.05+) so it only trips on genuinely dead
+    /// quotes.</summary>
+    public const double DeadTapeAtrPct = 0.02;
+
     public FxRegimeDetector(
         int atrWindow = 60,
         double highVolPct = 0.45,
@@ -100,6 +107,22 @@ public sealed class FxRegimeDetector
         {
             return new FxRegimeVerdict(FxRegime.LowLiquidity, adx, atrPct, session, spreadPoints,
                 "late session — thin liquidity", utcNow.ToUnixTimeSeconds());
+        }
+
+        // Dead-tape floor: a market this quiet has stopped moving, and on
+        // M1 the alphas read pure drift as trend — ADX climbs on
+        // micro-increments while real range per bar is a fraction of the
+        // spread. The 2026-09-29 Sunday-reopen autopsy: all 6 losers fired
+        // ema-slope into post-reopen dead tape at ATR% 0.00-0.01 with the
+        // regime confidently calling "Trend" (ADX 34-66). Entries in that
+        // state are coin flips paid in spread; exits are NOT blocked here —
+        // the veto rides the regime gate (SkippedRegime), which the exit
+        // brain never consults for managing open positions.
+        if (atrPct < DeadTapeAtrPct)
+        {
+            return new FxRegimeVerdict(FxRegime.LowLiquidity, adx, atrPct, session, spreadPoints,
+                $"dead tape — ATR% {atrPct:0.00} below {DeadTapeAtrPct:0.00}: drift, not trend",
+                utcNow.ToUnixTimeSeconds());
         }
 
         _atrHistory.Enqueue(atrPct);

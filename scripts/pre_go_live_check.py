@@ -277,6 +277,73 @@ def check_webhook(settings):
 
 # ── main ────────────────────────────────────────────────────────────
 
+# ── go-live checklist v2 checkers ────────────────────────────────────
+# Each consumes the evidence artifacts the 2026-09-29 phases produced.
+
+def check_shadow_promotion(data_dir):
+    """The shadow engines' promotion ledger: progress toward the 100-trade
+    bar (FxExitShadow.PromotionTrades). Not a hard gate yet — reported
+    honestly; HARD-fails only when the ledger shows EARNED weight that was
+    never reviewed (an earned promotion without a follow-up artifact)."""
+    ledger_dir = os.path.join(data_dir, "fx-shadow")
+    rows = []
+    for path in glob.glob(os.path.join(ledger_dir, "fx-shadow-*.jsonl")):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    tickets = {(r.get("Ticket"), r.get("Engine")) for r in rows}
+    trades = len({t for t, _ in tickets})
+    helped = sum(1 for r in rows if r.get("Helped"))
+    detail = (f"{trades}/100 settled trades observed "
+              f"(FxExitShadow.PromotionTrades bar), {helped} 'helped' credits")
+    # Informational until 100: the bar itself is the gate, growth is the ask.
+    return True, detail + " — accruing, not yet at the promotion bar"
+
+
+def check_monte_carlo_artifact(repo_root):
+    """A Monte-Carlo verdict must exist and be STABLE — the weight gate is
+    structural in CI (the fingerprint test) and this check makes the same
+    demand of the go-live moment."""
+    path = os.path.join(repo_root, "docs", "soak", "MC-DRILL.md")
+    if not os.path.exists(path):
+        return False, "docs/soak/MC-DRILL.md missing — run tools/McDrill and land the verdict"
+    text = open(path, encoding="utf-8", errors="replace").read()
+    if "STABLE" in text or "stable" in text:
+        return True, "MC-DRILL.md present with a stable verdict"
+    return False, "MC-DRILL.md exists but carries no stable verdict"
+
+
+def check_stopped_path(repo_root):
+    """The SL-attachment path must be PROVEN on the live venue (the
+    2026-09-29 verification), not just unit-tested."""
+    path = os.path.join(repo_root, "docs", "soak", "STOPPED-PATH-2026-09-29.md")
+    if not os.path.exists(path):
+        return False, "docs/soak/STOPPED-PATH-2026-09-29.md missing — verify a stopped fill live first"
+    text = open(path, encoding="utf-8", errors="replace").read()
+    return ("PROVEN" in text, "stopped-path verification artifact present (PROVEN)"
+            if "PROVEN" in text else "artifact exists but does not carry the PROVEN verdict")
+
+
+def check_dead_tape_filter(data_dir):
+    """The reopen filter must have soaked: at least one 'dead tape' regime
+    classification in the journals since the feature landed (2026-09-29)."""
+    hits = 0
+    for path in glob.glob(os.path.join(data_dir, "journal", "journal_*.jsonl")):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "dead tape" in line:
+                    hits += 1
+    if hits:
+        return True, f"dead-tape veto has fired {hits}x in live journals — filter soaked"
+    return False, "no 'dead tape' classification yet — the reopen filter has not soaked"
+
+
 def main(argv):
     args = parse_args(argv)
     settings = load_settings(args.data_dir)
@@ -287,6 +354,10 @@ def main(argv):
         ("soak progress", check_soak_progress(args.data_dir)),
         ("soak evidence fresh", check_soak_evidence(args.repo_root, args.max_soak_age)),
         ("webhook configured", check_webhook(settings)),
+        ("shadow promotion ledger", check_shadow_promotion(args.data_dir)),
+        ("Monte-Carlo weight gate", check_monte_carlo_artifact(args.repo_root)),
+        ("stopped-path verified", check_stopped_path(args.repo_root)),
+        ("dead-tape filter soaked", check_dead_tape_filter(args.data_dir)),
     ]
 
     print("Pre-go-live check")

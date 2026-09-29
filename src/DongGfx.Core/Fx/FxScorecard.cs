@@ -27,16 +27,10 @@ public static class FxScorecard
     public const int MinOosTrades = 3;
 
     /// <summary>Families under score, default parameters (no fitting — the
-    /// point is out-of-sample honesty, not in-sample beauty).</summary>
-    public static IReadOnlyList<IFxAlpha> DefaultFamilies() => new IFxAlpha[]
-    {
-        new FxMomentum.EmaCross(),
-        new FxMomentum.DonchianBreakout(),
-        new FxMomentum.Roc(),
-        new FxMeanReversion.ZScore(),
-        new FxMeanReversion.BollingerReversion(),
-        new FxMeanReversion.VwapReversion(),
-    };
+    /// point is out-of-sample honesty, not in-sample beauty). The canonical
+    /// roster: every production family is scored, so the lab and the
+    /// scorecard always evaluate what the engine actually carries.</summary>
+    public static IReadOnlyList<IFxAlpha> DefaultFamilies() => FxFamilies.All();
 
     /// <summary>Score every family over bars: IS = first isFraction of bars,
     /// OOS = the remainder (chronological split — no peeking).</summary>

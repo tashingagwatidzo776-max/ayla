@@ -19,8 +19,12 @@ public sealed class FxEngineHost : IDisposable
     private readonly TradeJournal _journal;
     private readonly Func<bool> _killSwitchEngaged;
     private readonly Func<decimal> _lotsCap;
+    private readonly Func<decimal> _equityFloorFloor;
     private readonly Func<bool> _realMoneyUnlocked;
     private readonly System.Windows.Threading.DispatcherTimer _timer;
+    private readonly TimeSpan _cycleOffset;
+    private bool _firstCycle = true;
+    private bool _cycleRunning;
     private readonly FxEngine _engine;
     private bool _busy;
 
@@ -45,6 +49,11 @@ public sealed class FxEngineHost : IDisposable
     /// <summary>News veto: high-impact calendar window refusal.</summary>
     private readonly Func<(bool Blackout, string Reason)>? _newsVeto;
 
+    /// <summary>Small-account mode: clamps the order size DOWN to the
+    /// venue's minimum lot (one trade at a time at smallest size). Null on
+    /// large accounts — sizing passes through untouched.</summary>
+    private readonly Func<string, double, double>? _smallAccountClamp;
+
     /// <summary>Bridge equity refreshed every cycle - the engine's sizing
     /// budget reads it and fails closed at 0 while it is unknown.</summary>
     private double _lastEquity;
@@ -65,6 +74,37 @@ public sealed class FxEngineHost : IDisposable
     internal static bool CountsTowardSoak(FxDecision decision, bool engineIsLive)
         => !engineIsLive && decision.Signal is not null;
 
+    /// <summary>The demo account IS the paper account: a paper-exec fill
+    /// is allowed only on a venue the bridge VERIFIED as demo (trade_mode,
+    /// else the demo-server heuristic). Real or unverified refuses — paper
+    /// practice can never leak into real money. Internal static so tests
+    /// pin the rule without fake-market plumbing.</summary>
+    internal static bool PaperExecutionAllowed(bool? verifiedVirtual)
+        => verifiedVirtual is true;
+
+    /// <summary>Per-symbol order cooldown. Each symbol runs its own host,
+    /// so this spacing is per-symbol by construction: after a dispatch
+    /// ATTEMPT (fill or refusal — the point is to stop hammering a venue
+    /// that just refused us), no further order goes out for this symbol
+    /// until the cooldown elapses. Signals still journal and still count
+    /// toward the soak; only the dispatch is throttled.</summary>
+    internal TimeSpan OrderCooldown { get; set; } = TimeSpan.FromMinutes(5);
+
+    private DateTimeOffset? _lastOrderDispatchUtc;
+
+    /// <summary>The pure cooldown rule: null (never dispatched) or an old
+    /// enough last attempt allows a dispatch. Internal static so tests pin
+    /// it without fake-market plumbing.</summary>
+    internal static bool OrderCooldownActive(DateTimeOffset? lastDispatchUtc, DateTimeOffset now, TimeSpan cooldown)
+        => lastDispatchUtc is { } last && now - last < cooldown;
+
+    /// <summary>The engine's clock. Production: the real UTC clock. Tests
+    /// pin it — the regime detector vetoes the thin "late" UTC session
+    /// (21:00–24:00) as LowLiquidity, so a wall-clock-driven test suite
+    /// would fail every evening. Time-dependent rules stay testable behind
+    /// this seam.</summary>
+    private readonly Func<DateTimeOffset> _clock;
+
     public FxEngineHost(
         Mt5BridgeClient mt5,
         TradeJournal journal,
@@ -79,15 +119,23 @@ public sealed class FxEngineHost : IDisposable
         Func<decimal>? equityFloor = null,
         WebhookService? webhook = null,
         Func<double, Task<string?>>? preOrderVeto = null,
-        Func<(bool Blackout, string Reason)>? newsVeto = null)
+        Func<(bool Blackout, string Reason)>? newsVeto = null,
+        Func<string, double, double>? smallAccountClamp = null,
+        TimeSpan cycleOffset = default,
+        string? shadowLedgerPath = null,
+        Func<DateTimeOffset>? clock = null)
     {
+        _cycleOffset = cycleOffset;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _preOrderVeto = preOrderVeto;
+        _smallAccountClamp = smallAccountClamp;
         _newsVeto = newsVeto;
         _mt5 = mt5;
         _journal = journal;
         Symbol = symbol;
         _killSwitchEngaged = killSwitchEngaged;
         _lotsCap = lotsCap;
+        _equityFloorFloor = equityFloor ?? (() => 0m);
         _realMoneyUnlocked = realMoneyUnlocked;
         Supervisor = supervisor ?? new FxSupervisor(
             journal,
@@ -96,14 +144,18 @@ public sealed class FxEngineHost : IDisposable
             dailyLossCap ?? (() => 0m),
             equityFloor ?? (() => 0m),
             webhook);
+        _shadowLedger = shadowLedgerPath is null
+            ? null
+            : new Core.Fx.FxShadowLedger(shadowLedgerPath);
         _engine = new FxEngine(symbol, Timeframe, Journal, lotsCap: (double)_lotsCap(), riskFraction: riskFraction,
             equityProvider: () => _lastEquity);
-        _engine.AddAlpha(new FxMomentum.EmaCross());
-        _engine.AddAlpha(new FxMomentum.DonchianBreakout());
-        _engine.AddAlpha(new FxMomentum.Roc());
-        _engine.AddAlpha(new FxMeanReversion.ZScore());
-        _engine.AddAlpha(new FxMeanReversion.BollingerReversion());
-        _engine.AddAlpha(new FxMeanReversion.VwapReversion());
+        // The canonical 20-family roster (FxFamilies.All): the engine picks
+        // the highest-confidence speaker per regime, so twenty voices widen
+        // the vote without touching the risk model.
+        foreach (var alpha in FxFamilies.All())
+        {
+            _engine.AddAlpha(alpha);
+        }
 
         // Fire-and-forget: the venue's lot geometry (contract size, volume
         // grid) arrives once from the bridge; sizing uses the heuristic
@@ -111,7 +163,31 @@ public sealed class FxEngineHost : IDisposable
         _ = LoadVenueSpecAsync();
 
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
-        _timer.Tick += async (_, _) => await RunCycleAsync().ConfigureAwait(true);
+        _timer.Tick += async (_, _) =>
+        {
+            if (!TryBeginCycle("timer"))
+            {
+                return;
+            }
+            if (_firstCycle)
+            {
+                _firstCycle = false;
+                // Stagger symbols so their requests never hit the bridge in
+                // one burst: the sidecar serializes MT5 access, so four
+                // simultaneous cycles queue behind each other and read as
+                // timeouts (2026-09-28 bridge congestion).
+                await Task.Delay(_cycleOffset).ConfigureAwait(true);
+            }
+            _cycleRunning = true;
+            try
+            {
+                await RunCycleAsync().ConfigureAwait(true);
+            }
+            finally
+            {
+                _cycleRunning = false;
+            }
+        };
     }
 
     public void Start()
@@ -127,7 +203,48 @@ public sealed class FxEngineHost : IDisposable
             _ = AnchorSupervisorAsync();   // first host to start anchors; siblings share
         }
 
-        _ = RunCycleAsync();
+        _ = FirstCycleAsync();
+    }
+
+    /// <summary>The first cycle after Start: delayed by the symbol's
+    /// stagger offset (portfolio hosts must not burst the bridge) and
+    /// guarded against stacking with the timer tick.</summary>
+    private async Task FirstCycleAsync()
+    {
+        if (!TryBeginCycle("first-cycle"))
+        {
+            return;
+        }
+        if (_firstCycle)
+        {
+            _firstCycle = false;
+            await Task.Delay(_cycleOffset).ConfigureAwait(true);
+        }
+        _cycleRunning = true;
+        try
+        {
+            await RunCycleAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _cycleRunning = false;
+        }
+    }
+
+    /// <summary>Shared re-entrancy guard for the timer tick and the first
+    /// cycle: refuses while a cycle is in flight and JOURNALS the skip —
+    /// 2026-09-29 saw a wedged cycle silently swallow every tick for an
+    /// hour, with journal silence as the only symptom. Returns false when
+    /// the cycle is skipped.</summary>
+    internal bool TryBeginCycle(string source)
+    {
+        if (_cycleRunning)
+        {
+            Journal("FX_CYCLE", $"cycle skipped ({source}) — previous cycle still running", "{}");
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>Anchor the supervisor's loss baseline to the live balance
@@ -161,7 +278,7 @@ public sealed class FxEngineHost : IDisposable
     {
         _engine.GoLive();
         _engine.GoPaper();
-        StatusChanged?.Invoke("engine back to paper");
+        StatusChanged?.Invoke("paper: fills route to the connected demo account");
     }
 
     /// <summary>Operator re-arm after a loss stop: forget the latch and
@@ -234,7 +351,7 @@ public sealed class FxEngineHost : IDisposable
             // A transient halt (bridge/kill/governor) that has recovered.
             Supervisor.ClearTransientHalts();
 
-            var decision = _engine.RunOnce(DateTimeOffset.UtcNow, bars, bid, ask);
+            var decision = _engine.RunOnce(_clock(), bars, bid, ask);
             LastDecision = decision;
 
             // Paper soak: an alpha SPOKE while the engine is in paper — that
@@ -255,9 +372,34 @@ public sealed class FxEngineHost : IDisposable
                     }));
             }
 
-            if (decision.Action == FxDecisionAction.Ordered && decision.Signal is not null)
+            // Exit brain: manage the positions this brain owns (comment-
+            // stamped) BEFORE considering a new entry — risk management
+            // outranks new exposure.
+            await ManageOwnedPositionsAsync(bars, decision.Regime.Regime).ConfigureAwait(true);
+
+            if (decision.Action is FxDecisionAction.Ordered or FxDecisionAction.PaperExecuted
+                && decision.Signal is not null)
             {
-                await ExecuteOrderAsync(decision).ConfigureAwait(true);
+                var now = DateTimeOffset.UtcNow;
+                if (OrderCooldownActive(_lastOrderDispatchUtc, now, OrderCooldown))
+                {
+                    // Throttle, not censor: the signal already journaled and
+                    // counted toward the soak. Only the dispatch waits —
+                    // re-sending every cycle into a refusing venue is noise,
+                    // not edge (and spams the journal while AutoTrading is
+                    // off, which is exactly what this stops).
+                    Journal("FX_ORDER",
+                        $"dispatch throttled — per-symbol cooldown active ({OrderCooldown.TotalMinutes:0} min), signal kept: {decision.Signal.Alpha}",
+                        "{}");
+                    return;
+                }
+
+                _lastOrderDispatchUtc = now;
+                // Paper-exec: the demo account IS the paper account — the
+                // signal fills as a real (demo) MT5 order.
+                // ExecuteOrderAsync re-verifies the venue is demo first.
+                await ExecuteOrderAsync(decision,
+                    paperExec: decision.Action == FxDecisionAction.PaperExecuted).ConfigureAwait(true);
             }
         }
         catch
@@ -270,8 +412,32 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
-    private async Task ExecuteOrderAsync(FxDecision decision)
+    private async Task ExecuteOrderAsync(FxDecision decision, bool paperExec = false)
     {
+        // Paper-exec hard guard FIRST: the demo account is the paper
+        // account, so a paper fill is only ever allowed on a venue the
+        // bridge has VERIFIED as demo (trade_mode, else the demo-server
+        // heuristic). A real account — even with the session unlock armed —
+        // or an unverified one refuses here: paper practice can never leak
+        // into real money.
+        if (paperExec)
+        {
+            var account0 = await _mt5.GetAccountAsync().ConfigureAwait(true);
+            if (!PaperExecutionAllowed(account0?.GateVerifiedVirtual))
+            {
+                Journal("FX_ORDER",
+                    "refused: paper execution requires a VERIFIED demo account — " +
+                    (account0 is null
+                        ? "bridge unavailable (account unknown)"
+                        : account0.GateVerifiedVirtual is false
+                            ? "connected account is REAL — paper never routes to real money"
+                            : "account demo/real state unverified — connect a demo account"),
+                    "{}");
+                StatusChanged?.Invoke("paper execution refused: connected account is not a verified demo");
+                return;
+            }
+        }
+
         // Rails, in order, at execution time.
         if (_killSwitchEngaged())
         {
@@ -289,6 +455,13 @@ public sealed class FxEngineHost : IDisposable
         }
 
         var lots = Math.Min((double)cap, decision.SuggestedLots);
+
+        // Small-account mode: one trade at a time at the venue's minimum —
+        // shrink the size before anything else consumes it, so the trade's
+        // real risk follows the clamp (the stop distance stays the sized
+        // hint; only the lot count shrinks).
+        lots = _smallAccountClamp?.Invoke(Symbol, lots) ?? lots;
+
         if (lots < 0.01)
         {
             Journal("FX_ORDER", $"refused: sized {decision.SuggestedLots:0.##} lots below minimum", "{}");
@@ -360,17 +533,58 @@ public sealed class FxEngineHost : IDisposable
         }
 
         var side = decision.Signal!.Direction == FxDirection.Buy ? "buy" : "sell";
+
+        // The order carries the stop the trade was sized with: the alpha's
+        // stop-distance hint IS the R unit, so it goes to the venue as an
+        // SL (floored at the venue's stops_level — a stop inside that band
+        // is rejected outright). Sizing, the exit brain's MAE ruler and the
+        // broker's own risk accounting then all measure the same distance;
+        // with no SL the exit brain fell back to a sub-pip ATR ruler and
+        // the 1.6R emergency bar fired within a pip of entry.
+        var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
+        var mid = tick is { } t && t.Ask > 0 && t.Bid > 0 ? (t.Ask + t.Bid) / 2 : 0;
+        var vspec = _venueSpec ?? Core.Fx.FxVenueSymbolSpec.Heuristic(mid);
+        var stopDistance = Core.Fx.FxExitBrain.NormalizedStopDistance(
+            decision.Signal.StopDistanceHint, vspec.StopsLevel, vspec.Point);
+        // Anchor the stop on the side the venue will measure it from: a
+        // buy's SL is checked against BID (which is below mid by half the
+        // spread), a sell's against ASK — anchoring on mid once landed
+        // stops inside the venue's forbidden band and MT5 refused the
+        // order outright (invalid-stops).
+        var anchor = tick is { } tk
+            ? (side == "buy" ? tk.Bid : tk.Ask)
+            : 0;
+        var sl = anchor > 0 && stopDistance is { } dist
+            ? Math.Round(side == "buy" ? anchor - dist : anchor + dist, 6)
+            : (double?)null;
+        if (sl is null)
+        {
+            // Fail closed: without a stop the position's risk is unsized —
+            // the exit brain would fall back to a guess and the venue would
+            // hold an unprotected position. Never dispatch one.
+            Journal("FX_ORDER",
+                "refused: no usable tick/stop distance for the sized risk " +
+                $"(hint {decision.Signal.StopDistanceHint:0.#####}, stopsLevel {vspec.StopsLevel:0.#})", "{}");
+            StatusChanged?.Invoke("order refused: stop distance unusable");
+            return;
+        }
+
         var result = await _mt5.PlaceOrderAsync(
-            Symbol, side, "market", lots, null, null, null, null).ConfigureAwait(true);
+            Symbol, side, "market", lots, null, null, sl, null,
+            comment: Core.Fx.FxExitBrain.OwnershipComment).ConfigureAwait(true);
+        // The comment stamp is how the exit engine recognizes the positions
+        // it owns — manual trades are never managed.
 
         Journal("FX_ORDER",
             result.Ok
-                ? $"{side} {lots:0.##} lots {Symbol} @ {result.Price:0.#####} — ticket {result.Order ?? result.Deal}"
+                ? $"{(paperExec ? "paper-exec fill (demo): " : string.Empty)}{side} {lots:0.##} lots {Symbol} @ {result.Price:0.#####} — ticket {result.Order ?? result.Deal}"
                 : $"{side} {lots:0.##} lots {Symbol} refused: {result.RetcodeName}",
             System.Text.Json.JsonSerializer.Serialize(new
             {
                 Side = side,
                 Lots = lots,
+                Sl = sl,
+                PaperExec = paperExec,
                 result.Retcode,
                 result.Order,
                 result.Deal,
@@ -385,8 +599,18 @@ public sealed class FxEngineHost : IDisposable
                     : null,
             }));
 
+        if (result.Ok)
+        {
+            var ticket = result.Order ?? result.Deal ?? 0;
+            if (ticket != 0)
+            {
+                // The thesis engine needs the regime the trade was born in.
+                _entryRegimes[ticket] = decision.Regime.Regime;
+            }
+        }
+
         StatusChanged?.Invoke(result.Ok
-            ? $"filled: {side} {lots:0.##} {Symbol} @ {result.Price:0.#####}"
+            ? $"{(paperExec ? "paper filled (demo): " : "filled: ")}{side} {lots:0.##} {Symbol} @ {result.Price:0.#####}"
             : $"refused: {result.RetcodeName}");
     }
 
@@ -396,6 +620,21 @@ public sealed class FxEngineHost : IDisposable
     public bool VenueSpecLoaded { get; private set; }
 
     private bool _specWarned;
+
+    // ---- Exit brain state ------------------------------------------------
+    // Per-position tracking (MFE/MAE in R, bars held) keyed by ticket, plus
+    // the entry regime each position was born in (thesis engine input).
+    private readonly Core.Fx.FxShadowLedger? _shadowLedger;
+    private readonly Dictionary<long, Core.Fx.FxPositionState> _exitStates = new();
+    private readonly Dictionary<long, Core.Fx.FxRegime> _entryRegimes = new();
+
+    /// <summary>The brain's own book: lots it currently tracks as open.
+    /// A FLOOR for the portfolio exposure guard — venue reads can degrade
+    /// to an empty list under congestion (the 2026-09-29 cap failure), but
+    /// the engines' own tracking cannot forget a position they opened.
+    /// Deliberately conservative: entries never shrink it below the truth
+    /// for long, and pruning only happens on trusted reads.</summary>
+    public double LocalBookLots => _exitStates.Values.Sum(s => s.InitialLots);
 
     /// <summary>One-shot fetch of this symbol's venue spec from the bridge
     /// /symbols snapshot. Fire-and-forget and retry-safe: failures leave the
@@ -422,7 +661,14 @@ public sealed class FxEngineHost : IDisposable
                 ContractSize: match.ContractSize,
                 VolumeMin: match.VolumeMin > 0 ? match.VolumeMin : 0.01,
                 VolumeStep: match.VolumeStep > 0 ? match.VolumeStep : 0.01,
-                VolumeMax: match.VolumeMax > 0 ? match.VolumeMax : 100.0);
+                VolumeMax: match.VolumeMax > 0 ? match.VolumeMax : 100.0,
+                // Stop geometry travels with the spec — dropping it here
+                // (the 2026-09-29 invalid-stops incident) left the SL floor
+                // on the default point size, 20x too small on JPY pairs.
+                StopsLevel: match.StopsLevel,
+                Point: match.Point > 0
+                    ? match.Point
+                    : Core.Fx.FxExitBrain.PipSizeOf(match.Bid ?? 0) / 10);
             _engine.SetVenueSpec(_venueSpec);
             VenueSpecLoaded = true;
         }
@@ -454,6 +700,173 @@ public sealed class FxEngineHost : IDisposable
     /// Paper mode keeps the heuristic fallback — the soak is where the gap
     /// gets noticed, the money path refuses to gamble on a guess.</summary>
     internal bool LiveOrderBlockedByMissingSpec => IsLiveEngine && _venueSpec is null;
+
+    /// <summary>Spread guard for the exit override, in pip points — far
+    /// above the venue's normal quote (Deriv gold ~27 pts), so only a
+    /// genuinely abnormal market trips it.</summary>
+    internal const double MaxAbnormalSpreadPoints = 250;
+
+    /// <summary>The Exit Brain's per-cycle pass: evaluate every position
+    /// this brain owns (comment-stamped entries) and act on the resolver's
+    /// decision — full/partial closes via /close, tighten via /modify SL.
+    /// Everything lands in the journal as FX_EXIT (score, votes, MFE/MAE):
+    /// the settlement trail fills, and the data-hungry engines of v2 get
+    /// their substrate. Manual positions (no stamp) are never touched.</summary>
+    private async Task ManageOwnedPositionsAsync(IReadOnlyList<FxBar> bars, FxRegime currentRegime)
+    {
+        var positions = await _mt5.GetPositionsAsync().ConfigureAwait(true);
+        // Only positions this host's own symbol: a symbol-host's ATR is the
+            // risk yardstick, and using e.g. EURUSD's tiny ATR on a USDJPY
+            // position made every tick read as hundreds of R (2026-09-28
+            // live incident: MAE 207R emergency close on a healthy trade).
+            var owned = positions
+                .Where(p => Core.Fx.FxExitBrain.Owns(p.Comment) && p.Symbol == Symbol)
+                .ToList();
+        if (owned.Count == 0)
+        {
+            return;
+        }
+
+        var atr = bars.Count >= 15 ? Core.Fx.FxFeatures.Atr(bars, 14) : double.NaN;
+        var atrMedian = Core.Fx.FxFeatures.AtrMedian(bars, 20);
+        var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
+        var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
+        var mid = tick is { } t && t.Ask > t.Bid ? (t.Ask + t.Bid) / 2 : bars[^1].Close;
+        var spreadPoints = tick is { } t2 && t2.Ask > t2.Bid
+            ? (t2.Ask - t2.Bid) / Math.Max(PipSizeFor(mid), 1e-9)
+            : 0;
+
+        foreach (var p in owned)
+        {
+            if (!_exitStates.TryGetValue(p.Ticket, out var st))
+            {
+                // First sighting: seed the tracking state. The entry regime
+                // may be unknown (app restart) — fall back to the current
+                // regime so the thesis engine stays neutral instead of
+                // inventing a flip that never happened.
+                _entryRegimes[p.Ticket] = currentRegime;
+                st = new Core.Fx.FxPositionState(
+                    p.Ticket, p.Symbol, p.Side, p.PriceOpen, p.Volume,
+                    Core.Fx.FxExitBrain.RiskPerLot(p.PriceOpen, p.Sl, double.IsNaN(atr) ? 0 : atr),
+                    MfeR: 0, MaeR: 0, BarsHeld: 0);
+            }
+
+            var price = p.PriceCurrent > 0 ? p.PriceCurrent : bars[^1].Close;
+            st = Core.Fx.FxExitBrain.UpdateState(st, price, st.BarsHeld + 1);
+            _exitStates[p.Ticket] = st;
+            var entryRegime = _entryRegimes[p.Ticket];
+
+            var decision = Core.Fx.FxExitBrain.Evaluate(
+                st, price, p.Volume,
+                double.IsNaN(atr) ? 0 : atr, atrMedian,
+                spreadPoints, MaxAbnormalSpreadPoints,
+                account?.Equity ?? 0, (double)_equityFloorFloor(),
+                bridgeUp: true,   // a dead bridge never reaches this method
+                bars, currentRegime, entryRegime);
+
+            Journal("FX_EXIT",
+                $"{p.Symbol} #{p.Ticket}: {decision.Action} score {decision.Score:0} — {decision.Reason}",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Ticket = p.Ticket,
+                    p.Symbol,
+                    p.Side,
+                    Action = decision.Action,
+                    Score = Core.Fx.FxJson.Sanitize(decision.Score),
+                    MfeR = Core.Fx.FxJson.Sanitize(decision.MfeR),
+                    MaeR = Core.Fx.FxJson.Sanitize(decision.MaeR),
+                    ProfitR = Core.Fx.FxJson.Sanitize(decision.ProfitR),
+                    Override = decision.OverrideEngine,
+                    Votes = decision.Votes.Select(v => new
+                    {
+                        v.Engine,
+                        Exit = Core.Fx.FxJson.Sanitize(v.Exit),
+                        Weight = Core.Fx.FxJson.Sanitize(v.Weight),
+                        Reason = v.Reason,
+                    }).ToList(),
+                }));
+
+            if (decision.Action == "full"
+                || (decision.Action == "partial" && decision.LotsToClose > 0))
+            {
+                var lots = decision.Action == "full" ? (double?)null : SnapLots(decision.LotsToClose);
+                var close = await _mt5.ClosePositionAsync(p.Ticket, lots).ConfigureAwait(true);
+                Journal("FX_EXIT",
+                    close.Ok
+                        ? $"closed {(lots.HasValue ? $"{lots:0.##} lots of " : string.Empty)}#{p.Ticket} — deal {close.Deal}"
+                        : $"close refused for #{p.Ticket}: {close.RetcodeName}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = p.Ticket,
+                        Partial = lots.HasValue,
+                        Lots = lots,
+                        close.Retcode,
+                    }));
+                if (close.Ok && decision.Action == "full")
+                {
+                    // The engines-earn-votes loop: grade every shadow
+                    // engine's final vote into the promotion ledger (won or
+                    // lost — the ledger, not this call, computes accuracy).
+                    var won = decision.ProfitR > 0;
+                    _shadowLedger?.Append(
+                        p.Ticket, p.Symbol,
+                        decision.Votes.Where(v => v.Weight == 0).ToList(),
+                        decision.Action, won, DateTimeOffset.UtcNow);
+                    _exitStates.Remove(p.Ticket);
+                    _entryRegimes.Remove(p.Ticket);
+                }
+            }
+            else if (decision.Action == "tighten" && decision.NewSl > 0)
+            {
+                var mod = await _mt5.ModifyPositionAsync(p.Ticket, sl: decision.NewSl).ConfigureAwait(true);
+                Journal("FX_EXIT",
+                    mod.Ok
+                        ? $"trailed #{p.Ticket} stop to {decision.NewSl:0.#####} (+0.2R)"
+                        : $"stop trail refused for #{p.Ticket}: {mod.RetcodeName}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = p.Ticket,
+                        NewSl = Core.Fx.FxJson.Sanitize(decision.NewSl),
+                        mod.Retcode,
+                    }));
+            }
+        }
+
+        // Bookkeeping: prune tracking state for tickets that vanished from
+        // the venue — but ONLY on reads that are certainly real. A degraded
+        // read degrades to EMPTY, and two degraded reads agree on the lie:
+        // SetEquals(∅,∅) wiped the whole book during the 08:21-09:06
+        // congestion, the local-book floor hit zero, and the cap failed
+        // open AGAIN. So pruning demands both reads NON-empty and agreeing;
+        // an empty read never shrinks the book. Cost: after a genuine
+        // flatten the floor stays high until a non-empty read re-grounds
+        // it — refusing trades is the safe direction.
+        var confirm = await _mt5.GetPositionsAsync().ConfigureAwait(true);
+        if (owned.Count > 0 && confirm.Count > 0
+            && owned.Select(p => p.Ticket).ToHashSet()
+                .SetEquals(confirm.Select(p => p.Ticket)))
+        {
+            var live = owned.Select(p => p.Ticket).ToHashSet();
+            foreach (var gone in _exitStates.Keys.Where(k => !live.Contains(k)).ToList())
+            {
+                _exitStates.Remove(gone);
+                _entryRegimes.Remove(gone);
+            }
+        }
+    }
+
+    /// <summary>Snap an exit's lots to the venue's volume step (never below
+    /// one step; /close validates the upper bound).</summary>
+    private double SnapLots(double lots)
+    {
+        var step = _venueSpec is { } spec && spec.VolumeStep > 0 ? spec.VolumeStep : 0.01;
+        return Math.Round(Math.Max(step, Math.Round(lots / step) * step), 2);
+    }
+
+    /// <summary>Pip-size heuristic for the spread override (gold-like 0.1,
+    /// JPY-class 0.01, everything else 0.0001).</summary>
+    private static double PipSizeFor(double price) =>
+        price >= 400 ? 0.1 : price >= 20 ? 0.01 : 0.0001;
 
     private void Journal(string category, string detail, string json) =>
         _journal.Log(Guid.Empty, category, detail, json);

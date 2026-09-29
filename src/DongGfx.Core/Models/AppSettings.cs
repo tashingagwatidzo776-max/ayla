@@ -23,6 +23,14 @@ public sealed class AppSettings
     /// trades (the Terminal tab's brain switch writes this).</summary>
     public bool AutonomyEnabled { get; set; }
 
+    /// <summary>Whether the FX brain's engine loop was RUNNING at the last
+    /// persist — the toggle's state, not an autonomy grant. On launch the
+    /// app auto-restarts the engine loop when this is true, so a relaunch
+    /// never silently leaves a running brain stopped (or vice versa).
+    /// Autonomy stays the safety master: a restored loop with autonomy off
+    /// journals decisions and places nothing.</summary>
+    public bool FxBrainRunning { get; set; }
+
     // ── MT5 / FX brain safety ──────────────────────────────────────
     /// <summary>Maximum volume (lots) for a single MT5 order placed through
     /// the bridge. 0 disables MT5 order placement entirely (fail-closed).</summary>
@@ -125,6 +133,16 @@ public sealed class AppSettings
     /// within seconds. Pure journal subscriber — it can never re-arm, clear
     /// or influence a halt.</summary>
     public bool RiskNarratorEnabled { get; set; } = true;
+
+    /// <summary>Nightly genetic lab (docs/ai-agent-program.md agent-6
+    /// support): walk-forward replays of the journal's own decision bars,
+    /// approval-gated and journal-only. It narrates; it never trades and
+    /// never promotes — a human port is still a reviewed PR.</summary>
+    public bool FxLabEnabled { get; set; } = true;
+
+    /// <summary>Maps tab colormap: "Auto" (per-map defaults) or an explicit
+    /// FxCmapKind name (Turbo, Viridis, Inferno, Plasma, Magma, CoolHot).</summary>
+    public string MapsColormap { get; set; } = "Auto";
 
     // ── Logging ────────────────────────────────────────────────────
     /// <summary>Minimum log level: 0=Debug, 1=Info, 2=Warn, 3=Error.</summary>

@@ -3,7 +3,18 @@ using System.Text.Json;
 namespace DongGfx.Core.Fx;
 
 /// <summary>What the engine did with a signal this cycle — journaled.</summary>
-public enum FxDecisionAction { Paper, Ordered, SkippedRegime, SkippedSizing, NoSignal, CycleError }
+public enum FxDecisionAction
+{
+    Paper,
+
+    /// <summary>Paper signal handed to the host for EXECUTION on the
+    /// connected demo account (the demo account is the paper account).
+    /// The host re-verifies the venue is demo before placing — this enum
+    /// value alone never authorizes an order.</summary>
+    PaperExecuted,
+
+    Ordered, SkippedRegime, SkippedSizing, NoSignal, CycleError
+}
 
 public static class FxJson
 {
@@ -41,7 +52,9 @@ public sealed record FxVenueSymbolSpec(
     double ContractSize,
     double VolumeMin,
     double VolumeStep,
-    double VolumeMax)
+    double VolumeMax,
+    double StopsLevel = 0,        // venue's min stop distance, in points
+    double Point = 0.0001)        // the symbol's point (price per point)
 {
     /// <summary>Fallback for symbols the venue has not described yet: the
     /// historic heuristic (100k units FX, 100 oz for gold-like prices,
@@ -51,7 +64,9 @@ public sealed record FxVenueSymbolSpec(
         ContractSize: midPrice > 500 ? 100.0 : 100_000.0,
         VolumeMin: 0.01,
         VolumeStep: 0.01,
-        VolumeMax: 100.0);
+        VolumeMax: 100.0,
+        StopsLevel: 0,
+        Point: midPrice > 500 ? 0.01 : 0.00001);
 }
 
 public sealed class FxEngine
@@ -177,10 +192,16 @@ public sealed class FxEngine
 
             if (!IsLive)
             {
+                // The demo account IS the paper account: the signal still
+                // goes to the host for execution on the connected demo
+                // (host re-verifies demo before placing), and the fill is
+                // journaled under PAPER-EXEC. Paper mode remains
+                // risk-gated; only the venue's real-money path is closed.
                 _journal("FX_DECISION",
-                    $"PAPER: {winner.Direction} {lots:0.##} lots {Symbol} (paper mode — no order)",
-                    ToJson(new { Action = "paper", winner.Direction, Lots = lots }));
-                return new FxDecision(verdict.TimeUtc, verdict, winner, FxDecisionAction.Paper, lots, "paper mode");
+                    $"PAPER-EXEC: {winner.Direction} {lots:0.##} lots {Symbol} (demo execution)",
+                    ToJson(new { Action = "paper-exec", winner.Direction, Lots = lots }));
+                return new FxDecision(verdict.TimeUtc, verdict, winner, FxDecisionAction.PaperExecuted, lots,
+                    "paper mode — order routes to the connected demo account");
             }
 
             _journal("FX_DECISION",

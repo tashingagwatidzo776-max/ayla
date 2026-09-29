@@ -31,7 +31,7 @@ def run_check(files, extra_args=None):
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--evidence-dir", str(ev)]
             + (extra_args or []),
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         return proc.stdout + proc.stderr, proc.returncode
 
 

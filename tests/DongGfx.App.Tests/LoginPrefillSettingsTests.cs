@@ -45,7 +45,7 @@ public class LoginPrefillSettingsTests
         }
         finally
         {
-            try { Directory.Delete(SettingsService.DataDir, recursive: true); } catch { /* best effort */ }
+            RealDataDirDeleteGuard.DeleteDataDir();
         }
     }
 
@@ -66,7 +66,7 @@ public class LoginPrefillSettingsTests
         }
         finally
         {
-            try { Directory.Delete(SettingsService.DataDir, recursive: true); } catch { /* best effort */ }
+            RealDataDirDeleteGuard.DeleteDataDir();
         }
     }
 
@@ -87,7 +87,7 @@ public class LoginPrefillSettingsTests
         }
         finally
         {
-            try { Directory.Delete(SettingsService.DataDir, recursive: true); } catch { /* best effort */ }
+            RealDataDirDeleteGuard.DeleteDataDir();
         }
     }
 
@@ -111,7 +111,7 @@ public class LoginPrefillSettingsTests
         }
         finally
         {
-            try { Directory.Delete(SettingsService.DataDir, recursive: true); } catch { /* best effort */ }
+            RealDataDirDeleteGuard.DeleteDataDir();
         }
     }
 
@@ -132,7 +132,7 @@ public class LoginPrefillSettingsTests
         }
         finally
         {
-            try { Directory.Delete(SettingsService.DataDir, recursive: true); } catch { /* best effort */ }
+            RealDataDirDeleteGuard.DeleteDataDir();
         }
     }
 
@@ -153,7 +153,7 @@ public class LoginPrefillSettingsTests
         }
         finally
         {
-            try { Directory.Delete(SettingsService.DataDir, recursive: true); } catch { /* best effort */ }
+            RealDataDirDeleteGuard.DeleteDataDir();
         }
     }
 }

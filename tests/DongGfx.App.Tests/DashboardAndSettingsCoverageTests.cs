@@ -16,10 +16,12 @@ namespace DongGfx.App.Tests;
 /// </summary>
 public class DashboardAndSettingsCoverageTests : IDisposable
 {
-    // SaveSettingsQuietAsync writes the REAL %APPDATA%\tf\data\settings.json;
-    // back it up and restore it so tests never corrupt the running app's config.
+    // SaveSettingsQuietAsync writes SettingsService.DataDir\settings.json -
+    // resolve the file the same way the service does, so a TF_DATA_DIR
+    // redirect (ci-local gate, dev loops) makes the test assert the scratch
+    // copy it actually wrote, never the running app's real settings.
     private static readonly string SettingsFile = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tf", "data", "settings.json");
+        SettingsService.DataDir, "settings.json");
     private readonly byte[]? _settingsBackup = File.Exists(SettingsFile) ? File.ReadAllBytes(SettingsFile) : null;
 
     public void Dispose()

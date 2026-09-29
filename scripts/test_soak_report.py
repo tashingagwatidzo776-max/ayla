@@ -31,7 +31,7 @@ def run_report(journal_lines, heartbeat_lines, extra_args=None):
             "\n".join(json.dumps(e) for e in heartbeat_lines) + "\n", encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--data", str(data)] + (extra_args or []),
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         return proc.stdout, proc.returncode
 
 
@@ -111,7 +111,7 @@ def test_unparseable_journal_line_fails_soak():
             "{broken json line\n", encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--data", str(data)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert proc.returncode == 1, proc.stdout
         assert "1 unparseable journal lines" in proc.stdout
 

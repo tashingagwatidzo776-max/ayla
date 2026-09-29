@@ -178,7 +178,8 @@ def stage_check_and_download(srv: ReleaseServer) -> None:
 
     r = subprocess.run(
         ["dotnet", "run", "--project", str(runner), "--", url, str(UPDATE_DIR)],
-        capture_output=True, text=True, timeout=420)
+        capture_output=True, text=True, timeout=420,
+        encoding="utf-8", errors="replace")
     out = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0 or "STAGED" not in out:
         fail("check/download/stage", out.strip()[-600:])
@@ -194,7 +195,8 @@ def _build_and_copy(project: Path, out_dir: Path, names: list[str],
     into out_dir."""
     r = subprocess.run(
         ["dotnet", "build", str(project), "-c", "Release", "--nologo", "-v", "q"],
-        capture_output=True, text=True, timeout=420)
+        capture_output=True, text=True, timeout=420,
+        encoding="utf-8", errors="replace")
     if r.returncode != 0:
         fail(stage, ((r.stdout or "") + (r.stderr or ""))[-600:])
         sys.exit(1)
@@ -223,7 +225,8 @@ def stage_install() -> None:
                      "DongGfx.Core.dll"], "install build")
     r = subprocess.run(
         [str(APP_DIR / "Runner.exe"), str(UPDATE_DIR), str(STAGED)],
-        capture_output=True, text=True, timeout=420, cwd=str(APP_DIR))
+        capture_output=True, text=True, timeout=420, cwd=str(APP_DIR),
+        encoding="utf-8", errors="replace")
     out = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0 or "INSTALLED" not in out:
         fail("install", out.strip()[-600:])
@@ -258,7 +261,8 @@ def stage_restart_script() -> None:
     r = subprocess.run(
         ["dotnet", "run", "--project", str(runner), "--",
          str(APP_DIR / "subtestapp.exe"), str(APP_DIR)],
-        capture_output=True, text=True, timeout=420)
+        capture_output=True, text=True, timeout=420,
+        encoding="utf-8", errors="replace")
     if r.returncode != 0:
         fail("render restart script", ((r.stdout or "") + (r.stderr or ""))[-600:])
         sys.exit(1)
@@ -288,7 +292,8 @@ def stage_restart_script() -> None:
 
     # tasklist cross-check from this side too.
     tl = subprocess.run(["tasklist", "/FI", "IMAGENAME eq subtestapp.exe"],
-                        capture_output=True, text=True)
+                        capture_output=True, text=True,
+                        encoding="utf-8", errors="replace")
     if "subtestapp.exe" not in (tl.stdout or ""):
         fail("restart", "script self-deleted but the probe exe is not running")
         sys.exit(1)

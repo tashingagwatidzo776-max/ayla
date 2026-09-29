@@ -20,6 +20,12 @@ public sealed class TradeJournal : IDisposable
     /// journal directory; null when the requested directory was usable.</summary>
     public Exception? DirectoryError { get; }
 
+    /// <summary>The directory entries are actually written to — the requested
+    /// one, or the fallback when it was unusable. Consumers deriving paths
+    /// from "where the journal lives" (e.g. FxJournalBook) must read this,
+    /// not re-derive from settings.</summary>
+    public string JournalDir => _journalDir;
+
     public TradeJournal(string journalDir, string? fallbackDir = null)
     {
         // Journaling is best-effort end to end — the flush path already

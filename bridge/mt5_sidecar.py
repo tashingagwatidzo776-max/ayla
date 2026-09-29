@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -166,6 +167,11 @@ class BridgeHandlers:
             "login": getattr(acc, "login", None),
             "server": getattr(acc, "server", None),
             "terminal_connected": getattr(term, "connected", False),
+            # The terminal's OWN autotrading verdict (the green ▶ button AND
+            # the Tools→Options master switch combined). Orders fail with
+            # TRADE_RETCODE_CLIENT_DISABLED (10027) while this is false, so
+            # the app surfaces it in the bridge status line at a glance.
+            "trade_allowed": getattr(term, "trade_allowed", None),
         }
 
     _login_attempts: list[float] = []   # module-level rate-limit state
@@ -259,6 +265,11 @@ class BridgeHandlers:
                 "volume_step": float(info.volume_step),
                 "volume_max": float(info.volume_max),
                 "contract_size": float(info.trade_contract_size),
+                # Stop geometry: the app floors its stop distances at the
+                # venue's stops_level (an SL inside the band is rejected
+                # outright by order_send). point converts points → price.
+                "stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+                "point": float(getattr(info, "point", 0.0) or 0.00001),
             })
         return {"symbols": out}
 
@@ -329,6 +340,8 @@ class BridgeHandlers:
                 "sl": p.sl,
                 "tp": p.tp,
                 "time": p.time,
+                # Order comment: the exit engine's ownership key ("donggfx-brain").
+                "comment": getattr(p, "comment", ""),
             })
         return out
 
@@ -438,7 +451,7 @@ class BridgeHandlers:
         tick = self._m.symbol_info_tick(p.symbol)
         if tick is None:
             raise OrderError(f"no tick for {p.symbol} — market closed?")
-        min_dist = (info.trade_stops_level or 0) * (info.point or 0.0)
+        min_dist = (getattr(info, "trade_stops_level", 0) or 0) * (getattr(info, "point", 0.0) or 0.0)
         ref = tick.bid if p.type == self._m.POSITION_TYPE_BUY else tick.ask
         if sl and abs(ref - sl) < min_dist:
             raise OrderError(f"sl {sl} within stops level ({min_dist} of {ref})")
@@ -519,10 +532,15 @@ class BridgeHandlers:
             request["price"] = float(price)
         if price is not None and kind != "stoplimit":
             request["price"] = float(price)
+        # Normalize stop prices to the symbol's own digit count: a float
+        # arriving from JSON can sit inside the stops_level band purely by
+        # representation (…00000001), and MT5 rounds to digits anyway —
+        # explicit normalization keeps rejections honest.
+        digits = int(getattr(info, "digits", 5) or 5)
         if body.get("sl") is not None:
-            request["sl"] = float(body["sl"])
+            request["sl"] = round(float(body["sl"]), digits)
         if body.get("tp") is not None:
-            request["tp"] = float(body["tp"])
+            request["tp"] = round(float(body["tp"]), digits)
 
         result = self._m.order_send(request)
         if result is None:
@@ -584,11 +602,23 @@ class BridgeHandlers:
         }
 
 
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    """HTTP server that REFUSES to share its port. Python's default
+    allow_reuse_address=True (SO_REUSEADDR) lets a second instance bind a
+    port already in use on Windows — four double-bound sidecars meant
+    connections landed on a random one (transient 'bridge unreachable',
+    split-brain health, 2026-09-28). With reuse disabled the second bind
+    fails loudly here, and main() exits gracefully instead."""
+
+    allow_reuse_address = False
+
+
 class SidecarServer:
     """Maps HTTP routes onto BridgeHandlers; binds loopback only."""
 
     def __init__(self, handlers: BridgeHandlers, port: int = DEFAULT_PORT) -> None:
         self._handlers = handlers
+        self._mt5_lock = threading.Lock()  # MT5 API is not thread-safe
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -597,78 +627,91 @@ class SidecarServer:
 
             def _send(self, code: int, payload: dict) -> None:
                 raw = json.dumps(payload).encode()
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+                try:
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                except OSError:
+                    # Client went away mid-response (its own timeout aborts
+                    # the socket) — not a server fault; drop it quietly.
+                    self.close_connection = True
 
             def _route_get(self, path: str, qs: dict) -> None:
                 h = outer._handlers
-                try:
-                    if path == "/health":
-                        self._send(200, h.health())
-                    elif path == "/account":
-                        self._send(200, h.account())
-                    elif path == "/symbols":
-                        self._send(200, h.symbols())
-                    elif path.startswith("/ticks/"):
-                        self._send(200, h.ticks(path.split("/", 2)[2]))
-                    elif path.startswith("/book/"):
-                        self._send(200, h.book(path.split("/", 2)[2]))
-                    elif path.startswith("/candles/"):
-                        sym = path.split("/", 2)[2]
-                        self._send(200, {"candles": h.candles(
-                            sym, (qs.get("tf") or ["M1"])[0], (qs.get("n") or ["120"])[0])})
-                    elif path == "/positions":
-                        self._send(200, {"positions": h.positions()})
-                    elif path == "/orders":
-                        self._send(200, {"orders": h.orders()})
-                    elif path == "/deals":
-                        self._send(200, {"deals": h.deals(
-                            (qs.get("days") or ["7"])[0],
-                            (qs.get("from") or [None])[0],
-                            (qs.get("to") or [None])[0])})
-                    else:
-                        self._send(404, {"error": f"no route {path}"})
-                except OrderError as e:
-                    self._send(422, {"error": str(e)})
-                except Exception as e:  # noqa: BLE001 — surface, never crash
-                    self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                # The MetaTrader5 API is not thread-safe: the data fetch runs
+                # under one lock, but the socket write happens OUTSIDE it —
+                # a slow or aborted client write must never stall other
+                # requests (2026-09-28 freeze + crash loop).
+                with outer._mt5_lock:
+                    try:
+                        if path == "/health":
+                            payload, code = h.health(), 200
+                        elif path == "/account":
+                            payload, code = h.account(), 200
+                        elif path == "/symbols":
+                            payload, code = h.symbols(), 200
+                        elif path.startswith("/ticks/"):
+                            payload, code = h.ticks(path.split("/", 2)[2]), 200
+                        elif path.startswith("/book/"):
+                            payload, code = h.book(path.split("/", 2)[2]), 200
+                        elif path.startswith("/candles/"):
+                            sym = path.split("/", 2)[2]
+                            payload, code = {"candles": h.candles(
+                                sym, (qs.get("tf") or ["M1"])[0], (qs.get("n") or ["120"])[0])}, 200
+                        elif path == "/positions":
+                            payload, code = {"positions": h.positions()}, 200
+                        elif path == "/orders":
+                            payload, code = {"orders": h.orders()}, 200
+                        elif path == "/deals":
+                            payload, code = {"deals": h.deals(
+                                (qs.get("days") or ["7"])[0],
+                                (qs.get("from") or [None])[0],
+                                (qs.get("to") or [None])[0])}, 200
+                        else:
+                            payload, code = {"error": f"no route {path}"}, 404
+                    except OrderError as e:
+                        payload, code = {"error": str(e)}, 422
+                    except Exception as e:  # noqa: BLE001 — surface, never crash
+                        payload, code = {"error": f"{type(e).__name__}: {e}"}, 500
+                self._send(code, payload)
 
             def do_GET(self) -> None:  # noqa: N802 (http.server API)
                 parsed = urlparse(self.path)
                 self._route_get(parsed.path.rstrip("/"), parse_qs(parsed.query))
 
-            def do_POST(self) -> None:  # noqa: N802
+            def do_POST(self) -> None:  # noqa: N802 (http.server API)
                 parsed = urlparse(self.path)
-                try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    raw = self.rfile.read(length) if length else b"{}"
-                    body = json.loads(raw or b"{}")
-                    if parsed.path == "/order":
-                        self._send(200, outer._handlers.order(body))
-                    elif parsed.path.startswith("/close/"):
-                        qs = parse_qs(urlparse(self.path).query)
-                        vol = (qs.get("lots") or [None])[0]
-                        self._send(200, outer._handlers.close(
-                            parsed.path.rsplit("/", 1)[1],
-                            float(vol) if vol is not None else None))
-                    elif parsed.path.startswith("/cancel/"):
-                        self._send(200, outer._handlers.cancel(parsed.path.rsplit("/", 1)[1]))
-                    elif parsed.path == "/modify":
-                        self._send(200, outer._handlers.modify(body))
-                    elif parsed.path == "/login":
-                        self._send(200, outer._handlers.login(body))
-                    else:
-                        self._send(404, {"error": f"no route {parsed.path}"})
-                except OrderError as e:
-                    self._send(422, {"error": str(e)})
-                except Exception as e:  # noqa: BLE001
-                    self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                with outer._mt5_lock:
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                        raw = self.rfile.read(length) if length else b"{}"
+                        body = json.loads(raw or b"{}")
+                        if parsed.path == "/order":
+                            payload, code = outer._handlers.order(body), 200
+                        elif parsed.path.startswith("/close/"):
+                            qs = parse_qs(urlparse(self.path).query)
+                            vol = (qs.get("lots") or [None])[0]
+                            payload, code = outer._handlers.close(
+                                parsed.path.rsplit("/", 1)[1],
+                                float(vol) if vol is not None else None), 200
+                        elif parsed.path.startswith("/cancel/"):
+                            payload, code = outer._handlers.cancel(parsed.path.rsplit("/", 1)[1]), 200
+                        elif parsed.path == "/modify":
+                            payload, code = outer._handlers.modify(body), 200
+                        elif parsed.path == "/login":
+                            payload, code = outer._handlers.login(body), 200
+                        else:
+                            payload, code = {"error": f"no route {parsed.path}"}, 404
+                    except OrderError as e:
+                        payload, code = {"error": str(e)}, 422
+                    except Exception as e:  # noqa: BLE001
+                        payload, code = {"error": f"{type(e).__name__}: {e}"}, 500
+                self._send(code, payload)
 
         host = "127.0.0.1"
-        self.httpd = ThreadingHTTPServer((host, port), Handler)
+        self.httpd = ExclusiveHTTPServer((host, port), Handler)
         self.port = self.httpd.server_address[1]
 
     def serve_forever(self) -> None:
@@ -691,8 +734,32 @@ def parse_args(argv: list[str]) -> tuple[int, str | None]:
     return port, path
 
 
+def already_running(port: int) -> bool:
+    """True when a live sidecar already serves this port. A simple HTTP
+    GET — the authoritative check: a bound-but-dead socket fails the
+    request, a live responder answers. The watchdog's respawn of an
+    already-healthy sidecar then exits 0 quietly instead of double-binding
+    (which ExclusiveHTTPServer would now refuse anyway — this check just
+    makes the common case silent)."""
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=2
+        ) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001 — nothing listening / not a sidecar
+        return False
+
+
 def main() -> int:
     port, terminal_path = parse_args(sys.argv[1:])
+    if already_running(port):
+        # Watchdog respawn while a healthy sidecar holds the port: exit
+        # quietly with success. Never kill the existing instance — the app
+        # is using it right now.
+        print(f"sidecar already running on 127.0.0.1:{port} — nothing to do")
+        return 0
     target = f" (terminal: {terminal_path})" if terminal_path else ""
     print(f"attaching to MetaTrader 5{target} (retries on IPC timeout)…")
     if not attach(terminal_path=terminal_path):

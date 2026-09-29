@@ -22,6 +22,7 @@ public sealed class MainViewModel
     public UpdateViewModel UpdateVm { get; }
     public PerformanceViewModel PerformanceVm { get; }
     public TerminalViewModel TerminalVm { get; }
+    public MapsViewModel MapsVm { get; }
 
     public MainViewModel(
         SettingsService settingsService,
@@ -31,6 +32,7 @@ public sealed class MainViewModel
         UpdateViewModel updateVm,
         PerformanceViewModel performanceVm,
         TerminalViewModel terminalVm,
+        MapsViewModel? mapsVm = null,
         TradeJournal? journal = null,
         ManualRealMoneyGate? gate = null)
     {
@@ -43,6 +45,7 @@ public sealed class MainViewModel
         UpdateVm = updateVm;
         PerformanceVm = performanceVm;
         TerminalVm = terminalVm;
+        MapsVm = mapsVm ?? new MapsViewModel();
     }
 
     /// <summary>Loads persisted settings, launches the pinned MT5 terminal
@@ -95,7 +98,9 @@ public sealed class MainViewModel
     /// must never mask the successful login.</summary>
     public void OnMt5AccountSwitched(string login, string server)
     {
-        TerminalVm.ShutdownFxBrain();
+        // The stop is a safety guard, not the user's intent — persist OFF so
+        // the loop cannot auto-restore against the freshly switched account.
+        TerminalVm.ShutdownFxBrain(accountSwitched: true);
         try
         {
             // A fresh account starts locked: the unlock was armed for the

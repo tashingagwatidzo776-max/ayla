@@ -14,7 +14,11 @@ public sealed record Mt5Symbol(
     string Symbol, string Description, double? Bid, double? Ask,
     int SpreadPoints, int Digits, int TradeMode,
     double VolumeMin = 0, double VolumeStep = 0, double VolumeMax = 0,
-    double ContractSize = 0);
+    double ContractSize = 0,
+    // Stop geometry (2026-09-29 sidecar): the venue's minimum stop distance
+    // in points and the price per point. Missing on an old sidecar = 0, and
+    // callers fall back to the price-scale pip heuristic.
+    int StopsLevel = 0, double Point = 0);
 
 /// <summary>One open MT5 position (bridge /positions). Sl/Tp feed the
 /// chart's draggable price lines; 0 = no leg set. Optional so older
@@ -22,7 +26,12 @@ public sealed record Mt5Symbol(
 public sealed record Mt5Position(
     long Ticket, string Symbol, string Side, double Volume,
     double PriceOpen, double PriceCurrent, double Profit,
-    double Sl = 0, double Tp = 0);
+    double Sl = 0, double Tp = 0,
+    /// <summary>Order comment — the brain stamps "donggfx-brain" on its
+    /// paper-exec entries, which is how the exit engine recognizes the
+    /// positions it owns (vs manual or third-party trades it must leave
+    /// alone).</summary>
+    string Comment = "");
 
 /// <summary>One open (pending) order from the bridge /orders.</summary>
 public sealed record Mt5PendingOrder(
@@ -96,7 +105,7 @@ public sealed class Mt5BridgeClient : IDisposable
     private readonly bool _ownsHandler;
 
     public Mt5BridgeClient(int port = DefaultPort)
-        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(8) },
+        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(15) },
                new Uri($"http://127.0.0.1:{port}/"), ownsHandler: true)
     {
     }
@@ -111,7 +120,7 @@ public sealed class Mt5BridgeClient : IDisposable
                 "the MT5 bridge is loopback-only: refusing " + baseAddress.Host);
         }
 
-        _http = new HttpClient(handler) { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(8) };
+        _http = new HttpClient(handler) { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
         _ownsHandler = false;
     }
 
@@ -125,7 +134,7 @@ public sealed class Mt5BridgeClient : IDisposable
     public bool IsLoopback => _http.BaseAddress?.Host is "127.0.0.1" or "localhost";
 
     /// <summary>Liveness + attached-account snapshot. Null = sidecar down.</summary>
-    public async Task<(bool Ok, long? Login, string? Server)?> HealthAsync(CancellationToken ct = default)
+    public async Task<(bool Ok, long? Login, string? Server, bool? TradeAllowed)?> HealthAsync(CancellationToken ct = default)
     {
         using var doc = await GetJson("health", ct).ConfigureAwait(false);
         if (doc is null)
@@ -137,11 +146,18 @@ public sealed class Mt5BridgeClient : IDisposable
         // rather than omitting the fields — TryGetProperty still matches, so
         // the ValueKind must be checked before the typed read (a raw
         // GetInt64/GetString on a null threw and killed the startup poll).
+        // TradeAllowed (older sidecars omit it) is the terminal's own
+        // autotrading verdict — null = unknown, never treated as off.
         return (doc.RootElement.GetProperty("ok").GetBoolean(),
                 doc.RootElement.TryGetProperty("login", out var login) && login.ValueKind == JsonValueKind.Number
                     ? login.GetInt64() : null,
                 doc.RootElement.TryGetProperty("server", out var server) && server.ValueKind == JsonValueKind.String
-                    ? server.GetString() : null);
+                    ? server.GetString() : null,
+                doc.RootElement.TryGetProperty("trade_allowed", out var allowed) && allowed.ValueKind == JsonValueKind.True
+                    ? true
+                    : doc.RootElement.TryGetProperty("trade_allowed", out var allowed2) && allowed2.ValueKind == JsonValueKind.False
+                        ? false
+                        : null);
     }
 
     public async Task<Mt5Account?> GetAccountAsync(CancellationToken ct = default)
@@ -190,7 +206,9 @@ public sealed class Mt5BridgeClient : IDisposable
                 e.TryGetProperty("volume_min", out var vmin) && vmin.ValueKind == JsonValueKind.Number ? vmin.GetDouble() : 0,
                 e.TryGetProperty("volume_step", out var vstep) && vstep.ValueKind == JsonValueKind.Number ? vstep.GetDouble() : 0,
                 e.TryGetProperty("volume_max", out var vmx) && vmx.ValueKind == JsonValueKind.Number ? vmx.GetDouble() : 0,
-                e.TryGetProperty("contract_size", out var csz) && csz.ValueKind == JsonValueKind.Number ? csz.GetDouble() : 0));
+                e.TryGetProperty("contract_size", out var csz) && csz.ValueKind == JsonValueKind.Number ? csz.GetDouble() : 0,
+                e.TryGetProperty("stops_level", out var stl) && stl.ValueKind == JsonValueKind.Number ? stl.GetInt32() : 0,
+                e.TryGetProperty("point", out var pt) && pt.ValueKind == JsonValueKind.Number ? pt.GetDouble() : 0));
         }
         return list;
     }
@@ -316,7 +334,7 @@ public sealed class Mt5BridgeClient : IDisposable
     public async Task<Mt5OrderResult> PlaceOrderAsync(
         string symbol, string action, string type, double lots,
         double? price = null, double? stopPrice = null, double? sl = null, double? tp = null,
-        CancellationToken ct = default)
+        string? comment = null, CancellationToken ct = default)
     {
         var body = new Dictionary<string, object?>
         {
@@ -325,6 +343,7 @@ public sealed class Mt5BridgeClient : IDisposable
             ["type"] = type,
             ["lots"] = lots,
         };
+        if (!string.IsNullOrEmpty(comment)) { body["comment"] = comment; }
         if (price.HasValue) { body["price"] = price.Value; }
         if (stopPrice.HasValue) { body["stopprice"] = stopPrice.Value; }
         if (sl.HasValue) { body["sl"] = sl.Value; }
@@ -378,7 +397,8 @@ public sealed class Mt5BridgeClient : IDisposable
                 p.GetProperty("price_current").GetDouble(),
                 p.GetProperty("profit").GetDouble(),
                 p.TryGetProperty("sl", out var slp) && slp.ValueKind == JsonValueKind.Number ? slp.GetDouble() : 0,
-                p.TryGetProperty("tp", out var tpp) && tpp.ValueKind == JsonValueKind.Number ? tpp.GetDouble() : 0));
+                p.TryGetProperty("tp", out var tpp) && tpp.ValueKind == JsonValueKind.Number ? tpp.GetDouble() : 0,
+                p.TryGetProperty("comment", out var com) ? com.GetString() ?? "" : ""));
         }
 
         return positions;

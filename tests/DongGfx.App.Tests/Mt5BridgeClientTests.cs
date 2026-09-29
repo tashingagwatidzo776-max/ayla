@@ -86,27 +86,30 @@ public class Mt5BridgeClientTests
         var (client, fake) = NewClient();
         using (client)
         {
-            fake.Route("health", Json("\"ok\": true", "\"login\": 201587365", "\"server\": \"Deriv-Demo\""));
+            fake.Route("health", Json("\"ok\": true", "\"login\": 201587365", "\"server\": \"Deriv-Demo\"", "\"trade_allowed\": true"));
             var up = await client.HealthAsync();
             Assert.NotNull(up);
             Assert.True(up!.Value.Ok);
             Assert.Equal(201587365, up.Value.Login);
             Assert.Equal("Deriv-Demo", up.Value.Server);
+            Assert.True(up.Value.TradeAllowed);
 
             fake.Route("health", Json("\"ok\": true")); // no login/server keys
             var minimal = await client.HealthAsync();
             Assert.True(minimal!.Value.Ok);
             Assert.Null(minimal.Value.Login);
+            Assert.Null(minimal.Value.TradeAllowed);   // older sidecar: unknown, never "off"
 
             // Degraded sidecar: fields present but explicitly JSON null.
             // GetInt64()/GetString() on a null ValueKind must not throw —
             // this is the crash that killed the startup poll.
-            fake.Route("health", Json("\"ok\": true", "\"login\": null", "\"server\": null"));
+            fake.Route("health", Json("\"ok\": true", "\"login\": null", "\"server\": null", "\"trade_allowed\": false"));
             var degraded = await client.HealthAsync();
             Assert.NotNull(degraded);
             Assert.True(degraded!.Value.Ok);
             Assert.Null(degraded.Value.Login);
             Assert.Null(degraded.Value.Server);
+            Assert.False(degraded.Value.TradeAllowed!.Value);   // explicit false survives the null fields
 
             fake.GetRoutes.Remove("health"); // 404 -> sidecar down
             Assert.Null(await client.HealthAsync());

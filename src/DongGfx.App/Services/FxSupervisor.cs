@@ -10,6 +10,13 @@ public enum FxHaltReason
     None,
     /// <summary>Session P/L fell below the configured daily-loss cap.</summary>
     DailyLossCap,
+    /// <summary>Floating (open-position) drawdown beyond the daily-loss
+    /// cap — a TRANSIENT stand-down: it auto-recovers when the market
+    /// gives the open positions back. The realized (balance) breach above
+    /// latches until re-armed; this one only pauses while underwater.
+    /// Without it, paper-exec sessions whose positions stay open cannot
+    /// exercise the loss rail at all — balance only moves on close.</summary>
+    FloatingLoss,
     /// <summary>Equity fell below the configured absolute floor.</summary>
     EquityFloor,
     /// <summary>The global kill switch was engaged.</summary>
@@ -109,11 +116,28 @@ public sealed class FxSupervisor
                 $"daily loss cap hit — session P/L {balance - start:+0.00;-0.00} vs cap -{_dailyLossCap():0.##}");
         }
 
+        // Stricter rail first: an absolute equity floor (latched) outranks
+        // the floating stand-down below — when both fire, the reason that
+        // requires an operator re-arm must be the one surfaced.
         var floor = _equityFloor();
         if (floor > 0 && equity < floor)
         {
             return EnterHalt(FxHaltReason.EquityFloor,
                 $"equity {equity:0.00} below floor {floor:0.00} — FX trading halted");
+        }
+
+        // Floating drawdown: the same cap measured against EQUITY (open
+        // P/L included) stands trading down TRANSIENTLY — demo or live,
+        // an underwater book beyond the risk budget stops shipping new
+        // orders. Silent while already in this halt (one journal entry,
+        // not one per cycle); ClearTransientHalts lets it recover.
+        if (start - equity > _dailyLossCap())
+        {
+            return _halted && _halt is FxHaltReason.FloatingLoss
+                ? new FxSupervisorVerdict(false, FxHaltReason.FloatingLoss,
+                    "floating drawdown still beyond cap — standing down")
+                : EnterHalt(FxHaltReason.FloatingLoss,
+                    $"floating drawdown {start - equity:0.00} beyond cap {_dailyLossCap():0.##} — standing down while open P/L is underwater (auto-recovers)");
         }
 
         return new FxSupervisorVerdict(true, FxHaltReason.None, "clear");
@@ -124,7 +148,8 @@ public sealed class FxSupervisor
     /// </summary>
     public void ClearTransientHalts()
     {
-        if (_halted && _halt is FxHaltReason.BridgeDown or FxHaltReason.KillSwitch or FxHaltReason.Governor)
+        if (_halted && _halt is FxHaltReason.BridgeDown or FxHaltReason.KillSwitch or FxHaltReason.Governor
+            or FxHaltReason.FloatingLoss)
         {
             _halted = false;
             _halt = FxHaltReason.None;

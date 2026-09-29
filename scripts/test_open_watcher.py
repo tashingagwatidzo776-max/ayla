@@ -59,6 +59,7 @@ def run_watcher(args, journal_lines, journal_path=None):
              "-File", str(WATCHER), *args, "-ToastOnly",
              "-JournalPath", journal_path],
             capture_output=True, text=True, timeout=60, env=env,
+            encoding="utf-8", errors="replace",
         )
         return proc
     finally:

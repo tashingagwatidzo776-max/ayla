@@ -37,6 +37,14 @@ public sealed class FxScorecardService : IDisposable
     /// first successful run this process).</summary>
     public string? LastSummary { get; private set; }
 
+    /// <summary>Per-symbol out-of-sample expectation from the last scorecard
+    /// run, as 0..1 beliefs for the AI-probability map (0.5 = flat; the
+    /// signed OOS average R is squashed through a logistic). Empty until the
+    /// first run has data. Read-side only — the map never influences the
+    /// scorecard.</summary>
+    public IReadOnlyList<(string Symbol, double Probability)> LastBeliefs { get; private set; }
+        = Array.Empty<(string, double)>();
+
     /// <summary>True while a run is in flight (manual triggers skip).</summary>
     public bool IsRunning
     {
@@ -74,6 +82,7 @@ public sealed class FxScorecardService : IDisposable
             var symbols = ParseSymbols(_settings().FxSymbols, _settings().FxSymbol);
             var approved = 0;
             var total = 0;
+            var perSymbol = new List<(string Symbol, IReadOnlyList<FxScorecardEntry> Entries)>();
 
             foreach (var symbol in symbols)
             {
@@ -89,6 +98,7 @@ public sealed class FxScorecardService : IDisposable
                     .Select(c => new FxBar(c.Time, c.Open, c.High, c.Low, c.Close, 0))
                     .ToList();
                 var entries = FxScorecard.Run(bars);
+                perSymbol.Add((symbol, entries));
 
                 foreach (var e in entries)
                 {
@@ -105,6 +115,8 @@ public sealed class FxScorecardService : IDisposable
                         System.Text.Json.JsonSerializer.Serialize(e));
                 }
             }
+
+            LastBeliefs = BeliefsFrom(perSymbol);
 
             LastSummary = total == 0
                 ? "scorecard: no data"
@@ -125,6 +137,27 @@ public sealed class FxScorecardService : IDisposable
                 _running = false;
             }
         }
+    }
+
+    /// <summary>Squashes each symbol's mean OOS R into 0..1 via a logistic
+    /// centered at 0 (0.5 = no edge); symbols with no OOS trades land at
+    /// 0.5. Deterministic, no self-assessment — the input is measured PnL.</summary>
+    internal static IReadOnlyList<(string Symbol, double Probability)> BeliefsFrom(
+        IReadOnlyList<(string Symbol, IReadOnlyList<FxScorecardEntry> Entries)> perSymbol)
+    {
+        var beliefs = new List<(string, double)>();
+        foreach (var (symbol, entries) in perSymbol)
+        {
+            var oos = entries.Where(e => e.OosTrades > 0).Select(e => e.OosPnl / e.OosTrades).ToList();
+            if (oos.Count == 0)
+            {
+                beliefs.Add((symbol, 0.5));
+                continue;
+            }
+            var mean = oos.Average();
+            beliefs.Add((symbol, 1.0 / (1.0 + Math.Exp(-mean))));
+        }
+        return beliefs;
     }
 
     internal static IReadOnlyList<string> ParseSymbols(string csv, string fallback)
