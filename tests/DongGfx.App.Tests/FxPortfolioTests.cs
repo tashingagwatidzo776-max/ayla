@@ -241,6 +241,97 @@ public class FxPortfolioTests
         Assert.Contains("slot held by the brain's own book", veto);
     }
 
+    // ── journal-derived book (FxJournalBook) ─────────────────────────
+
+    private static string FillLine(string ts, string side, string lots, string sym, long ticket) =>
+        $"{{\"Timestamp\":\"{ts}\",\"Category\":\"FX_ORDER\",\"Details\":\"" +
+        $"paper-exec fill (demo): {side} {lots} lots {sym} @ 1.1 — ticket {ticket}: {{}}\"}}";
+
+    private static string CloseLine(string ts, long ticket) =>
+        $"{{\"Timestamp\":\"{ts}\",\"Category\":\"FX_EXIT\",\"Details\":\"" +
+        $"closed #{ticket} — deal : {{}}\"}}";
+
+    [Fact]
+    public void JournalBook_Fills_Open_And_Closes_Retire_Tickets()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"dg-jbook-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllLines(Path.Combine(dir, "journal_20260929.jsonl"), new[]
+            {
+                FillLine("2026-09-29T08:00:00Z", "buy", "0.1", "XAUUSDmicro", 111),
+                FillLine("2026-09-29T08:05:00Z", "sell", "0.07", "USDJPY", 222),
+            });
+            var book = new FxJournalBook(dir);
+            Assert.Equal(0.17, book.OpenLots(), 8);
+
+            File.AppendAllLines(Path.Combine(dir, "journal_20260929.jsonl"),
+                new[] { CloseLine("2026-09-29T08:10:00Z", 111) });
+            var book2 = new FxJournalBook(dir, clock: () => DateTimeOffset.UtcNow.AddSeconds(60));
+            Assert.Equal(0.07, book2.OpenLots(), 8);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void JournalBook_Matched_Close_Retires_The_Fill_Fully()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"dg-jbook-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllLines(Path.Combine(dir, "journal_20260929.jsonl"), new[]
+            {
+                FillLine("2026-09-29T08:00:00Z", "buy", "0.1", "XAUUSDmicro", 333),
+                CloseLine("2026-09-29T08:10:00Z", 333),
+            });
+            // The close's retirement uses the lots the fill recorded in the
+            // same journal: ticket 333 opened 0.1 and its close retires
+            // exactly 0.1 — the book reads flat.
+            var book = new FxJournalBook(dir, clock: () => DateTimeOffset.UtcNow.AddSeconds(30));
+            Assert.Equal(0.0, book.OpenLots(), 8);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void JournalBook_Close_For_An_Unrecorded_Ticket_Retires_The_Minimum()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"dg-jbook-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // A close for a ticket whose fill is unparsable (older format,
+            // truncated line): only the conservative minimum retires — the
+            // floor errs high, never negative.
+            File.WriteAllLines(Path.Combine(dir, "journal_20260929.jsonl"), new[]
+            {
+                FillLine("2026-09-29T08:00:00Z", "buy", "0.1", "XAUUSDmicro", 444),
+                CloseLine("2026-09-29T08:10:00Z", 999),
+            });
+            var book = new FxJournalBook(dir, clock: () => DateTimeOffset.UtcNow.AddSeconds(30));
+            Assert.Equal(0.09, book.OpenLots(), 8);   // 0.1 fill − 0.01 stray close
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void JournalBook_MissingDir_Floors_At_Zero_Without_Throwing()
+    {
+        var book = new FxJournalBook(Path.Combine(Path.GetTempPath(), $"dg-jbook-none-{Guid.NewGuid():N}"));
+        Assert.Equal(0, book.OpenLots(), 8);
+    }
+
     // ── small-account guard ───────────────────────────────────────────
 
     [Fact]

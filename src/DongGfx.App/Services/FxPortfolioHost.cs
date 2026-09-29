@@ -355,14 +355,22 @@ public sealed class FxPortfolioHost : IDisposable
         Supervisor = new FxSupervisor(journal, killSwitchEngaged, governorTripped,
             dailyLossCap, equityFloor, webhook);
 
-        // The local-book floor delegates over the per-symbol hosts: the
-        // lambda runs at ORDER time, after the hosts below are built and
-        // tracking their positions.
+        // The local-book floor has two independent sources, and the guard
+        // takes the MAX of both: (1) the per-symbol hosts' own tracking —
+        // which seeds from venue reads and can be lied empty; (2) the
+        // JOURNAL's book — fills minus close confirmations, written locally
+        // before any venue round-trip can lie about it. The 09:45-09:51
+        // relaunch leak rode (1): fresh hosts + degraded reads = zero floor.
+        // The journal book cannot forget what the venue claims is gone.
+        var journalBook = new FxJournalBook(
+            System.IO.Path.Combine(Infrastructure.SettingsService.DataDir, "journal"));
+        Func<double> floor = () => Math.Max(
+            _hosts.Sum(h => h.LocalBookLots), journalBook.OpenLots());
         var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols,
-            localBookLots: () => _hosts.Sum(h => h.LocalBookLots));
+            localBookLots: floor);
         var news = new FxNewsVeto(newsCalendarPath, newsWindow);
         var small = new FxSmallAccountGuard(mt5, symbols,
-            localBookLots: () => _hosts.Sum(h => h.LocalBookLots));
+            localBookLots: floor);
 
         // Per-engine sizing cap never exceeds the portfolio's total cap -
         // otherwise every live order would self-veto at the exposure guard.
