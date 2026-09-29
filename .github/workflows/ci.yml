@@ -45,13 +45,6 @@ permissions:
 jobs:
   unit:
     runs-on: windows-latest
-    # The DataDir-deleting test suites (RealDataDirDeleteGuard) refuse to run
-    # against the real %APPDATA%\tf\data — and on a runner that IS the real
-    # dir. Redirect to a scratch dir, same as scripts/ci-local.ps1 does
-    # locally. Without this the wipe-guard throws and the whole unit job
-    # fails (2026-09-29 PR #131 was red for exactly this reason).
-    env:
-      TF_DATA_DIR: ${{ runner.temp }}\tf-data-unit
     # A hung test must die here, not burn the 6-hour default. The blame-hang
     # flag then writes a sequence attachment naming the exact test that hung,
     # uploaded with the crash dumps below.
@@ -87,6 +80,13 @@ jobs:
     # re-collects coverage, overwriting the failed attempt's files.
     - name: Test (Unit)
       shell: pwsh
+      env:
+        # The DataDir-deleting test suites (RealDataDirDeleteGuard) refuse
+        # to run against the real %APPDATA%\tf\data — and on a runner that
+        # IS the real dir. Redirect to scratch, same as ci-local.ps1 does
+        # locally. (Step level, not job level: the `runner` context is
+        # unavailable in job-level env and its use fails the whole file.)
+        TF_DATA_DIR: ${{ runner.temp }}\tf-data-unit
       run: |
         dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit" --collect:"XPlat Code Coverage" --results-directory ./coverage --blame-hang --blame-hang-timeout 8m --blame-crash
         if ($LASTEXITCODE -ne 0) {

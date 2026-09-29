@@ -36,10 +36,6 @@ permissions:
 jobs:
   gate-drill:
     runs-on: windows-latest
-    # Same wipe-guard reason as ci.yml's unit job: the gate test suites
-    # delete their scratch data dirs, and the guard refuses the real one.
-    env:
-      TF_DATA_DIR: ${{ runner.temp }}\tf-data-gate-drill
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v7
@@ -71,9 +67,15 @@ jobs:
     #         ladder). All against fake brokers — no network, no real
     #         funds, ever.
     - name: Rehearse the gate lifecycle — Core (Category=RealMoney)
+      env:
+        # Wipe-guard redirect (see ci.yml unit job). Step level only —
+        # `runner` is unavailable in job-level env.
+        TF_DATA_DIR: ${{ runner.temp }}\tf-data-gate-core
       run: dotnet test tests/DongGfx.Core.Tests/DongGfx.Core.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
 
     - name: Rehearse the gate lifecycle — App surfaces + E2E (Category=RealMoney)
+      env:
+        TF_DATA_DIR: ${{ runner.temp }}\tf-data-gate-app
       run: dotnet test tests/DongGfx.App.Tests/DongGfx.App.Tests.csproj --no-build --configuration Release --verbosity normal --filter "Category=RealMoney"
 
     # A failing drill files the drift alert; a green one records health the
