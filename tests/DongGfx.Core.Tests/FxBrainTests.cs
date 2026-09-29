@@ -202,6 +202,43 @@ public class FxRegimeTests
         Assert.Equal(FxRegime.LowLiquidity, v.Regime);
     }
 
+    /// <summary>Post-reopen dead tape: closes creep by a fraction of a
+    /// point per minute with proportionally tiny wicks — the 2026-09-29
+    /// autopsy state where ADX read "trend" on pure drift.</summary>
+    private static List<FxBar> DeadTapeBars(int n, double price, double step)
+    {
+        var bars = new List<FxBar>();
+        for (var i = 0; i < n; i++)
+        {
+            var c = price + i * step;
+            bars.Add(new FxBar(1790000000L + 60 * i, c - step * 0.3, c + step * 0.3, c - step * 0.3, c, 100));
+        }
+        return bars;
+    }
+
+    [Fact]
+    public void Dead_Tape_Vetoes_Entries_As_LowLiquidity()
+    {
+        var d = new FxRegimeDetector();
+        // ATR% ~0.0001 — far below the 0.02 floor, yet drifting steadily
+        // enough that momentum-style alphas saw "trend" (the reopen losers).
+        var bars = DeadTapeBars(120, 1.0850, 0.0000012);
+        var v = d.Evaluate(bars, 1, new DateTimeOffset(2026, 9, 22, 3, 0, 0, TimeSpan.Zero));
+        Assert.Equal(FxRegime.LowLiquidity, v.Regime);
+        Assert.Contains("dead tape", v.Reason);
+    }
+
+    [Fact]
+    public void Healthy_Tape_Is_Not_Dead_Tape()
+    {
+        var d = new FxRegimeDetector();
+        // The gold-scale fixture tapes (ATR% ~0.03+) must classify exactly
+        // as before — the floor only trips on genuinely dead quotes.
+        var bars = Bars(120, i => 2400 + i * 0.5);
+        var v = d.Evaluate(bars, 20, new DateTimeOffset(2026, 9, 22, 10, 0, 0, TimeSpan.Zero));
+        Assert.Equal(FxRegime.Trend, v.Regime);
+    }
+
     [Fact]
     public void Trending_Market_Classifies_Trend()
     {
