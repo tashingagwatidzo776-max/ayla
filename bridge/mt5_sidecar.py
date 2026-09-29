@@ -269,7 +269,7 @@ class BridgeHandlers:
                 # venue's stops_level (an SL inside the band is rejected
                 # outright by order_send). point converts points → price.
                 "stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
-                "point": float(info.point or 0.00001),
+                "point": float(getattr(info, "point", 0.0) or 0.00001),
             })
         return {"symbols": out}
 
@@ -451,7 +451,7 @@ class BridgeHandlers:
         tick = self._m.symbol_info_tick(p.symbol)
         if tick is None:
             raise OrderError(f"no tick for {p.symbol} — market closed?")
-        min_dist = (info.trade_stops_level or 0) * (info.point or 0.0)
+        min_dist = (getattr(info, "trade_stops_level", 0) or 0) * (getattr(info, "point", 0.0) or 0.0)
         ref = tick.bid if p.type == self._m.POSITION_TYPE_BUY else tick.ask
         if sl and abs(ref - sl) < min_dist:
             raise OrderError(f"sl {sl} within stops level ({min_dist} of {ref})")

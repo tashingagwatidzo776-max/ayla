@@ -95,10 +95,15 @@ class FakeMT5:
     def symbol_info(self, symbol):
         if symbol not in ("XAUUSDmicro", "EURUSD"):
             return None
-        return SimpleNamespace(
+        info = SimpleNamespace(
             volume_min=0.1, volume_step=0.1, volume_max=100.0, filling_mode=1,
             trade_contract_size=1.0 if symbol == "XAUUSDmicro" else 100_000.0,
             trade_stops_level=20, point=0.01 if symbol == "XAUUSDmicro" else 0.00001)
+        if getattr(self, "strip_stop_geometry", False):
+            # Regression shape: a spec missing stop geometry entirely —
+            # the sidecar must degrade to a safe band, never AttributeError.
+            del info.trade_stops_level, info.point
+        return info
 
     def symbol_info_tick(self, symbol):
         if symbol == "CLOSED":
@@ -106,20 +111,33 @@ class FakeMT5:
         return SimpleNamespace(bid=4347.61, ask=4347.88, time=1790003496)
 
     def symbols_get(self):
-        return [
+        # The real MT5 API's SymbolInfo struct carries stop geometry in
+        # symbols_get() too — the first draft of this fake omitted it, which
+        # is exactly how the production AttributeError slipped past CI.
+        rows = [
             SimpleNamespace(name="XAUUSDmicro", description="Gold micro",
                             spread=27, digits=2, trade_mode=4, visible=True,
                             volume_min=0.1, volume_step=0.1, volume_max=100.0,
-                            trade_contract_size=1.0),
+                            trade_contract_size=1.0,
+                            trade_stops_level=20, point=0.01),
             SimpleNamespace(name="EURUSD", description="Euro vs US Dollar",
                             spread=10, digits=5, trade_mode=4, visible=True,
                             volume_min=0.01, volume_step=0.01, volume_max=100.0,
-                            trade_contract_size=100_000.0),
+                            trade_contract_size=100_000.0,
+                            trade_stops_level=20, point=0.00001),
             SimpleNamespace(name="HIDDEN", description="not shown",
                             spread=0, digits=2, trade_mode=0, visible=False,
                             volume_min=0.1, volume_step=0.1, volume_max=100.0,
-                            trade_contract_size=100_000.0),
+                            trade_contract_size=100_000.0,
+                            trade_stops_level=20, point=0.01),
         ]
+        if getattr(self, "strip_stop_geometry", False):
+            for r in rows:
+                if hasattr(r, "trade_stops_level"):
+                    del r.trade_stops_level
+                if hasattr(r, "point"):
+                    del r.point
+        return rows
 
     def market_book_add(self, symbol):
         return False  # Deriv streams no depth
@@ -222,6 +240,25 @@ def test_symbols_tolerates_missing_tick():
     rows = h.symbols()["symbols"]
     eurusd = next(r for r in rows if r["symbol"] == "EURUSD")
     assert eurusd["bid"] is None and eurusd["ask"] is None
+
+
+def test_symbols_carries_stop_geometry():
+    """The app's stop flooring reads stops_level + point from /symbols —
+    a spec that drops either silently shrinks the app-side stop band
+    (the invalid-stops incident of 2026-09-29)."""
+    rows = make_handlers().symbols()["symbols"]
+    gold = next(r for r in rows if r["symbol"] == "XAUUSDmicro")
+    assert gold["stops_level"] == 20 and gold["point"] == 0.01
+
+
+def test_symbols_degrades_when_stop_geometry_missing():
+    """A symbol_info lacking stop-geometry attributes must degrade to
+    safe defaults (band 0, point floor) — never raise."""
+    h = make_handlers()
+    h._m.strip_stop_geometry = True
+    rows = h.symbols()["symbols"]
+    gold = next(r for r in rows if r["symbol"] == "XAUUSDmicro")
+    assert gold["stops_level"] == 0 and gold["point"] == 0.00001
 
 
 def test_order_rejects_bad_action_type():

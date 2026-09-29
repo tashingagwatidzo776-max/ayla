@@ -36,6 +36,10 @@ permissions:
 jobs:
   gate-drill:
     runs-on: windows-latest
+    # Same wipe-guard reason as ci.yml's unit job: the gate test suites
+    # delete their scratch data dirs, and the guard refuses the real one.
+    env:
+      TF_DATA_DIR: ${{ runner.temp }}\tf-data-gate-drill
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v7

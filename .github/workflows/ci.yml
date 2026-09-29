@@ -45,6 +45,13 @@ permissions:
 jobs:
   unit:
     runs-on: windows-latest
+    # The DataDir-deleting test suites (RealDataDirDeleteGuard) refuse to run
+    # against the real %APPDATA%\tf\data — and on a runner that IS the real
+    # dir. Redirect to a scratch dir, same as scripts/ci-local.ps1 does
+    # locally. Without this the wipe-guard throws and the whole unit job
+    # fails (2026-09-29 PR #131 was red for exactly this reason).
+    env:
+      TF_DATA_DIR: ${{ runner.temp }}\tf-data-unit
     # A hung test must die here, not burn the 6-hour default. The blame-hang
     # flag then writes a sequence attachment naming the exact test that hung,
     # uploaded with the crash dumps below.
@@ -137,6 +144,28 @@ jobs:
 
     - name: Test the flake tracker (fail-then-pass visibility)
       run: python scripts/test_flake_tracker.py
+
+    # The remaining guard/tool suites are not on the local gate's list, so
+    # CI is their only runner — a regression here previously surfaced days
+    # later (or never). They are hermetic: fakes and temp dirs only.
+    - name: Test the MT5 watchdog (probe → kill → respawn)
+      run: python scripts/test_mt5_watchdog.py
+    - name: Test the sidecar guard (single-instance + port hygiene)
+      run: python scripts/test_sidecar_guard.py
+    - name: Test the mergeability checker
+      run: python scripts/test_check_mergeability.py
+    - name: Test the soak-freshness checker
+      run: python scripts/test_check_soak_freshness.py
+    - name: Test the bankroll exporter
+      run: python scripts/test_export_bankroll.py
+    - name: Test the open-watcher
+      run: python scripts/test_open_watcher.py
+    - name: Test the restore protection
+      run: python scripts/test_restore_protection.py
+    - name: Test the evening soak rollup
+      run: python scripts/test_soak_evening.py
+    - name: Test the weekly P&L report
+      run: python scripts/test_weekly_pnl.py
 
     - name: Lint script hygiene (subprocess-decode + UTF-16-log classes stay dead)
       run: python scripts/check_script_hygiene.py
