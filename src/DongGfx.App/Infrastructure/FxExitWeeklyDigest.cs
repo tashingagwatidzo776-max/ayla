@@ -239,11 +239,41 @@ public sealed class FxExitWeeklyDigest : IDisposable
         var roundTrips = decisive.Count(p => p.MfeR >= 1.0 && p.ProfitR <= 0.2);
         var roundTripPct = decisive.Count > 0 ? (double)roundTrips / decisive.Count : 0;
 
+        // Profit-capture ratio (the HWARANG headline metric, spec §33):
+        // how much of the favorable excursion the brain actually banked.
+        // Decisive exits with meaningful MFE only — sub-0.5R MFE is noise.
+        var captureTrades = decisive.Where(p => p.MfeR >= 0.5).ToList();
+        var captured = captureTrades.Sum(p => Math.Max(p.ProfitR, 0));
+        var available = captureTrades.Sum(p => p.MfeR);
+        var profitCapture = available > 0 ? captured / available : 0;
+
+        // Profit Brain telemetry (FX_PROFIT advisory reports): state
+        // distribution, floor breaches, average score. Empty until the
+        // profit brain is live — silence is correct, not an error.
+        var profitStates = new List<(string State, double Score, bool Breach)>();
+        foreach (var e in entries)
+        {
+            if (e.Category != "FX_PROFIT" || e.Timestamp < cutoff)
+            {
+                continue;
+            }
+            if (DecodeProfit(e.Details) is { } row)
+            {
+                profitStates.Add((row.State, row.Score, row.FloorBreached));
+            }
+        }
+
         var message =
             $"{evaluations.Count} exit evaluation(s) this week: {overrides.Count} hard override(s) " +
             $"({string.Join(", ", overrideByEngine)}) vs {consensus.Count} consensus " +
             $"({string.Join(", ", consensusByAction)}). Decisive exits {decisive.Count}, " +
-            $"round-trips {roundTrips} ({roundTripPct:P0}).";
+            $"round-trips {roundTrips} ({roundTripPct:P0}), profit capture {profitCapture:P0}.";
+        if (profitStates.Count > 0)
+        {
+            message += $" Profit brain: {profitStates.Count} report(s), " +
+                       $"floor breached {profitStates.Count(p => p.Breach)}, " +
+                       $"avg score {profitStates.Average(p => p.Score):0}.";
+        }
 
         var markdown =
             $"\n\n## FX exit weekly digest — {now:yyyy-MM-dd}\n\n" +
@@ -255,9 +285,46 @@ public sealed class FxExitWeeklyDigest : IDisposable
             $"- consensus bands: {string.Join(", ", consensusByAction)}\n" +
             $"- exit reasons (decisive): {string.Join(", ", reasons)}\n" +
             $"- MAE at exit: {string.Join(", ", maeCurve)}\n" +
-            $"- round-trips (MFE ≥1R, closed ≤0.2R): {roundTrips}/{decisive.Count} ({roundTripPct:P0})\n";
+            $"- round-trips (MFE ≥1R, closed ≤0.2R): {roundTrips}/{decisive.Count} ({roundTripPct:P0})\n" +
+            $"- profit capture (realized/MFE, decisive ≥0.5R MFE): {profitCapture:P0}\n" +
+            (profitStates.Count > 0
+                ? $"\n### Profit brain (FX_PROFIT telemetry)\n\n" +
+                  $"- reports: {profitStates.Count}; floor breaches: {profitStates.Count(p => p.Breach)}; " +
+                  $"avg score: {profitStates.Average(p => p.Score):0}\n" +
+                  $"- states: {string.Join(", ", profitStates.GroupBy(p => p.State)
+                      .OrderByDescending(g => g.Count()).Select(g => $"{g.Key} ×{g.Count()}"))}\n"
+                : string.Empty);
 
         return (message, markdown);
+    }
+
+    /// <summary>Decodes one FX_PROFIT Details line ("{summary}: {json}").
+    /// Malformed lines are skipped, never thrown.</summary>
+    internal sealed record ProfitRow(string State, double Score, bool FloorBreached);
+
+    internal static ProfitRow? DecodeProfit(string details)
+    {
+        try
+        {
+            var brace = details.IndexOf('{');
+            if (brace < 0)
+            {
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(details[brace..]);
+            var r = doc.RootElement;
+            return new ProfitRow(
+                r.TryGetProperty("State", out var s) && s.ValueKind == JsonValueKind.String
+                    ? s.GetString() ?? "" : "",
+                r.TryGetProperty("ProfitScore", out var ps) && ps.ValueKind == JsonValueKind.Number
+                    ? ps.GetDouble() : 0,
+                r.TryGetProperty("FloorBreached", out var b) && b.ValueKind == JsonValueKind.True);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Decodes one FX_EXIT Details line ("{summary}: {json}").

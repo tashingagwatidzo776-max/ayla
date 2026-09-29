@@ -480,4 +480,87 @@ public class DemoPaperExecutionTests
         Assert.DoesNotContain(exitLines, e => e.Details.Contains("#333"));
     }
 
+    [Fact]
+    public async Task ProfitBrain_Journals_Advisory_Report_And_Never_Trades()
+    {
+        // The HWARANG law: the Profit Brain computes and reports, the Exit
+        // Brain executes. A near-entry position gets a full advisory report
+        // (state, floor, targets) and ZERO orders/modifies from it.
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1482, profit = 2.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
+        var host = new FxEngineHost(
+            client, journal, "XAUUSDmicro",
+            killSwitchEngaged: () => false,
+            lotsCap: () => 1.00m,
+            realMoneyUnlocked: () => false);
+
+        await host.RunCycleAsync();
+
+        journal.Flush();
+        var profitLines = journal.GetRecent(null, 200)
+            .Where(e => e.Category == "FX_PROFIT").ToList();
+        Assert.Single(profitLines);
+        var details = profitLines[0].Details;
+        Assert.Contains("PROFIT_", details);            // state machine spoke
+        Assert.Contains("\"FloorBreached\":false", details);
+        Assert.Contains("\"TrailingMode\":", details);
+
+        // Advisory only: no closes, no stop modifications — the exit
+        // brain held (near entry), and the profit brain had no vote.
+        Assert.Equal(0, script.CloseCalls);
+        Assert.Equal(0, script.ModifyCalls);
+    }
+
+    [Fact]
+    public async Task Target_Tp_Shadow_Vote_Grades_Into_The_Ledger_On_Close()
+    {
+        // On a full close, the target-tp engine's final vote lands in the
+        // same promotion ledger as the exit brain's own shadow engines —
+        // the take-profit hypothesis races under the identical evidence bar.
+        var journal = NewJournal();
+        var ledgerPath = Path.Combine(
+            Path.GetTempPath(), $"dg-tpl-{Guid.NewGuid():N}", "fx-shadow-XAUUSDmicro.jsonl");
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                // Crushed past the 1.6R emergency bar → drawdown override
+                // closes it in full in cycle 1 (same shape as the manage test).
+                new { ticket = 555L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1400, profit = -80.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
+        var host = new FxEngineHost(
+            client, journal, "XAUUSDmicro",
+            killSwitchEngaged: () => false,
+            lotsCap: () => 1.00m,
+            realMoneyUnlocked: () => false,
+            equityFloor: () => 0m,
+            shadowLedgerPath: ledgerPath);
+
+        await host.RunCycleAsync();
+        Assert.Equal(1, script.CloseCalls);   // the override closed it
+
+        var rows = File.ReadAllLines(ledgerPath).Select(l =>
+            System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(l)).ToList();
+        var targetRows = rows.Where(r => r.GetProperty("Engine").GetString() == "target-tp").ToList();
+        Assert.Single(targetRows);
+        var row = targetRows[0];
+        Assert.Equal(555, row.GetProperty("Ticket").GetInt64());
+        Assert.False(row.GetProperty("Won").GetBoolean());   // the crushed trade lost
+        Assert.False(row.GetProperty("Helped").GetBoolean()); // losers rescue nobody
+        Assert.Equal("full", row.GetProperty("ResolvedAction").GetString());
+    }
+
 }

@@ -58,6 +58,11 @@ public sealed class FxEngineHost : IDisposable
     /// budget reads it and fails closed at 0 while it is unknown.</summary>
     private double _lastEquity;
 
+    /// <summary>HWARANG profit-floor memory per ticket: the floor is a
+    /// one-way ratchet (never moves down, spec §16/§32), so each evaluation
+    /// seeds from the last established value. Pruned on close.</summary>
+    private readonly Dictionary<long, double> _profitFloors = new();
+
     /// <summary>The venue's lot geometry for <see cref="Symbol"/>, fetched
     /// once from the bridge /symbols snapshot — sizing ground truth
     /// (contract size and volume grid) instead of a price heuristic.</summary>
@@ -786,6 +791,82 @@ public sealed class FxEngineHost : IDisposable
                     }).ToList(),
                 }));
 
+            // HWARANG Profit Brain — ADVISORY ONLY. It computes the target
+            // ladder, probabilities, giveback classification, and the
+            // never-down profit floor, journals the report, and casts the
+            // weight-0 target-tp shadow vote. It sends no orders and moves
+            // no stops: the Exit Brain remains the sole executor until a
+            // shadow engine earns weight through the promotion gates
+            // (100 trades @ 60% + Monte-Carlo STABLE) — spec §26 priority.
+            var profit = Core.Fx.FxProfitBrain.Evaluate(
+                st, price, bars,
+                double.IsNaN(atr) ? 0 : atr, atrMedian,
+                currentRegime,
+                prevFloorR: _profitFloors.TryGetValue(p.Ticket, out var prevFloor) ? prevFloor : 0.0);
+            _profitFloors[p.Ticket] = profit.FloorR;
+            Journal("FX_PROFIT",
+                $"{p.Symbol} #{p.Ticket}: {profit.ProfitState} {profit.CurrentR:+0.0;-0.0}R " +
+                $"(peak {profit.PeakR:0.0}R, giveback {profit.GivebackPct:0}% {profit.GivebackClass}, " +
+                $"floor {profit.FloorR:0.0}R) → {profit.RecommendedAction}",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Ticket = p.Ticket,
+                    State = profit.ProfitState,
+                    CurrentR = Core.Fx.FxJson.Sanitize(profit.CurrentR),
+                    PeakR = Core.Fx.FxJson.Sanitize(profit.PeakR),
+                    GivebackPct = Core.Fx.FxJson.Sanitize(profit.GivebackPct),
+                    GivebackClass = profit.GivebackClass,
+                    FloorR = Core.Fx.FxJson.Sanitize(profit.FloorR),
+                    FloorBreached = profit.FloorBreached,
+                    RecommendedAction = profit.RecommendedAction,
+                    Continuation = Core.Fx.FxJson.Sanitize(profit.ContinuationProbability),
+                    Reversal = Core.Fx.FxJson.Sanitize(profit.ReversalProbability),
+                    Momentum = profit.MomentumClass,
+                    Regime = profit.RegimeClass,
+                    Tp1 = profit.Tp1 is null ? null : new
+                    {
+                        profit.Tp1.Kind,
+                        Price = Core.Fx.FxJson.Sanitize(profit.Tp1.Price),
+                        R = Core.Fx.FxJson.Sanitize(profit.Tp1.R),
+                        Score = Core.Fx.FxJson.Sanitize(profit.Tp1.Score),
+                    },
+                    Tp2 = profit.Tp2 is null ? null : new
+                    {
+                        profit.Tp2.Kind,
+                        Price = Core.Fx.FxJson.Sanitize(profit.Tp2.Price),
+                        R = Core.Fx.FxJson.Sanitize(profit.Tp2.R),
+                        Score = Core.Fx.FxJson.Sanitize(profit.Tp2.Score),
+                    },
+                    Tp3 = profit.Tp3 is null ? null : new
+                    {
+                        profit.Tp3.Kind,
+                        Price = Core.Fx.FxJson.Sanitize(profit.Tp3.Price),
+                        R = Core.Fx.FxJson.Sanitize(profit.Tp3.R),
+                        Score = Core.Fx.FxJson.Sanitize(profit.Tp3.Score),
+                    },
+                    Tp1Probability = Core.Fx.FxJson.Sanitize(profit.Tp1Probability),
+                    Tp2Probability = Core.Fx.FxJson.Sanitize(profit.Tp2Probability),
+                    Tp3Probability = Core.Fx.FxJson.Sanitize(profit.Tp3Probability),
+                    Allocation = new
+                    {
+                        Tp1 = profit.Allocation.Tp1,
+                        Tp2 = profit.Allocation.Tp2,
+                        Tp3 = profit.Allocation.Tp3,
+                        Runner = profit.Allocation.Runner,
+                    },
+                    TrailingMode = profit.TrailingMode,
+                    ProfitScore = Core.Fx.FxJson.Sanitize(profit.ProfitScore),
+                }));
+            if (profit.FloorBreached)
+            {
+                // The floor was crossed: request an Exit Brain evaluation on
+                // the next cycle's evidence. Journal-only — the Exit Brain
+                // (with its own overrides) still owns the decision.
+                Journal("FX_RISK",
+                    $"{p.Symbol} #{p.Ticket}: profit floor {profit.FloorR:0.0}R breached " +
+                    $"(current {profit.CurrentR:0.0}R) — exit evaluation requested", "{}");
+            }
+
             if (decision.Action == "full"
                 || (decision.Action == "partial" && decision.LotsToClose > 0))
             {
@@ -807,13 +888,19 @@ public sealed class FxEngineHost : IDisposable
                     // The engines-earn-votes loop: grade every shadow
                     // engine's final vote into the promotion ledger (won or
                     // lost — the ledger, not this call, computes accuracy).
+                    // HWARANG's target-TP engine rides the same race at
+                    // weight 0 — "extract at the target" is a hypothesis
+                    // the same evidence bar must confirm or bury.
+                    var shadow = decision.Votes.Where(v => v.Weight == 0).ToList();
+                    shadow.Add(profit.TargetTpVote);
                     var won = decision.ProfitR > 0;
                     _shadowLedger?.Append(
                         p.Ticket, p.Symbol,
-                        decision.Votes.Where(v => v.Weight == 0).ToList(),
+                        shadow,
                         decision.Action, won, DateTimeOffset.UtcNow);
                     _exitStates.Remove(p.Ticket);
                     _entryRegimes.Remove(p.Ticket);
+                    _profitFloors.Remove(p.Ticket);
                 }
             }
             else if (decision.Action == "tighten" && decision.NewSl > 0)

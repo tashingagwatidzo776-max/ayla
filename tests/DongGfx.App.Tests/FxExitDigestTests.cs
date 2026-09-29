@@ -58,6 +58,55 @@ public class FxExitDigestTests
         Assert.Equal(string.Empty, md);
     }
 
+    /// <summary>An FX_PROFIT payload shaped exactly like the engine host
+    /// writes it (message prefix + State/ProfitScore/FloorBreached JSON).</summary>
+    private static JournalEntry ProfitEntry(string state, double score, bool breached, int daysAgo = 0) => new()
+    {
+        Timestamp = DateTimeOffset.UtcNow - TimeSpan.FromDays(daysAgo),
+        Category = "FX_PROFIT",
+        Details = $"XAUUSD #42: {state} +1.0R — "
+            + System.Text.Json.JsonSerializer.Serialize(new
+            {
+                State = state,
+                ProfitScore = score,
+                FloorBreached = breached,
+            }),
+    };
+
+    [Fact]
+    public void Build_Reports_Profit_Capture_And_Profit_Brain_Telemetry()
+    {
+        // Capture: banked 1.25R of 3.0R available = 42%.
+        var entries = new List<JournalEntry>
+        {
+            ExitEntry("full", "drawdown", maeR: 0.4, mfeR: 2.0, profitR: 1.0),
+            ExitEntry("full", null, maeR: 0.3, mfeR: 1.0, profitR: 0.25,
+                votes: [("structure", 0.9, 1.6)]),
+            ProfitEntry("PROFIT_PROTECTED", 80, breached: false),
+            ProfitEntry("PROFIT_EXIT_READY", 45, breached: true),
+        };
+        var (msg, md) = FxExitWeeklyDigest.Build(entries, DateTimeOffset.UtcNow);
+
+        Assert.Contains("profit capture 42%", msg);
+        Assert.Contains("Profit brain: 2 report(s)", msg);
+        Assert.Contains("floor breached 1", msg);
+        Assert.Contains("avg score", msg);
+        Assert.Contains("profit capture", md);
+        Assert.Contains("PROFIT_EXIT_READY ×1", md);
+        Assert.Contains("PROFIT_PROTECTED ×1", md);
+    }
+
+    [Fact]
+    public void Build_Profit_Telemetry_Silent_Without_FX_PROFIT_Entries()
+    {
+        var (msg, md) = FxExitWeeklyDigest.Build(
+            new[] { ExitEntry("hold", null, 0.1, 0.2, 0.1) }, DateTimeOffset.UtcNow);
+
+        Assert.DoesNotContain("Profit brain", msg);
+        Assert.DoesNotContain("Profit brain", md);
+        Assert.Contains("profit capture", md);   // the capture line always shows
+    }
+
     [Fact]
     public void Build_Splits_Overrides_From_Consensus()
     {
