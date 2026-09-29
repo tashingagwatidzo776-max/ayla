@@ -612,6 +612,14 @@ public sealed class FxEngineHost : IDisposable
     private readonly Dictionary<long, Core.Fx.FxPositionState> _exitStates = new();
     private readonly Dictionary<long, Core.Fx.FxRegime> _entryRegimes = new();
 
+    /// <summary>The brain's own book: lots it currently tracks as open.
+    /// A FLOOR for the portfolio exposure guard — venue reads can degrade
+    /// to an empty list under congestion (the 2026-09-29 cap failure), but
+    /// the engines' own tracking cannot forget a position they opened.
+    /// Deliberately conservative: entries never shrink it below the truth
+    /// for long, and pruning only happens on trusted reads.</summary>
+    public double LocalBookLots => _exitStates.Values.Sum(s => s.InitialLots);
+
     /// <summary>One-shot fetch of this symbol's venue spec from the bridge
     /// /symbols snapshot. Fire-and-forget and retry-safe: failures leave the
     /// heuristic fallback in place and the next cycle retries. The first
@@ -805,6 +813,24 @@ public sealed class FxEngineHost : IDisposable
                         NewSl = Core.Fx.FxJson.Sanitize(decision.NewSl),
                         mod.Retcode,
                     }));
+            }
+        }
+
+        // Bookkeeping: prune tracking state for tickets that vanished from
+        // a TRUSTED positions read (closed at the venue by its SL, or by
+        // the operator). Trust requires agreement — two reads naming the
+        // same tickets — because a degraded-empty read (the 2026-09-29
+        // congestion mode) must never wipe the book: the guards floor the
+        // exposure at this book, so a wrongful wipe reopens the cap hole.
+        var confirm = await _mt5.GetPositionsAsync().ConfigureAwait(true);
+        if (owned.Select(p => p.Ticket).ToHashSet()
+            .SetEquals(confirm.Select(p => p.Ticket)))
+        {
+            var live = owned.Select(p => p.Ticket).ToHashSet();
+            foreach (var gone in _exitStates.Keys.Where(k => !live.Contains(k)).ToList())
+            {
+                _exitStates.Remove(gone);
+                _entryRegimes.Remove(gone);
             }
         }
     }

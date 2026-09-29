@@ -207,6 +207,40 @@ public class FxPortfolioTests
         Assert.Contains("small-account mode", veto);
     }
 
+    [Fact]
+    public async Task Exposure_DegradedAgreeingEmptyReads_Are_Floored_By_The_LocalBook()
+    {
+        // The 07:19 mechanism exactly: both reads return a healthy-looking
+        // EMPTY book in agreement while the account really holds 0.3 lots
+        // (degraded reads agree on the lie). The brain's own book floors
+        // the exposure — the cap must not fail open because the venue
+        // forgot to answer twice.
+        var h = new PositionsHandler { PositionsJson = "{\"positions\":[]}" };
+        var guard = new FxExposureGuard(NewClient(h), () => 0.10m, new[] { "XAUUSDmicro" },
+            localBookLots: () => 0.3);
+        var veto = await guard.VetoAsync(0.01);
+        Assert.NotNull(veto);
+        Assert.Contains("portfolio exposure 0.3", veto);
+    }
+
+    [Fact]
+    public async Task SmallAccount_Book_Holds_Slot_Even_When_Venue_Reads_Empty()
+    {
+        // One-slot rail, same floor: venue says flat (degraded), the brain
+        // knows it holds a position — the slot is not free.
+        var h = new PositionsHandler
+        {
+            SymbolsJson = SmallAccountSymbolsJson,
+            Equity = 20,
+            PositionsJson = "{\"positions\":[]}",
+        };
+        var guard = new FxSmallAccountGuard(NewClient(h), new[] { "EURUSD" },
+            localBookLots: () => 0.01);
+        var veto = await guard.VetoAsync("EURUSD", 0.01);
+        Assert.NotNull(veto);
+        Assert.Contains("slot held by the brain's own book", veto);
+    }
+
     // ── small-account guard ───────────────────────────────────────────
 
     [Fact]

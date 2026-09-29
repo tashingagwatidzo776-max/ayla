@@ -19,12 +19,15 @@ public sealed class FxExposureGuard
     private readonly Mt5BridgeClient _mt5;
     private readonly Func<decimal> _maxTotalLots;
     private readonly HashSet<string> _symbols;
+    private readonly Func<double>? _localBookLots;
 
-    public FxExposureGuard(Mt5BridgeClient mt5, Func<decimal> maxTotalLots, IEnumerable<string> symbols)
+    public FxExposureGuard(Mt5BridgeClient mt5, Func<decimal> maxTotalLots,
+        IEnumerable<string> symbols, Func<double>? localBookLots = null)
     {
         _mt5 = mt5;
         _maxTotalLots = maxTotalLots;
         _symbols = new HashSet<string>(symbols, StringComparer.OrdinalIgnoreCase);
+        _localBookLots = localBookLots;
     }
 
     /// <summary>Returns a refusal reason when adding <paramref name="requestedLots"/>
@@ -62,6 +65,13 @@ public sealed class FxExposureGuard
             {
                 return $"exposure reads disagree ({open:0.##} vs {open2:0.##}) — refusing while unknown";
             }
+
+            // The agreeing-reads rule still has a hole: both reads can
+            // degrade to EMPTY in agreement (the 2026-09-29 07:19 fills),
+            // reading a loaded book as flat. Floor the exposure at the
+            // brain's own book — the engines' tracking of what THEY hold,
+            // which no bridge flake can erase.
+            open = Math.Max(open, _localBookLots?.Invoke() ?? 0);
         }
         catch
         {
@@ -107,13 +117,15 @@ public sealed class FxSmallAccountGuard
     private readonly Mt5BridgeClient _mt5;
     private readonly HashSet<string> _symbols;
     private readonly Func<DateTimeOffset>? _clock;
+    private readonly Func<double>? _localBookLots;
 
     public FxSmallAccountGuard(Mt5BridgeClient mt5, IEnumerable<string> symbols,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null, Func<double>? localBookLots = null)
     {
         _mt5 = mt5;
         _symbols = new HashSet<string>(symbols, StringComparer.OrdinalIgnoreCase);
         _clock = clock;
+        _localBookLots = localBookLots;
     }
 
     /// <summary>True when the connected account is "small": at least one
@@ -193,6 +205,15 @@ public sealed class FxSmallAccountGuard
             {
                 return $"small-account mode — one brain trade at a time " +
                        $"(slot used by #{ours.Ticket} {ours.Symbol})";
+            }
+
+            // Both reads can agree on EMPTY while degraded (the same
+            // congestion mode that broke the cap): if the brain's own book
+            // still tracks a position, the slot is NOT free.
+            if (_localBookLots?.Invoke() > 0)
+            {
+                return "small-account mode — one brain trade at a time " +
+                       "(slot held by the brain's own book; venue read could not confirm it)";
             }
         }
         catch
@@ -334,9 +355,14 @@ public sealed class FxPortfolioHost : IDisposable
         Supervisor = new FxSupervisor(journal, killSwitchEngaged, governorTripped,
             dailyLossCap, equityFloor, webhook);
 
-        var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols);
+        // The local-book floor delegates over the per-symbol hosts: the
+        // lambda runs at ORDER time, after the hosts below are built and
+        // tracking their positions.
+        var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols,
+            localBookLots: () => _hosts.Sum(h => h.LocalBookLots));
         var news = new FxNewsVeto(newsCalendarPath, newsWindow);
-        var small = new FxSmallAccountGuard(mt5, symbols);
+        var small = new FxSmallAccountGuard(mt5, symbols,
+            localBookLots: () => _hosts.Sum(h => h.LocalBookLots));
 
         // Per-engine sizing cap never exceeds the portfolio's total cap -
         // otherwise every live order would self-veto at the exposure guard.
