@@ -63,6 +63,57 @@ public sealed class FxEngineHost : IDisposable
     /// seeds from the last established value. Pruned on close.</summary>
     private readonly Dictionary<long, double> _profitFloors = new();
 
+    /// <summary>Journal-backed MFE/MAE/floor reseed: the newest FX_PROFIT
+    /// row for a ticket, parsed for its PeakR/MaeR/FloorR. Restarts must
+    /// not reset the high-water mark — a wiped peak re-arms the giveback
+    /// override on a peak the brain can no longer see, and silently drops
+    /// an established floor (the never-down law). Best-effort: an
+    /// unreadable journal just means a cold start, never a crash.</summary>
+    internal (double MfeR, double MaeR, double FloorR)? LastProfitStateFromJournal(long ticket)
+    {
+        try
+        {
+            var dir = _journal.JournalDir;   // journal_*.jsonl live here directly
+            if (!System.IO.Directory.Exists(dir)) return null;
+            (double, double, double)? found = null;
+            foreach (var file in System.IO.Directory.GetFiles(dir, "journal_*.jsonl").OrderBy(f => f))
+            {
+                foreach (var line in System.IO.File.ReadLines(file))
+                {
+                    if (!line.Contains("FX_PROFIT")) continue;
+                    try
+                    {
+                        // The line is a JSON envelope; Details carries the
+                        // payload. Parse both — never string-surgery on the
+                        // escaped raw text.
+                        using var env = System.Text.Json.JsonDocument.Parse(line);
+                        if (!env.RootElement.TryGetProperty("Details", out var det)) continue;
+                        var text = det.GetString();
+                        var brace = text?.IndexOf('{') ?? -1;
+                        if (brace < 0) continue;
+                        using var doc = System.Text.Json.JsonDocument.Parse(text![brace..]);
+                        var r = doc.RootElement;
+                        if (!r.TryGetProperty("Ticket", out var t) || t.GetInt64() != ticket) continue;
+                        double Num(string n) => r.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number ? v.GetDouble() : 0;
+                        var mfe = Num("PeakR");
+                        var mae = Num("MaeR");
+                        var fl = Num("FloorR");
+                        if (mfe > 0 || mae > 0)
+                        {
+                            found = (mfe, mae, fl);
+                        }
+                    }
+                    catch (System.Text.Json.JsonException) { }
+                }
+            }
+            return found;
+        }
+        catch
+        {
+            return null;   // best-effort substrate
+        }
+    }
+
     /// <summary>The venue's lot geometry for <see cref="Symbol"/>, fetched
     /// once from the bridge /symbols snapshot — sizing ground truth
     /// (contract size and volume grid) instead of a price heuristic.</summary>
@@ -745,15 +796,24 @@ public sealed class FxEngineHost : IDisposable
         {
             if (!_exitStates.TryGetValue(p.Ticket, out var st))
             {
-                // First sighting: seed the tracking state. The entry regime
-                // may be unknown (app restart) — fall back to the current
-                // regime so the thesis engine stays neutral instead of
-                // inventing a flip that never happened.
+                // First sighting: seed the tracking state — and RESEED the
+                // MFE/MAE/floor memory from the journal when we have prior
+                // FX_PROFIT rows for this ticket. An app restart must not
+                // reset the high-water mark: the 2026-09-29 restarts made
+                // 16.9R peaks vanish, which both violates the never-down
+                // floor law and would re-arm the giveback override on a
+                // peak it can no longer see. The entry regime may still be
+                // unknown — fall back to the current regime.
                 _entryRegimes[p.Ticket] = currentRegime;
+                var prior = LastProfitStateFromJournal(p.Ticket);
                 st = new Core.Fx.FxPositionState(
                     p.Ticket, p.Symbol, p.Side, p.PriceOpen, p.Volume,
                     Core.Fx.FxExitBrain.RiskPerLot(p.PriceOpen, p.Sl, double.IsNaN(atr) ? 0 : atr),
-                    MfeR: 0, MaeR: 0, BarsHeld: 0);
+                    MfeR: prior?.MfeR ?? 0, MaeR: prior?.MaeR ?? 0, BarsHeld: 0);
+                if (prior is { } pr && pr.FloorR > 0)
+                {
+                    _profitFloors[p.Ticket] = pr.FloorR;
+                }
             }
 
             var price = p.PriceCurrent > 0 ? p.PriceCurrent : bars[^1].Close;
@@ -814,6 +874,7 @@ public sealed class FxEngineHost : IDisposable
                     State = profit.ProfitState,
                     CurrentR = Core.Fx.FxJson.Sanitize(profit.CurrentR),
                     PeakR = Core.Fx.FxJson.Sanitize(profit.PeakR),
+                    MaeR = Core.Fx.FxJson.Sanitize(st.MaeR),
                     GivebackPct = Core.Fx.FxJson.Sanitize(profit.GivebackPct),
                     GivebackClass = profit.GivebackClass,
                     FloorR = Core.Fx.FxJson.Sanitize(profit.FloorR),

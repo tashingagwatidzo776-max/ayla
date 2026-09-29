@@ -151,6 +151,58 @@ public class FxExitBrainTests
     }
 
     [Fact]
+    public void Profit_Floor_Round_Trip_Is_An_Override_Not_A_Vote()
+    {
+        // The 2026-09-29 backtest's failure mode (+20.25R of round-trip
+        // losses the ensemble never voted on): a trade that EARNED ≥1R and
+        // returned to the floor has round-tripped — the mirror of the MAE
+        // emergency, same tier: safety outranks the consensus that failed
+        // to see it.
+        var st = LongState() with { MfeR = 2.5 };
+        var d = Eval(st, 2400 + 0.1);   // peaked 2.5R, now +0.1R ≤ floor
+        Assert.Equal("profit-floor", d.OverrideEngine);
+        Assert.Equal("full", d.Action);
+        Assert.Equal(100, d.Score);
+    }
+
+    [Fact]
+    public void Profit_Floor_Deep_Giveback_Of_A_Major_Peak_Is_An_Override()
+    {
+        // ≥2R peak with ≥75% handed back: still an emergency even when the
+        // remainder is above the round-trip floor.
+        var st = LongState() with { MfeR = 4.0 };
+        var d = Eval(st, 2400 + 1.0);   // 3R of 4R given back = 75%
+        Assert.Equal("profit-floor", d.OverrideEngine);
+        Assert.Contains("gave back", d.Reason);
+    }
+
+    [Fact]
+    public void Giveback_Votes_Inside_The_Band_Before_The_Override()
+    {
+        // Between the watch bar (≥1.5R peak, ≥60% back) and the override
+        // bar (≥2R peak, ≥75% back), the drawdown voice votes — the
+        // ensemble finally has profit-side evidence.
+        var st = LongState() with { MfeR = 2.0 };
+        var d = Eval(st, 2400 + 0.7);   // 1.3R of 2R back = 65%: vote, not override
+        Assert.Null(d.OverrideEngine);
+        var dd = d.Votes.First(v => v.Engine == "drawdown");
+        Assert.True(dd.Exit >= 0.6, $"giveback watch vote, was {dd.Exit:0.00}");
+        Assert.Contains("give-back", dd.Reason);
+    }
+
+    [Fact]
+    public void Healthy_Winners_Never_Trip_The_Profit_Floor()
+    {
+        // The live positions' exact shape (peak 16.9R, now 14.8R, 12%
+        // giveback): override-silent, vote-free — the floor protects
+        // against giveback, never against being in profit.
+        var st = LongState() with { MfeR = 16.9 };
+        var d = Eval(st, 2400 + 14.8);
+        Assert.Null(d.OverrideEngine);
+        Assert.Equal(0, d.Votes.First(v => v.Engine == "drawdown").Exit);
+    }
+
+    [Fact]
     public void Resolver_Bands_Are_The_Spec()
     {
         // The exact band edges from the architecture spec.
@@ -250,7 +302,11 @@ public class FxExitBrainTests
     {
         // A broad consensus (structure CHOCH + stale trade + thesis flip +
         // drawdown ramp + volatility collapse) lands at ~61 — TIGHTEN.
-        var st = LongState() with { BarsHeld = 50, MaeR = 1.05 };
+        // Shapes chosen to stay clear of the profit-floor law: leg 1 never
+        // peaked ≥1R (MFE 0.6 — a deep give-back from a real peak would be
+        // an override now, not a tighten), leg 2 holds +0.3R (a 1.2R peak
+        // down to +0.3R is a watch vote; below +0.2R it would be an override).
+        var st = LongState() with { BarsHeld = 50, MaeR = 1.05, MfeR = 0.6 };
         var d = Eval(st, 2399.2, atr: 0.3, median: 1.0,
             current: FxRegime.Range, entry: FxRegime.Trend,
             bars: CrashBars());
@@ -258,7 +314,7 @@ public class FxExitBrainTests
         Assert.Equal(0, d.NewSl);   // MFE never paid -> no trail
 
         var st2 = st with { MfeR = 1.2 };
-        var d2 = Eval(st2, 2399.2, atr: 0.3, median: 1.0,
+        var d2 = Eval(st2, 2400.3, atr: 0.3, median: 1.0,
             current: FxRegime.Range, entry: FxRegime.Trend,
             bars: CrashBars());
         Assert.Equal("tighten", d2.Action);
