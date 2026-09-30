@@ -776,8 +776,10 @@ public sealed class FxEngineHost : IDisposable
 
     /// <summary>Grace window after a close submission during which a venue
     /// read still listing the position is treated as list lag, not as
-    /// evidence the close failed. Internal static: tests shrink it to zero
-    /// to exercise the §13.4 downgrade immediately.</summary>
+    /// evidence the close failed. TEST-SAFETY CONTRACT: internal static
+    /// purely as a test seam (production timing never changes); suites
+    /// that set it belong in the serialized Shared-DataDir-Directory
+    /// collection and must restore it in a finally block.</summary>
     internal static TimeSpan FloorSubmitGrace { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>Tickets whose 🛡️ ARMED notification already fired — the
@@ -792,7 +794,15 @@ public sealed class FxEngineHost : IDisposable
     /// OFF). When armed, the Profit Brain's TP1 rung is EXECUTED once per
     /// ticket through the same close path the Exit Brain uses — the
     /// allocation plan is then graded live, not just journaled. Every
-    /// execution is journaled as TP1-EXEC under FX_PROFIT.</summary>
+    /// execution is journaled as TP1-EXEC under FX_PROFIT.
+    /// TEST-SAFETY CONTRACT: deliberately a process-wide static — the arm
+    /// is a fleet-wide operator decision spanning every symbol host, and
+    /// settings/UI/restart all funnel here. Because statics are shared,
+    /// every suite that writes this (SettingsViewModel arm tests) or
+    /// triggers a write (AppStartupWiringTests via ConfigureFromSettings)
+    /// MUST live in the serialized Shared-DataDir-Directory collection —
+    /// the 2026-09-30 flake. Restore in a finally block; never assert the
+    /// default outside that collection.</summary>
     public static bool ExecuteTp1Partials { get; set; }
 
     /// <summary>The brain's own book: lots it currently tracks as open.

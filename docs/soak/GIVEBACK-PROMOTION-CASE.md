@@ -79,7 +79,8 @@ hard-floor save counts.
 ## Drawdown vs giveback — keeping the two cases separable
 
 Every save credits TWO engines, and they must not be read as independent
-confirmation of each other:
+confirmation of each other (drawdown now has its own case doc:
+[DRAWDOWN-PROMOTION-CASE.md](DRAWDOWN-PROMOTION-CASE.md)):
 
 - **drawdown (weighted 2.0)** — the ensemble's own loss-side engine whose
   deep-giveback vote (≥0.85) and override drive the exits. Its ledger
