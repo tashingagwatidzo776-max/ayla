@@ -107,6 +107,67 @@ public class FxExitDigestTests
         Assert.Contains("profit capture", md);   // the capture line always shows
     }
 
+    // ── the giveback engine's promotion review ───────────────────────
+
+    private static JournalEntry CloseEntry(long ticket, int daysAgo = 0) => new()
+    {
+        Timestamp = DateTimeOffset.UtcNow - TimeSpan.FromDays(daysAgo),
+        Category = "FX_EXIT",
+        Details = $"XAUUSD: closed #{ticket} — deal 555",
+    };
+
+    [Fact]
+    public void PromotionReview_Silent_Below_Both_Conditions()
+    {
+        var entries = new[] { ExitEntry("hold", null, 0.1, 3.2, 2.9) };
+        Assert.Null(FxExitWeeklyDigest.PromotionReview(entries));
+    }
+
+    [Fact]
+    public void PromotionReview_Fires_On_The_First_Verified_Save()
+    {
+        var entries = new[]
+        {
+            ExitEntry("full", "profit-floor", maeR: 0.1, mfeR: 8.0, profitR: 0.4),
+            CloseEntry(42),
+        };
+        var review = FxExitWeeklyDigest.PromotionReview(entries);
+
+        Assert.NotNull(review);
+        Assert.Contains("first verified save: ticket 42 (profit-floor override)", review);
+        Assert.Contains("decisive settled exits 1/100", review);
+        Assert.Contains("GIVEBACK-PROMOTION-CASE.md", review);
+    }
+
+    [Fact]
+    public void PromotionReview_Fires_At_30_Decisive_Exits_Without_A_Save()
+    {
+        var entries = new List<JournalEntry>();
+        for (var i = 0; i < 30; i++)
+        {
+            entries.Add(ExitEntry("full", null, 0.2, 3.0, 2.0));
+        }
+
+        var review = FxExitWeeklyDigest.PromotionReview(entries);
+        Assert.NotNull(review);
+        Assert.Contains("no verified save yet", review);
+        Assert.Contains("decisive settled exits 30/100", review);
+    }
+
+    [Fact]
+    public void PromotionReview_DeepVote_Save_Needs_A_Decisive_Close()
+    {
+        // A 0.85 giveback vote on a HOLD row is watch pressure, not a save —
+        // no close for that ticket either, so nothing fires.
+        var entries = new[]
+        {
+            ExitEntry("hold", null, 0.1, 8.0, 1.5, 0,
+                ("drawdown", 0.85, 2.0)),
+            ExitEntry("full", null, 0.2, 3.0, 2.0),
+        };
+        Assert.Null(FxExitWeeklyDigest.PromotionReview(entries));
+    }
+
     [Fact]
     public void Build_Splits_Overrides_From_Consensus()
     {

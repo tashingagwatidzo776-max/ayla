@@ -764,6 +764,22 @@ public sealed class FxEngineHost : IDisposable
     /// shrink the unit and re-arm the MAE emergency on spread noise.</summary>
     private readonly Dictionary<long, double> _sizedStops = new();
 
+    /// <summary>Tickets whose TP1 rung is ARMED (ticket → the rung price
+    /// first sighted once the trade had banked ≥1R of peak). The ladder
+    /// always projects ahead of price, so execution waits for the cross.</summary>
+    private readonly Dictionary<long, double> _tp1ArmedTickets = new();
+
+    /// <summary>Tickets whose TP1 rung has already been banked (or
+    /// attempted) — one execution per ticket, per process lifetime.</summary>
+    private readonly HashSet<long> _tp1ExecutedTickets = new();
+
+    /// <summary>TP1 partial prototype master switch (AppSettings, default
+    /// OFF). When armed, the Profit Brain's TP1 rung is EXECUTED once per
+    /// ticket through the same close path the Exit Brain uses — the
+    /// allocation plan is then graded live, not just journaled. Every
+    /// execution is journaled as TP1-EXEC under FX_PROFIT.</summary>
+    public static bool ExecuteTp1Partials { get; set; }
+
     /// <summary>The brain's own book: lots it currently tracks as open.
     /// A FLOOR for the portfolio exposure guard — venue reads can degrade
     /// to an empty list under congestion (the 2026-09-29 cap failure), but
@@ -1026,6 +1042,72 @@ public sealed class FxEngineHost : IDisposable
                     $"{p.Symbol} gave back to {profit.CurrentR:+0.0;-0.0}R below its " +
                     $"{profit.FloorR:0.0}R floor (peak {profit.PeakR:0.0}R). " +
                     $"Exit evaluation requested — the never-down floor protects what was earned.");
+            }
+
+            // ── TP1 partial prototype (gated, advisory-derived) ──────
+            // The Profit Brain's allocation plan is graded LIVE at ONE rung.
+            // The ladder always projects AHEAD of price, so "reached" is
+            // arm-then-cross: the first cycle where the trade has banked ≥1R
+            // of peak and the plan still front-loads exits ARMS the current
+            // TP1 price; a later cycle where price has crossed it executes
+            // the rung once, through the same close path the Exit Brain
+            // uses. Every step is journaled (TP1-ARM / TP1-EXEC under
+            // FX_PROFIT) so the graded-vs-advisory split stays auditable.
+            // Defaults OFF — an explicit human act turns it on.
+            if (ExecuteTp1Partials
+                && _venueSpec is { } tp1Spec
+                && decision.Action is not ("full" or "partial")
+                && profit.Allocation.Tp1 >= 10
+                && st.MfeR >= 1.0)
+            {
+                var tp1 = profit.Tp1;
+                var armed = _tp1ArmedTickets.TryGetValue(p.Ticket, out var armedPrice)
+                    ? armedPrice : 0.0;
+                if (armed == 0.0 && tp1 is { } first)
+                {
+                    _tp1ArmedTickets[p.Ticket] = first.Price;
+                    armed = first.Price;
+                    Journal("FX_PROFIT",
+                        $"TP1-ARM: rung {first.Kind} {first.Price:0.#####} ({first.R:+0.0;-0.0}R) " +
+                        $"armed for #{p.Ticket} ({profit.Allocation.Tp1:0}% plan) — executes when price crosses",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Ticket = p.Ticket,
+                            Target = first.Kind,
+                            TargetPrice = Core.Fx.FxJson.Sanitize(first.Price),
+                            TargetR = Core.Fx.FxJson.Sanitize(first.R),
+                            PlanPct = profit.Allocation.Tp1,
+                        }));
+                }
+
+                var crossed = st.Side == "buy" ? price >= armed : (armed > 0 && price <= armed);
+                if (armed > 0 && crossed && _tp1ExecutedTickets.Add(p.Ticket))
+                {
+                    var lots = SnapLots(p.Volume * profit.Allocation.Tp1 / 100.0);
+                    if (lots > 0 && lots < p.Volume)
+                    {
+                        var tp1Close = await _mt5.ClosePositionAsync(p.Ticket, lots).ConfigureAwait(true);
+                        Journal("FX_PROFIT",
+                            tp1Close.Ok
+                                ? $"TP1-EXEC: banked {lots:0.##} lots ({profit.Allocation.Tp1:0}% plan) of #{p.Ticket} at the armed rung " +
+                                  $"{armed:0.#####} — allocation graded live"
+                                : $"TP1-EXEC refused for #{p.Ticket}: {tp1Close.RetcodeName}",
+                            System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                Ticket = p.Ticket,
+                                Executed = tp1Close.Ok,
+                                Lots = lots,
+                                PlanPct = profit.Allocation.Tp1,
+                                ArmedPrice = Core.Fx.FxJson.Sanitize(armed),
+                                tp1Close.Retcode,
+                                VenueSpec = new { tp1Spec.ContractSize, tp1Spec.VolumeStep },
+                            }));
+                        if (tp1Close.Ok)
+                        {
+                            StatusChanged?.Invoke($"TP1 banked: {lots:0.##} lots of #{p.Ticket} @ {armed:0.#####}");
+                        }
+                    }
+                }
             }
 
             if (decision.Action == "full"

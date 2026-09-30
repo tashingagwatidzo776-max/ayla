@@ -31,6 +31,13 @@ public sealed class AppSettings
     /// journals decisions and places nothing.</summary>
     public bool FxBrainRunning { get; set; }
 
+    /// <summary>TP1 partial prototype (default OFF): when armed, the Profit
+    /// Brain's TP1 rung is executed once per ticket through the Exit
+    /// Brain's own close path — the allocation plan is graded live instead
+    /// of only journaled. Every execution journals as TP1-EXEC under
+    /// FX_PROFIT; the Exit Brain's overrides and vote still outrank it.</summary>
+    public bool FxExecuteTp1Partials { get; set; }
+
     // ── MT5 / FX brain safety ──────────────────────────────────────
     /// <summary>Maximum volume (lots) for a single MT5 order placed through
     /// the bridge. 0 disables MT5 order placement entirely (fail-closed).</summary>
