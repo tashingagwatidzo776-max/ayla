@@ -69,7 +69,9 @@ public static class FxExitShadow
         won && shadowVote.Exit >= 0.5 && resolvedAction is "hold" or "monitor"
         || (decision is not null
             && FxExitBrain.IsProfitFloorSave(decision)
-            && shadowVote is { Engine: "giveback" or "drawdown", Exit: >= 0.5 });
+            && shadowVote is { Engine: "giveback" or "drawdown", Exit: >= 0.5 })
+        || (won && shadowVote is { Engine: "drawdown", Exit: >= 0.5 }
+            && resolvedAction == "floor-exit");
 
     /// <summary>The weight an engine's measured accuracy has earned: zero
     /// until BOTH bars are met, then proportional to the hit rate and capped

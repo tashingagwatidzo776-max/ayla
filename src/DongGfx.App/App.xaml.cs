@@ -232,6 +232,14 @@ public partial class App : System.Windows.Application
         // TP1 partial prototype: the allocation plan's first rung is graded
         // live when this is armed (default OFF — an explicit opt-in).
         Services.FxEngineHost.ExecuteTp1Partials = settings.FxExecuteTp1Partials;
+        if (settings.FxExecuteTp1Partials)
+        {
+            // A restart re-arms silently otherwise — arming an execution
+            // path is an event worth a journal row on EVERY activation,
+            // not just the UI confirmation.
+            provider.GetRequiredService<TradeJournal>().Log(Guid.Empty, "FX_MODE",
+                "TP1 partial execution active at startup (armed in settings)", "{}");
+        }
 
         // TP1 arming: the operator's confirmation gate (fail-closed when no
         // dialog host exists, e.g. headless/tests), plus a journal record —

@@ -1375,6 +1375,26 @@ public sealed class FxEngineHost : IDisposable
                     _webhook?.PostRiskRail(
                         $"✅ PROFIT FLOOR EXIT CONFIRMED — #{gone}",
                         $"{Symbol} | Exit confirmed by broker reconciliation (floor event {g.EventId}). Giveback prevented.");
+
+                    // A guard save is promotion evidence too: the promotion
+                    // ledger counts every engine's grade against its bar,
+                    // and the drawdown voice's deep-giveback evidence drove
+                    // this exit even though the guard (not the ensemble)
+                    // executed it. Without this append, guard-commanded
+                    // saves never reach the substrate (2026-09-30: four
+                    // live saves, zero ledger rows). resolvedAction
+                    // "floor-exit" tells FxExitShadow.Helped this was a
+                    // save the giveback evidence itself drove home. Won:
+                    // a save IS the win — the position closed with the
+                    // giveback prevented.
+                    _shadowLedger?.Append(
+                        gone, Symbol,
+                        new[] { new Core.Fx.FxExitVote(
+                            "drawdown", 0.95, 0.0,
+                            "hard profit floor save (guard-executed); peak " +
+                            g.PeakR.ToString("0.0") + "R → breach at " + g.BreachR.ToString("+0.0;-0.0") + "R") },
+                        resolvedAction: "floor-exit", won: true,
+                        DateTimeOffset.UtcNow);
                 }
                 g.MarkReset();
                 _floorGuards.Remove(gone);
