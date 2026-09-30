@@ -223,6 +223,12 @@ public partial class App : System.Windows.Application
             webhook.IsDiscord = settings.IsDiscordWebhook;
         }
 
+        // Shadow-engine promotion card: the dashboard reads the per-symbol
+        // shadow ledgers (fx-shadow-*.jsonl) so the giveback engine's road
+        // to weight — settled trades, saves, hit rate — is visible in-app.
+        provider.GetRequiredService<DashboardViewModel>()
+            .ConfigurePromotionLedger(Path.Combine(SettingsService.DataDir, "fx-shadow"));
+
         // Cycle-telemetry digest: periodically posts the live latency/error
         // digest to the same webhook trade settlements use, so monitoring
         // sees session health without anyone exporting manually. Gated by

@@ -93,6 +93,10 @@ public static class FxProfitBrain
     // peak would close on the first tick of normal retracement.
     public const double FloorCapOfPeak = 0.9;
 
+    // Pre-tighten engages at this reversal probability (below the 0.55
+    // high-confidence bar) — moderate evidence still buys protection.
+    public const double PreTightenReversal = 0.40;
+
     // Target scoring caps.
     public const int MaxTargetCandidates = 6;
 
@@ -422,13 +426,20 @@ public static class FxProfitBrain
         {
             if (peakR >= peak) floor = f;
         }
-        if (floor <= 0) return Math.Max(0, prevFloorR);
-
-        // Adaptive tighten: strong reversal evidence protects nearly all of
+        if (floor <= 0) return Math.Max(0, prevFloorR);        // Adaptive tighten: strong reversal evidence protects nearly all of
         // the current profit (but never above the cap of the peak).
         if (reversalP > ReversalHighConfidence && currentR > floor)
         {
             floor = Math.Max(floor, currentR - 0.1);
+        }
+        // Pre-tighten: MODERATE reversal (0.40–0.55) no longer leaves the
+        // schedule floor untouched — giveback plus fading continuation
+        // tightens toward the cap without demanding full reversal confluence
+        // (the all-or-nothing gap: heavy giveback with only moderate
+        // reversal evidence kept yesterday's schedule floor all day).
+        else if (reversalP >= PreTightenReversal && currentR > floor * 1.25)
+        {
+            floor = Math.Max(floor, currentR * 0.75);   // capped below, with every other floor
         }
         floor = Math.Min(floor, peakR * FloorCapOfPeak);
 

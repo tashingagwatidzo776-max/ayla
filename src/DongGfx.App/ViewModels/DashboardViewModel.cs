@@ -133,6 +133,86 @@ public sealed partial class DashboardViewModel : ObservableObject
         _dispatcher = Dispatcher.CurrentDispatcher;
     }
 
+    // ── shadow-engine promotion card ─────────────────────────────────
+
+    private System.Windows.Threading.DispatcherTimer? _promotionTimer;
+    private string? _promotionLedgerDir;
+
+    /// <summary>One row of the promotion card (per shadow engine, rolled up
+    /// across ALL symbols). Helps = saved a winner's give-back (giveback
+    /// engine) or wanted out of a held winner (classic rule). Strings are
+    /// pre-formatted so the XAML binds plain text.</summary>
+    public sealed record PromotionRow(
+        string Engine, string Settled, string Evidence, string HitRate, string Weight);
+
+    /// <summary>Per-engine promotion progress: settled trades, evidence
+    /// events, hit rate, and the weight that record has (not yet) earned.
+    /// Promotion bar: 100 settled trades at a 60% hit rate, Monte-Carlo
+    /// STABLE, shipped only by a reviewed PR.</summary>
+    public ObservableCollection<PromotionRow> PromotionRows { get; } = new();
+
+    /// <summary>One line about the engine that matters most — giveback.</summary>
+    [ObservableProperty]
+    private string promotionSummaryText = "no promotion evidence yet";
+
+    /// <summary>Points the card at the shadow-ledger directory, refreshes
+    /// once, and starts a light refresh timer. Idempotent. Null directory
+    /// (bare tests, missing data dir) just clears to the empty state.
+    /// Journal-only by construction: reads fx-shadow-*.jsonl, never writes,
+    /// never trades.</summary>
+    public void ConfigurePromotionLedger(string? directory) =>
+        OnUiThread(() =>
+        {
+            _promotionLedgerDir = directory;
+            RefreshPromotion();
+            if (_promotionTimer is null && directory is not null)
+            {
+                _promotionTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(60),
+                };
+                _promotionTimer.Tick += (_, _) => RefreshPromotion();
+                _promotionTimer.Start();
+            }
+        });
+
+    /// <summary>Re-reads the shadow ledgers (every symbol) into the card.</summary>
+    public void RefreshPromotion()
+    {
+        var rows = Core.Fx.FxShadowLedger.SummarizeDir(_promotionLedgerDir);
+        var ordered = rows
+            .OrderByDescending(r => r.SuggestedWeight > 0)
+            .ThenByDescending(r => r.HitRate)
+            .ThenByDescending(r => r.Trades)
+            .ToList();
+        OnUiThread(() =>
+        {
+            PromotionRows.Clear();
+            foreach (var r in ordered)
+            {
+                PromotionRows.Add(new PromotionRow(
+                    r.Engine,
+                    $"{r.Trades} settled",
+                    $"{r.Helped} helped",
+                    $"hit {r.HitRate:P0}",
+                    r.SuggestedWeight > 0
+                        ? $"EARNED weight {r.SuggestedWeight:0.##}"
+                        : "weight 0 (observing)"));
+            }
+
+            var giveback = rows.FirstOrDefault(r => r.Engine == "giveback");
+            PromotionSummaryText = giveback is { } g
+                ? $"giveback engine: {g.Trades} settled trade(s), {g.Helped} save(s), " +
+                  $"hit {g.HitRate:P0} — " +
+                  (g.SuggestedWeight > 0
+                    ? $"EARNED weight {g.SuggestedWeight:0.##}"
+                    : $"weight 0 until {Core.Fx.FxExitShadow.PromotionTrades} trades @ {Core.Fx.FxExitShadow.PromotionHitRate:P0}")
+                : rows.Count > 0
+                    ? $"{rows.Count} shadow engine(s) observed, no giveback rows yet"
+                    : "no promotion evidence yet";
+        });
+    }
+
     /// <summary>Refreshes the risk-rail card after any state change (also
     /// fires the toast/webhook for rails that newly engaged).</summary>
     private void RefreshRiskRails()
