@@ -712,6 +712,67 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Tp1_Partial_Arms_At_First_Sighting_And_Banks_On_The_Cross()
+    {
+        var journal = NewJournal();
+        // Entry 1.1480, venue SL 1.1450 → risk ≈ 0.003. Cycle 1: price
+        // 1.1550 (~2.3R) — MFE gate passes, the rung ARMS at the first
+        // ladder target ahead of the price (the tape's swing high ≈ 1.1504,
+        // which is BELOW the current price? No — ahead-only keeps targets
+        // above 1.1550, so the rung sits above the current price).
+        // Cycle 2: price walks to 1.1700 — past every rung the ladder can
+        // name → the armed rung is crossed and the 25% plan banks once.
+        // Volume 1.0 so the 25% rung clears the venue's 0.1 lot step.
+        object[] At(double price, double profit) => new object[]
+        {
+            new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 1.0,
+                  price_open = 1.1480, price_current = price, profit = profit,
+                  sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+        };
+        var script = new BridgeScript { Positions = At(1.1550, 70.0) };
+        var host = NewHost(script, journal);
+        try
+        {
+            // Default OFF: the plan is advisory only — no arming, no close.
+            FxEngineHost.ExecuteTp1Partials = false;
+            await host.RunCycleAsync();
+            Assert.Equal(0, script.CloseCalls);
+            journal.Flush();
+            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
+
+            // Armed (cycle 1): the rung is recorded, nothing executes yet.
+            FxEngineHost.ExecuteTp1Partials = true;
+            await host.RunCycleAsync();
+            Assert.Equal(0, script.CloseCalls);
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
+
+            // Crossed (cycle 2): the rung banks once through the Exit
+            // Brain's close path, journaled as TP1-EXEC under FX_PROFIT.
+            script.Positions = At(1.1700, 220.0);
+            await host.RunCycleAsync();
+            Assert.Equal(1, script.CloseCalls);
+            journal.Flush();
+            // At +22R the plan is the strong-continuation variant (15/20/25/40)
+            // and 0.15 lots snaps DOWN to the venue's 0.1 step.
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC: banked 0.1 lots (15% plan)"));
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("\"PlanPct\":15"));
+
+            // Once per ticket: the next cycle must not re-bank.
+            await host.RunCycleAsync();
+            Assert.Equal(1, script.CloseCalls);
+        }
+        finally
+        {
+            FxEngineHost.ExecuteTp1Partials = false;   // never leak into other tests
+        }
+    }
+
+    [Fact]
     public void Profit_State_Reseeds_From_The_Journal_After_A_Restart()
     {
         // The restart defect (2026-09-29): peaks (16.9R) and established

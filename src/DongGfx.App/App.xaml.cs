@@ -229,6 +229,10 @@ public partial class App : System.Windows.Application
         provider.GetRequiredService<DashboardViewModel>()
             .ConfigurePromotionLedger(Path.Combine(SettingsService.DataDir, "fx-shadow"));
 
+        // TP1 partial prototype: the allocation plan's first rung is graded
+        // live when this is armed (default OFF — an explicit opt-in).
+        Services.FxEngineHost.ExecuteTp1Partials = settings.FxExecuteTp1Partials;
+
         // Cycle-telemetry digest: periodically posts the live latency/error
         // digest to the same webhook trade settlements use, so monitoring
         // sees session health without anyone exporting manually. Gated by

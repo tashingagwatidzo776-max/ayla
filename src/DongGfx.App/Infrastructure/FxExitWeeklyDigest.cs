@@ -113,6 +113,21 @@ public sealed class FxExitWeeklyDigest : IDisposable
                 return string.Empty;
             }
 
+            // The giveback engine's promotion review: when one of its
+            // reassessment conditions is met (the FIRST verified save, or
+            // 30 settled trades — docs/soak/GIVEBACK-PROMOTION-CASE.md),
+            // the weekly digest auto-posts the case's current standing so
+            // the reassessment actually happens instead of being remembered.
+            var review = PromotionReview(entries);
+            if (review is not null)
+            {
+                message = message.Length == 0
+                    ? review
+                    : $"{message} {review}";
+                markdown += "\n### Giveback engine — promotion review triggered\n\n" +
+                            review + "\n";
+            }
+
             _webhook?.PostStatus("FX exit weekly digest", message);
 
             if (SoakDocPath is { } path
@@ -160,7 +175,8 @@ public sealed class FxExitWeeklyDigest : IDisposable
     /// <summary>One decoded FX_EXIT journal payload.</summary>
     internal sealed record ExitPayload(
         string Action, string? Override, double MaeR, double MfeR, double ProfitR,
-        IReadOnlyList<(string Engine, double Exit, double Weight)> Votes);
+        IReadOnlyList<(string Engine, double Exit, double Weight)> Votes,
+        long Ticket = 0);
 
     /// <summary>Pure builder: the last 7 days of FX_EXIT entries in,
     /// webhook message + markdown append out. Empty strings = nothing to
@@ -320,6 +336,68 @@ public sealed class FxExitWeeklyDigest : IDisposable
             "- weekly capture: " + string.Join(", ", series.Select(w =>
                 $"{w.Label} {w.CaptureRatio * 100:0}% ({w.CapturedR:0.##}R of {w.AvailableR:0.##}R, {w.Trades} trade(s))")) + "\n" +
             "- spark: " + Sparkline(series.Select(w => w.CaptureRatio).ToList()) + "\n";
+    }
+
+    /// <summary>The giveback engine's promotion review: when one of its
+    /// reassessment conditions is met (docs/soak/GIVEBACK-PROMOTION-CASE.md),
+    /// returns the review text; otherwise null — silence is correct, not an
+    /// error. Conditions: (a) at least one VERIFIED profit-floor save has
+    /// settled (an override or a decisive deep giveback vote followed by a
+    /// close confirmation for the same ticket), or (b) 30+ decisive exits
+    /// have settled overall. Read-only over the journal; fires every week
+    /// while the condition holds — the weekly cadence IS the throttle.</summary>
+    internal static string? PromotionReview(IReadOnlyList<JournalEntry> entries)
+    {
+        var saveKinds = new Dictionary<long, string>();
+        foreach (var e in entries)
+        {
+            if (e.Category != "FX_EXIT" || Decode(e.Details) is not { } p || p.Ticket == 0)
+            {
+                continue;
+            }
+
+            var isOverride = p.Override == "profit-floor";
+            var isDeepVote = !isOverride
+                && p.Action is "full" or "partial"
+                && p.Votes.Any(v => v.Engine == "drawdown" && v.Exit >= 0.85);
+            if (isOverride || isDeepVote)
+            {
+                saveKinds[p.Ticket] = isOverride ? "profit-floor override" : "deep giveback vote";
+            }
+        }
+
+        long? savedTicket = null;
+        foreach (var e in entries)
+        {
+            if (e.Category != "FX_EXIT")
+            {
+                continue;
+            }
+            foreach (var (ticket, kind) in saveKinds)
+            {
+                if (e.Details.Contains($"closed #{ticket}"))
+                {
+                    savedTicket ??= ticket;
+                    _ = kind;
+                }
+            }
+        }
+
+        var decided = entries.Count(e => e.Category == "FX_EXIT"
+            && Decode(e.Details) is { } p2 && p2.Ticket != 0
+            && (p2.Action is "full" or "partial" || p2.Override is not null));
+
+        if (savedTicket is null && decided < 30)
+        {
+            return null;
+        }
+
+        var saved = savedTicket is { } st
+            ? $"first verified save: ticket {st} ({saveKinds[st]})"
+            : "no verified save yet";
+        return $"PROMOTION REVIEW — decisive settled exits {decided}/100, {saved}. " +
+               "Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: " +
+               "weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).";
     }
 
     /// <summary>Decodes one FX_PROFIT Details line ("{summary}: {json}").
@@ -535,7 +613,9 @@ public sealed class FxExitWeeklyDigest : IDisposable
                 r.TryGetProperty("Override", out var o) && o.ValueKind == JsonValueKind.String
                     ? o.GetString() : null,
                 Num("MaeR"), Num("MfeR"), Num("ProfitR"),
-                votes);
+                votes,
+                r.TryGetProperty("Ticket", out var tk) && tk.ValueKind == JsonValueKind.Number
+                    ? tk.GetInt64() : 0);
         }
         catch (JsonException)
         {

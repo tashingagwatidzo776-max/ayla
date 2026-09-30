@@ -170,6 +170,8 @@ jobs:
       run: python scripts/test_watch_profit_floor.py
     - name: Test the profit-floor watcher's register script
       run: python scripts/test_register_profit_floor_watch.py
+    - name: Test the trade-lifecycle query tool
+      run: python scripts/test_trade_lifecycle.py
 
     - name: Lint script hygiene (subprocess-decode + UTF-16-log classes stay dead)
       run: python scripts/check_script_hygiene.py
