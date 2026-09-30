@@ -909,6 +909,92 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Hard_Floor_Confirms_Despite_Sibling_Positions_On_Other_Symbols()
+    {
+        // The 2026-09-30 live starvation: two deals accepted at 11:27 but
+        // confirmation never landed, because the reconcile gate demanded
+        // the WHOLE account read to equal this symbol's managed book —
+        // sibling positions on other symbols kept the sets apart forever.
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L, State = "PROFIT_PROTECTED", PeakR = 12.4,
+            MaeR = 0.4, FloorR = 8.2, GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var script = FloorBreachScript();
+        var host = NewHost(script, journal);
+
+        // Cycle 1: breach → submit; the venue still lists the position.
+        await host.RunCycleAsync();
+        Assert.Equal(1, script.CloseCalls);
+
+        // Cycle 2: the floor-exited ticket vanished, but a SIBLING position
+        // on another symbol (not this brain's book) remains — exactly the
+        // shape that starved the live confirmation. A non-empty read that
+        // lacks the ticket is definitionally real; absence is the evidence.
+        script.Positions = new object[]
+        {
+            new { ticket = 901L, symbol = "EURUSD", side = "buy", volume = 0.1,
+                  price_open = 1.1500, price_current = 1.1505, profit = 5.0,
+                  sl = 0.0, tp = 0.0, comment = "" },
+        };
+        await host.RunCycleAsync();
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+    }
+
+    [Fact]
+    public async Task Hard_Floor_Downgrades_When_The_Broker_Still_Holds_The_Ticket()
+    {
+        // §13.4: a non-empty read that STILL lists a submitted guard's
+        // ticket means the close did not flatten the position — downgrade
+        // to failed, protection continues, next cycle re-queues the exit.
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L, State = "PROFIT_PROTECTED", PeakR = 12.4,
+            MaeR = 0.4, FloorR = 8.2, GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var script = FloorBreachScript();
+        var host = NewHost(script, journal);
+
+        try
+        {
+            FxEngineHost.FloorSubmitGrace = TimeSpan.Zero;  // no lag tolerance in-test
+            // Cycle 1: breach → submit; venue still lists the position.
+            await host.RunCycleAsync();
+            Assert.Equal(1, script.CloseCalls);
+            journal.Flush();
+            Assert.DoesNotContain(journal.GetRecent(null, 400), e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+
+            // Cycle 2: the position is STILL listed (non-empty read!) —
+            // the §13.4 downgrade fires instead of a false confirmation.
+            await host.RunCycleAsync();
+            journal.Flush();
+            var entries = journal.GetRecent(null, 400);
+            Assert.Contains(entries, e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("downgrade to EXIT_FAILED"));
+            Assert.DoesNotContain(entries, e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+
+            // Cycle 3: protection continues — the guard re-issues the exit.
+            var callsAfterDowngrade = script.CloseCalls;
+            await host.RunCycleAsync();
+            Assert.True(script.CloseCalls > callsAfterDowngrade, "the exit must be re-queued");
+        }
+        finally
+        {
+            FxEngineHost.FloorSubmitGrace = TimeSpan.FromMinutes(2);
+        }
+    }
+
+    [Fact]
     public void Profit_State_Reseeds_From_The_Journal_After_A_Restart()
     {
         // The restart defect (2026-09-29): peaks (16.9R) and established
