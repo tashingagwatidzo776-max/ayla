@@ -1,7 +1,25 @@
-# Giveback engine — promotion case (draft, awaiting its first save)
+# Giveback engine — promotion case (first-save condition MET 2026-09-30)
 
-Status: **weight 0, observation** · 10/100 settled trades · hit 20% vs the
-60% bar · no verified live save yet.
+Status: **weight 0, observation — REASSESSMENT TRIGGERED** · 14/100 settled
+trades · hit 43% (was 20% yesterday) · **first verified live saves landed
+2026-09-30** — five saves, all five closes confirmed at the venue.
+
+## The first save — checklist CLOSED (2026-09-30)
+
+| Time (UTC) | Ticket | Peak → closed near | Chain | R saved vs round-trip |
+|---|---|---|---|---|
+| 06:05 | #9820814920 | 9.3R → +1.62R | giveback override (0.75) → FX_RISK → close 10009 | ~7.7R |
+| 06:46 | #9820161383 | 36.1R → +9.01R | giveback override → FX_RISK → close 10009 | ~27.1R |
+| 08:56/08:57 | #9820781127 | 12.4R → +1.89R | giveback override ×2 → FX_RISK → close 10009 | ~10.5R |
+| 11:27 | #9820712902 | 28.1R → breach +20.31R | HARD floor guard (25.3R floor) → deal attempt 1 → CONFIRMED 12:32 | ~5R+ |
+| 11:27 | #9820719898 | 23.4R → breach +16.60R | HARD floor guard (21.0R floor) → deal attempt 1 → CONFIRMED 12:32 | ~4R+ |
+
+Evidence verified in `journal_20260930.jsonl`: FX_EXIT override rows with
+score 100 + close retcode 10009 (three saves), FX_FLOOR
+BREACH→SUBMITTED→CONFIRMED rows (two guard saves — the hard-enforcement
+layer, PR #139/#142). The ensemble voted **hold 0/100** on both guard
+tickets; the override outranked it. Daily capture bent the same day:
+0% (09-28/29) → **22.0%** (15.44R banked of 70.23R MFE, 4 decisive trades).
 
 ## The engine
 
@@ -20,6 +38,7 @@ its peak as "healthy".
 | PR #134 | Structural stop sizing (max(hint, 1.5×ATR, venue band)) | Honest R units — giveback ratios were measured against venue-band-hugging stops before |
 | PR #135 | Scheduled watcher + webhook on verified saves | Every save is now witnessed through the evidence chain automatically |
 | PR #136 | Saves credited in the ledger; breach-time alert | `Helped` counts save evidence (override or deep vote) for giveback + drawdown |
+| PR #139/#142 | HARD profit-floor enforcement (guard commands exits) | Saves no longer depend on ensemble consensus at all; guard saves credit the ledger via `floor-exit` |
 | this PR | Moderate-reversal pre-tighten; promotion dashboard | The floor tightens before full reversal confluence; progress visible in-app |
 
 ## The evidence bar (unchanged, spec gates)
@@ -44,12 +63,18 @@ its peak as "healthy".
   verified by the scheduled watcher (exit 2 + webhook) and the dashboard
   promotion card.
 
-## Current substrate (live, 2026-09-30)
+## Current substrate (live, 2026-09-30 after the five saves)
 
-- counterfactual: 9 settled, 0 helped (0%)
-- giveback: 10 settled, 2 helped (20%) — both classic-rule credits; the
-  save-credit path (PR #136) has fired only in tests so far.
-- target-tp: 1 settled, 0 helped (0%)
+- counterfactual: 11 settled, 0 helped (0%)
+- giveback: 14 settled, 6 helped (43%) — 2 classic-rule credits + the
+  2026-09-30 save credits; hit rate 20% → 43% in one day of live saves.
+- target-tp: 3 settled, 0 helped (0%)
+
+Gap closed the same day: the two guard-executed saves (#9820712902,
+#9820719898) initially bypassed the ledger (the append lived only in the
+ensemble's close branch) — the promotion ledger now appends a `floor-exit`
+row when a guard save reconciles (PR following #142), so every future
+hard-floor save counts.
 
 ## Honest caveats
 
@@ -68,6 +93,9 @@ its peak as "healthy".
 
 ## Decision
 
-Not promotable today. Re-run this assessment when (a) the first verified
-save lands (watcher webhook) and (b) settled trades ≥ 30 — early signal
-that the hit rate is climbing toward the bar rather than pinned by noise.
+Reassessment triggered (first save landed 2026-09-30). Early signal is
+strong — 43% hit after one day, capture bent 0% → 22% — but the sample is
+five saves in one session. **Not promotable yet**: hold until (b) settled
+trades ≥ 30 AND a fresh McDrill STABLE verdict on the then-current
+population. If the hit rate is still ≥ 40% at 30 settled, prepare the
+weight ≤ 1.0 PR for review.

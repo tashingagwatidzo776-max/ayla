@@ -54,6 +54,26 @@ public class FxShadowLedgerTests
     }
 
     [Fact]
+    public void Helped_Credits_A_Guard_Executed_Floor_Exit()
+    {
+        // 2026-09-30: the hard floor's saves bypassed the ensemble's
+        // close-time append entirely, and even with an append the classic
+        // rule (hold/monitor + won) could never credit them. resolvedAction
+        // "floor-exit" + won is the save signature: the drawdown voice's
+        // deep-giveback conviction drove a close that EXECUTED.
+        var vote = new FxExitVote("drawdown", 0.95, 0.0, "hard profit floor save");
+
+        Assert.True(FxExitShadow.Helped(vote, resolvedAction: "floor-exit", won: true));
+        // The evidence bar holds: weak conviction or a loss is no credit.
+        Assert.False(FxExitShadow.Helped(
+            vote with { Exit = 0.4 }, resolvedAction: "floor-exit", won: true));
+        Assert.False(FxExitShadow.Helped(vote, resolvedAction: "floor-exit", won: false));
+        // Other engines do not ride the save — drawdown gave the evidence.
+        Assert.False(FxExitShadow.Helped(
+            vote with { Engine = "counterfactual" }, resolvedAction: "floor-exit", won: true));
+    }
+
+    [Fact]
     public void SummarizeDir_Degrades_To_Empty_On_Missing_Directory()
     {
         Assert.Empty(FxShadowLedger.SummarizeDir(null));

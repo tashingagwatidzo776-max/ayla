@@ -995,6 +995,47 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Partial_Close_Never_Disables_The_Armed_Floor()
+    {
+        // Spec §11/G: after a TP1-style partial (volume 1.0 → 0.75), the
+        // remaining position stays fully protected — floors are R-based
+        // (per-price-distance), never volume-proportional, so banking a
+        // rung cannot disarm or shrink the floor. Cycle 1 arms the guard
+        // above the floor; a partial close happens between cycles; cycle 2
+        // breaches — the guard must command the FULL remaining close.
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L, State = "PROFIT_PROTECTED", PeakR = 12.4,
+            MaeR = 0.4, FloorR = 8.2, GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var script = FloorBreachScript();   // +3.4R executable — THROUGH the floor
+        var host = NewHost(script, journal);
+
+        // Simulate the already-partial book: a TP1 rung was banked earlier
+        // (volume 0.75 of the original 1.0). The guard must still arm.
+        script.Positions = new object[]
+        {
+            new { ticket = 555L, symbol = "XAUUSDmicro", side = "buy", volume = 0.75,
+                  price_open = 1.1480, price_current = 1.1582, profit = 76.5,
+                  sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+        };
+        await host.RunCycleAsync();
+
+        // The breach on the REMAINING 0.75 lots commands the full close —
+        // one close, whole remaining position (null lots), no demotion.
+        Assert.Equal(1, script.CloseCalls);
+        journal.Flush();
+        var entries = journal.GetRecent(null, 400);
+        Assert.Contains(entries, e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
+        Assert.Contains(entries, e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("PROFIT FLOOR EXIT SUBMITTED"));
+    }
+
+    [Fact]
     public void Profit_State_Reseeds_From_The_Journal_After_A_Restart()
     {
         // The restart defect (2026-09-29): peaks (16.9R) and established
