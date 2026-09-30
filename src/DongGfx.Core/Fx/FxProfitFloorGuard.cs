@@ -85,6 +85,7 @@ public sealed class FxProfitFloorGuard
     private readonly string _symbol;
     private readonly string _side;
 
+    public long Ticket => _ticket;
     public FxFloorState State { get; private set; } = FxFloorState.Inactive;
     public double FloorR { get; private set; }
     public double PeakR { get; private set; }
@@ -94,6 +95,7 @@ public sealed class FxProfitFloorGuard
     public string? EventId { get; private set; }
     public string? ExitOrderId { get; private set; }
     public int Attempts { get; private set; }
+    public DateTimeOffset? SubmittedAtUtc { get; private set; }
 
     /// <summary>The event id whose exit was already SUBMITTED — the
     /// idempotency key: a re-issued command for the same event is refused
@@ -243,6 +245,7 @@ public sealed class FxProfitFloorGuard
             State = FxFloorState.ExitSubmitted;
             ExitOrderId = orderId;
             SubmittedEventId = EventId;
+            SubmittedAtUtc = DateTimeOffset.UtcNow;
             Attempts++;
         }
     }
@@ -267,6 +270,7 @@ public sealed class FxProfitFloorGuard
         {
             State = FxFloorState.ExitFailed;
             SubmittedEventId = null;
+            SubmittedAtUtc = null;
         }
     }
 

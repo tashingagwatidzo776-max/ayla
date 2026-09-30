@@ -774,6 +774,12 @@ public sealed class FxEngineHost : IDisposable
     /// exit no ensemble vote can veto.</summary>
     private readonly Dictionary<long, Core.Fx.FxProfitFloorGuard> _floorGuards = new();
 
+    /// <summary>Grace window after a close submission during which a venue
+    /// read still listing the position is treated as list lag, not as
+    /// evidence the close failed. Internal static: tests shrink it to zero
+    /// to exercise the §13.4 downgrade immediately.</summary>
+    internal static TimeSpan FloorSubmitGrace { get; set; } = TimeSpan.FromMinutes(2);
+
     /// <summary>Tickets whose 🛡️ ARMED notification already fired — the
     /// alert-once law (spec §10): alerts ride STATE CHANGES, not ticks.</summary>
     private readonly HashSet<long> _floorArmedAlerted = new();
@@ -1330,18 +1336,25 @@ public sealed class FxEngineHost : IDisposable
 
         // Reconciliation (§13): a floor exit is CONFIRMED only when the
         // broker verifiably no longer holds the ticket. Two safe shapes:
-        // (a) non-empty agreeing reads that both lack the ticket — the
-        // closure is real; (b) an EMPTY book right after this guard's own
-        // close submission SUCCEEDED (the venue returned ok + deal — that
-        // response is the primary execution evidence; the agreeing empty
-        // reads corroborate). A degraded empty read alone can never invent
-        // a confirmation, because a guard only reaches ExitSubmitted through
-        // an accepted close request for that very ticket.
+        // (a) a NON-EMPTY confirm read that lacks the ticket — a degraded
+        // read degrades to EMPTY, so a non-empty read is definitionally
+        // real and per-ticket absence is trustworthy evidence, even when
+        // owned (this symbol's managed book) and confirm (the WHOLE
+        // account) disagree because sibling positions are open — the old
+        // whole-book SetEquals gate starved confirmation forever in
+        // exactly that shape (2026-09-30 live: deals 11:27, guards still
+        // unconfirmed at 11:32 while sibling tickets kept the sets apart);
+        // (b) an EMPTY book right after this guard's own close submission
+        // SUCCEEDED (the venue returned ok + deal — primary execution
+        // evidence; the agreeing empty reads corroborate). A degraded
+        // empty read alone can never invent a confirmation, because a
+        // guard only reaches ExitSubmitted through an accepted close
+        // request for that very ticket.
         var confirmLive = confirm.Select(p => p.Ticket).ToHashSet();
         var readsAgree = confirmLive.SetEquals(owned.Select(p => p.Ticket).ToHashSet());
-        if (readsAgree
-            && (owned.Count > 0
-                || _floorGuards.Values.Any(g => g.State == Core.Fx.FxFloorState.ExitSubmitted)))
+        if (confirm.Count > 0
+            || (readsAgree
+                && _floorGuards.Values.Any(g => g.State == Core.Fx.FxFloorState.ExitSubmitted)))
         {
             foreach (var gone in _floorGuards.Keys.Where(k => !confirmLive.Contains(k)).ToList())
             {
@@ -1366,6 +1379,35 @@ public sealed class FxEngineHost : IDisposable
                 g.MarkReset();
                 _floorGuards.Remove(gone);
                 _floorArmedAlerted.Remove(gone);
+            }
+
+            // §13.4: a non-empty read that STILL holds a submitted guard's
+            // ticket means the close did not flatten the position. Downgrade
+            // to failed — protection continues, the next Advance re-queues
+            // the exit. Skipped inside a submit grace window (2 min): MT5
+            // position lists can lag the accepted deal for a breath. The
+            // window is internal static so tests can shrink it — a real
+            // broker never confirms inside 2 minutes, so production timing
+            // is unaffected.
+            foreach (var stuck in _floorGuards.Values
+                .Where(g => g.State == Core.Fx.FxFloorState.ExitSubmitted
+                            && confirmLive.Contains(g.Ticket)
+                            && (g.SubmittedAtUtc is not { } sub
+                                || DateTimeOffset.UtcNow - sub > FloorSubmitGrace))
+                .ToList())
+            {
+                stuck.MarkFailed();
+                Journal("FX_FLOOR",
+                    $"#{stuck.Ticket}: close accepted but the broker still holds the position — downgrade to EXIT_FAILED; protection continues",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = stuck.Ticket,
+                        EventId = stuck.EventId,
+                        ExitOrderId = stuck.ExitOrderId,
+                    }));
+                _webhook?.PostRiskRail(
+                    $"⚠️ PROFIT FLOOR EXIT UNVERIFIED — #{stuck.Ticket}",
+                    $"{Symbol} | Close was accepted but the position persists; protection continues and the exit will be re-issued next cycle.");
             }
         }
     }
