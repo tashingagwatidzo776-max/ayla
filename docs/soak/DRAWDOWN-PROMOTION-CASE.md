@@ -63,3 +63,22 @@ confirmation of each other.
   would have held), that is evidence the ENSEMBLE's drawdown thresholds
   are looser than the guard's — the input to a threshold-tuning PR,
   which must rerun McDrill and is NOT this case.
+
+## Keep / adjust / demote — the decision matrix
+
+Evaluated when the ledger shows ≥30 decisive settlements with drawdown
+rows (guard saves + graded ensemble votes). One row per state of the
+world; every weight change reruns McDrill before and after.
+
+| Evidence at the bar | Verdict | Action | Rebalance trigger |
+|---|---|---|---|
+| Hit ≥ 60%, capture trend up or flat, McDrill STABLE at 2.0 | **KEEP** | no change; extend observation to 100 | none — next review at 100 settled |
+| Hit 45–60% with wins concentrated in guard saves (ensemble votes near coin-flip) | **ADJUST ↓** | weight 2.0 → 1.0 in a reviewed PR; the guard keeps the save behavior | fresh McDrill must be STABLE; capture must not degrade for 20 settlements after |
+| Hit ≥ 60% AND saves increasing week-over-week with capture trend up | **ADJUST ↑** | consider 2.0 → 2.5, only alongside the giveback weight-1.0 PR's fresh MC run | requires TWO consecutive STABLE runs; never crosses drawdown-grade for the giveback mirror |
+| Hit < 45%, or McDrill NON-STABLE attributable to drawdown votes | **DEMOTE** | weight 2.0 → 0 (shadow) in a reviewed PR; the hard floor is unaffected — it is a separate command layer | McDrill before/after; the giveback mirror's meaning changes (its settled rows would go all-shadow) — re-review both cases together |
+| Ledger rows diverge from FX_EXIT payload evidence (mirror staleness) | **FIX FIRST** | no weight change until `GivebackShadowVote`'s coupling is repaired | n/a — substrate integrity gates everything |
+
+The matrix's guard rails: the hard floor is never touched by any row
+(it is not an ensemble citizen), every demotion is recoverable (weights
+are data, reviewed back in through the same evidence bar), and no row
+fires on a sample smaller than 30 decisive settlements.
