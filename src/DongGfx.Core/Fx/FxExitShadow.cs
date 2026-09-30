@@ -143,12 +143,46 @@ public sealed class FxShadowLedger
     /// <summary>Reads the whole ledger and rolls it up per engine. Malformed
     /// or vanished files degrade to an empty summary — the digest then
     /// simply reports "not enough evidence yet".</summary>
-    public IReadOnlyList<FxShadowLedgerRow> Summarize()
+    public IReadOnlyList<FxShadowLedgerRow> Summarize() => SummarizeFile(_path);
+
+    /// <summary>Rolls up ONE ledger file.</summary>
+    public static IReadOnlyList<FxShadowLedgerRow> SummarizeFile(string path)
     {
+        var (helped, trades) = (new Dictionary<string, int>(), new Dictionary<string, int>());
+        AccumulateFile(path, helped, trades);
+        return RollUp(helped, trades);
+    }
+
+    /// <summary>Rolls up EVERY per-symbol ledger in a directory
+    /// (fx-shadow-*.jsonl) into one merged per-engine verdict — the
+    /// portfolio view: promotion evidence is per engine across symbols,
+    /// never per file. Missing/unreadable directories degrade to empty.</summary>
+    public static IReadOnlyList<FxShadowLedgerRow> SummarizeDir(string? directory)
+    {
+        if (directory is null || !Directory.Exists(directory)) return [];
         var (helped, trades) = (new Dictionary<string, int>(), new Dictionary<string, int>());
         try
         {
-            foreach (var line in File.ReadAllLines(_path))
+            foreach (var file in Directory.GetFiles(directory, "fx-shadow-*.jsonl"))
+            {
+                AccumulateFile(file, helped, trades);
+            }
+        }
+        catch (IOException)
+        {
+            // Degraded read: an empty rollup, never a crash.
+        }
+        return RollUp(helped, trades);
+    }
+
+    private static void AccumulateFile(
+        string path,
+        Dictionary<string, int> helped,
+        Dictionary<string, int> trades)
+    {
+        try
+        {
+            foreach (var line in File.ReadAllLines(path))
             {
                 try
                 {
@@ -169,15 +203,17 @@ public sealed class FxShadowLedger
         }
         catch (IOException)
         {
-            // No ledger yet (or unreadable): every engine reports zero.
+            // No file (or unreadable): that symbol contributes nothing.
         }
+    }
 
-        return trades.Count == 0
+    private static IReadOnlyList<FxShadowLedgerRow> RollUp(
+        Dictionary<string, int> helped, Dictionary<string, int> trades) =>
+        trades.Count == 0
             ? []
             : [.. trades.Select(kv => kv.Key).OrderBy(e => e, StringComparer.Ordinal).Select(e =>
             {
                 var report = FxExitShadow.Grade(e, helped.GetValueOrDefault(e), trades[e]);
                 return new FxShadowLedgerRow(e, report.Trades, helped.GetValueOrDefault(e), report.HitRate, report.Weight);
             })];
-    }
 }

@@ -94,6 +94,66 @@ public class DashboardAndSettingsCoverageTests : IDisposable
         Assert.Contains("saved", vm.StatusMessage, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── DashboardViewModel: shadow-engine promotion card ──────────────
+
+    private static string PromotionRow(long ticket, string engine, double exit, bool helped, string symbol = "EURUSD") =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            At = DateTimeOffset.UtcNow,
+            Ticket = ticket,
+            Symbol = symbol,
+            Engine = engine,
+            ExitAtClose = exit,
+            ResolvedAction = "full",
+            Won = true,
+            Helped = helped,
+        });
+
+    [Fact]
+    public void PromotionCard_Rolls_Up_Ledgers_And_Speaks_The_Giveback_Line()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "dg-promo", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllLines(Path.Combine(dir, "fx-shadow-EURUSD.jsonl"),
+        [
+            PromotionRow(1, "giveback", 0.95, helped: true),
+            PromotionRow(2, "giveback", 0.85, helped: false),
+        ]);
+        File.WriteAllLines(Path.Combine(dir, "fx-shadow-XAUUSDmicro.jsonl"),
+        [
+            PromotionRow(3, "giveback", 0.9, helped: true, symbol: "XAUUSDmicro"),
+            PromotionRow(4, "counterfactual", 0.7, helped: true, symbol: "XAUUSDmicro"),
+        ]);
+
+        var dashboard = new DashboardViewModel();
+        dashboard.ConfigurePromotionLedger(dir);
+
+        var giveback = dashboard.PromotionRows.First(r => r.Engine == "giveback");
+        Assert.Equal("3 settled", giveback.Settled);
+        Assert.Equal("2 helped", giveback.Evidence);
+        Assert.Equal("hit 67%", giveback.HitRate);
+        Assert.Contains("weight 0", giveback.Weight);
+
+        // The headline line speaks the giveback engine's road to weight.
+        Assert.Contains("giveback engine: 3 settled trade(s), 2 save(s), hit 67%", dashboard.PromotionSummaryText);
+        Assert.Contains("weight 0 until 100 trades @ 60%", dashboard.PromotionSummaryText);
+    }
+
+    [Fact]
+    public void PromotionCard_Degrades_To_The_Empty_State_Without_Ledgers()
+    {
+        var dashboard = new DashboardViewModel();
+        dashboard.ConfigurePromotionLedger(null);
+
+        Assert.Empty(dashboard.PromotionRows);
+        Assert.Equal("no promotion evidence yet", dashboard.PromotionSummaryText);
+
+        dashboard.ConfigurePromotionLedger(
+            Path.Combine(Path.GetTempPath(), "dg-promo", Guid.NewGuid().ToString("N")));
+        Assert.Empty(dashboard.PromotionRows);
+        Assert.Equal("no promotion evidence yet", dashboard.PromotionSummaryText);
+    }
+
     // ── DashboardViewModel ────────────────────────────────────────────
 
     [Fact]

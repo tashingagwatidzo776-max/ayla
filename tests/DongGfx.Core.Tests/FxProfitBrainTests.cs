@@ -171,6 +171,45 @@ public class FxProfitBrainTests
         Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, 0.8, 0.1, 0, FxProfitBrainOptions.Default));
     }
 
+    [Fact]
+    public void Floor_PreTightens_On_Moderate_Reversal_While_Profit_Is_Near_Peak()
+    {
+        // Peak 8R, schedule floor 4R; reversal 0.45 (moderate, below the
+        // 0.55 high-confidence bar) with profit still near the peak: the
+        // schedule floor must no longer stand untouched — the pre-tighten
+        // lifts it toward the profit (75% of current, capped at the peak).
+        var floor = FxProfitBrain.ProfitFloor(8.0, currentR: 7.6, reversalP: 0.45,
+            prevFloorR: 0, FxProfitBrainOptions.Default);
+        Assert.Equal(7.6 * 0.75, floor, 6);   // 5.7R, above the 4.0R schedule
+
+        // Still capped at 0.9x the peak.
+        Assert.True(floor <= 8.0 * FxProfitBrain.FloorCapOfPeak + 1e-9);
+    }
+
+    [Fact]
+    public void Floor_PreTighten_Leaves_Healthy_Trades_And_Low_Profit_Alone()
+    {
+        // Low reversal evidence: no pre-tighten — the schedule floor stands.
+        var calm = FxProfitBrain.ProfitFloor(8.0, currentR: 7.6, reversalP: 0.2,
+            prevFloorR: 0, FxProfitBrainOptions.Default);
+        Assert.Equal(4.0, calm, 6);
+
+        // Moderate reversal but profit NOT near peak (in the giveback
+        // itself): pre-tighten does not lock in the drawdown.
+        var deep = FxProfitBrain.ProfitFloor(8.0, currentR: 3.0, reversalP: 0.45,
+            prevFloorR: 0, FxProfitBrainOptions.Default);
+        Assert.Equal(4.0, deep, 6);
+    }
+
+    [Fact]
+    public void Floor_PreTighten_Never_Lowers_An_Established_Floor()
+    {
+        // An established 5.7R floor survives a later calm evaluation.
+        var established = FxProfitBrain.ProfitFloor(8.0, 7.6, 0.45, 0, FxProfitBrainOptions.Default);
+        var later = FxProfitBrain.ProfitFloor(8.0, 7.2, 0.15, established, FxProfitBrainOptions.Default);
+        Assert.True(later >= established - 1e-9);
+    }
+
     // ── reversal detector: confluence, never one candle ──────────────────
 
     [Fact]

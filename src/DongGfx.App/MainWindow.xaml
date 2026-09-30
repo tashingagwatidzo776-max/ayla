@@ -188,6 +188,32 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+
+                            <!-- Shadow-engine promotion card: the giveback engine's road to weight -->
+                            <Border Background="#2200D4AA" BorderBrush="#5500D4AA" BorderThickness="1"
+                                    CornerRadius="4" Padding="8,4" Margin="0,8,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Dashboard.PromotionSummaryText}"
+                                               FontFamily="Consolas" FontSize="11"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap" />
+                                    <ItemsControl ItemsSource="{Binding Dashboard.PromotionRows}" Margin="0,4,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="#11000000" CornerRadius="3" Padding="6,2" Margin="0,0,0,3">
+                                                    <TextBlock FontFamily="Consolas" FontSize="10.5" TextWrapping="Wrap">
+                                                        <Run Text="{Binding Engine, Mode=OneWay}" FontWeight="Bold" />
+                                                        <Run Text="{Binding Settled, Mode=OneWay, StringFormat='· {0}'}" />
+                                                        <Run Text="{Binding Evidence, Mode=OneWay, StringFormat='· {0}'}" />
+                                                        <Run Text="{Binding HitRate, Mode=OneWay, StringFormat='· {0}'}" />
+                                                        <Run Text="{Binding Weight, Mode=OneWay, StringFormat='· {0}'}" Foreground="#FF00D4AA" />
+                                                    </TextBlock>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Border>
 
