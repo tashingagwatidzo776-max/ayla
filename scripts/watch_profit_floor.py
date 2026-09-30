@@ -162,6 +162,34 @@ def book_posture(rs: list[dict]) -> dict[int, dict]:
     return latest
 
 
+def daily_capture(rs: list[dict], days: int = 7) -> list[tuple[str, int, float, float, float]]:
+    """Per-UTC-day profit capture over the last `days` days (decisive exits
+    with MFE >= 0.5R): (date, trades, capturedR, availableR, ratio). A
+    zero-trade day is dropped — absence of evidence is not 0% capture.
+    The weekly digest rolls up a week; THIS sees a bend within a day."""
+    buckets: dict[str, list[tuple[float, float]]] = {}
+    for r in rs:
+        if r["cat"] != "FX_EXIT":
+            continue
+        p = r["payload"]
+        action = p.get("Action", "")
+        decisive = action in ("full", "partial") or p.get("Override") is not None
+        mfe = p.get("MfeR") or 0
+        if not decisive or not isinstance(mfe, (int, float)) or mfe < 0.5:
+            continue
+        day = r["ts"][:10]
+        buckets.setdefault(day, []).append((max(p.get("ProfitR") or 0, 0), mfe))
+
+    out = []
+    for day in sorted(buckets)[-days:]:
+        pairs = buckets[day]
+        captured = sum(c for c, _ in pairs)
+        available = sum(m for _, m in pairs)
+        out.append((day, len(pairs), captured, available,
+                    captured / available if available > 0 else 0.0))
+    return out
+
+
 # ── webhook alerting (Discord/Slack, payload shape per WebhookService) ──
 
 def build_alert_payload(save: dict, chain: dict) -> tuple[str, dict]:
@@ -294,6 +322,14 @@ def one_pass(alert_webhook: bool = True, webhook_url: str = "",
         print(f"  #{ticket}: peak {peak:.1f}R cur {cur:+.2f}R "
               f"giveback {gb:.0f}% floor {p.get('FloorR', 0):.1f}R "
               f"{p.get('GivebackClass', '')}{flag}")
+
+    capture = daily_capture(rs)
+    if capture:
+        print("=== daily profit capture (decisive, MFE >= 0.5R) ===")
+        for day, trades, cap_r, avail_r, ratio in capture:
+            bar = "█" * round(ratio * 20)
+            print(f"  {day}  {ratio * 100:5.1f}%  {cap_r:7.2f}R / {avail_r:7.2f}R  "
+                  f"{trades} trade(s)  |{bar:<20}|")
     return 2 if verified else 0
 
 

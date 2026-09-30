@@ -41,6 +41,9 @@ public class DemoPaperExecutionTests
         public int ModifyCalls;
         public string? LastClosePath;
 
+        /// <summary>When false, /close refuses (the retry-ladder test).</summary>
+        public bool CloseOk = true;
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
         {
             var path = req.RequestUri!.AbsolutePath;
@@ -104,7 +107,9 @@ public class DemoPaperExecutionTests
             {
                 CloseCalls++;
                 LastClosePath = path;
-                r = Json(new { ok = true, retcode = 10009, retcode_name = "TRADE_RETCODE_DONE", deal = 777 });
+                r = CloseOk
+                    ? Json(new { ok = true, retcode = 10009, retcode_name = "TRADE_RETCODE_DONE", deal = 777 })
+                    : Json(new { ok = false, retcode = 10019, retcode_name = "TRADE_RETCODE_NO_MONEY", deal = (long?)null });
             }
             else if (path.EndsWith("/modify"))
             {
@@ -655,14 +660,18 @@ public class DemoPaperExecutionTests
                 await Task.Delay(50);
             }
             Assert.NotEmpty(bodies);
-            Assert.Contains("Profit floor breached", bodies[0]);
+            // Since PR hard-floor: a breach no longer merely alerts — the
+            // 🚨 alert fires WITH the submitted hard exit (and this fake
+            // position also survives the ensemble, so the guard drove it).
+            Assert.Contains("HARD PROFIT FLOOR BREACH", bodies[0]);
             Assert.Contains("444", bodies[0]);
             Assert.Contains("embeds", bodies[0]);   // Discord shape
 
-            // The journal marker the evidence chain reads is unchanged.
+            // The FX_FLOOR command trail exists; the advisory FX_RISK row
+            // is belt-and-braces only.
             journal.Flush();
             Assert.Contains(journal.GetRecent(null, 200), e =>
-                e.Category == "FX_RISK" && e.Details.Contains("breached"));
+                e.Category == "FX_FLOOR" && e.Details.Contains("EXIT SUBMITTED"));
         }
         finally
         {
@@ -749,11 +758,15 @@ public class DemoPaperExecutionTests
             Assert.Contains(journal.GetRecent(null, 200), e =>
                 e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
 
-            // Crossed (cycle 2): the rung banks once through the Exit
-            // Brain's close path, journaled as TP1-EXEC under FX_PROFIT.
+            // Crossed (cycle 2): the rung banks once — AND the hard floor
+            // (armed by this trade's own FX_PROFIT row: peak ≈ +22R → a
+            // high never-down floor) fires its full close the SAME cycle.
+            // Priority in action: the prototype banks its rung; the hard
+            // risk constraint still takes the whole position. Two closes,
+            // one per layer, exactly once each.
             script.Positions = At(1.1700, 220.0);
             await host.RunCycleAsync();
-            Assert.Equal(1, script.CloseCalls);
+            Assert.Equal(2, script.CloseCalls);
             journal.Flush();
             // At +22R the plan is the strong-continuation variant (15/20/25/40)
             // and 0.15 lots snaps DOWN to the venue's 0.1 step.
@@ -761,15 +774,138 @@ public class DemoPaperExecutionTests
                 e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC: banked 0.1 lots (15% plan)"));
             Assert.Contains(journal.GetRecent(null, 200), e =>
                 e.Category == "FX_PROFIT" && e.Details.Contains("\"PlanPct\":15"));
+            // The hard floor's close is on the trail too.
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
 
-            // Once per ticket: the next cycle must not re-bank.
+            // Once per ticket per layer: the next cycle must not re-bank
+            // the rung nor re-fire the floor (the position is gone; the
+            // guard reconciles to EXIT_CONFIRMED on the agreeing reads).
+            script.Positions = Array.Empty<object>();
             await host.RunCycleAsync();
-            Assert.Equal(1, script.CloseCalls);
+            Assert.Equal(2, script.CloseCalls);
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
         }
         finally
         {
             FxEngineHost.ExecuteTp1Partials = false;   // never leak into other tests
         }
+    }
+
+    // ── the HARD PROFIT FLOOR: the guard commands, the ensemble cannot veto ──
+
+    /// <summary>A position deep past its restored floor (the screenshot
+    /// scenario: peak 12.4R, floor 8.2R restored from a prior FX_PROFIT
+    /// row, price now +5.4R).</summary>
+    private BridgeScript FloorBreachScript() => new()
+    {
+        Positions = new object[]
+        {
+            new { ticket = 555L, symbol = "XAUUSDmicro", side = "buy", volume = 1.0,
+                  price_open = 1.1480, price_current = 1.1582, profit = 102.0,
+                  sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+        },
+    };
+
+    [Fact]
+    public async Task Hard_Floor_Breach_Closes_The_Position_That_The_Ensemble_Would_Hold()
+    {
+        var journal = NewJournal();
+        // The prior FX_PROFIT row arms the guard's floor at 8.2R (peak
+        // 12.4R); the venue position sits at ~+3.4R (executable 1.1582 vs
+        // entry 1.1480 over the sized stop ~0.003) — through the floor.
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L,
+            State = "PROFIT_PROTECTED",
+            PeakR = 12.4,
+            MaeR = 0.4,
+            FloorR = 8.2,
+            GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var script = FloorBreachScript();
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        // THE FIX: the guard's close (full position) went out — the exact
+        // close the ensemble's HOLD vote refused to make for two days.
+        Assert.Equal(1, script.CloseCalls);
+
+        journal.Flush();
+        var entries = journal.GetRecent(null, 400);
+        // The command trail, verbatim: BREACH → SUBMITTED, FX_FLOOR rows.
+        Assert.Contains(entries, e => e.Category == "FX_FLOOR"
+            && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
+        Assert.Contains(entries, e => e.Category == "FX_FLOOR"
+            && e.Details.Contains("PROFIT FLOOR EXIT SUBMITTED"));
+        // The ensemble's HOLD is recorded as evidence, not obeyed.
+        Assert.Contains(entries, e => e.Category == "FX_EXIT"
+            && e.Details.Contains("hold") && e.Details.Contains("#555"));
+    }
+
+    [Fact]
+    public async Task Hard_Floor_Breach_Retries_After_Rejection_And_Stays_Protected()
+    {
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L, State = "PROFIT_PROTECTED", PeakR = 12.4,
+            MaeR = 0.4, FloorR = 8.2, GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var script = FloorBreachScript();
+        script.CloseOk = false;   // the broker refuses every attempt
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        // The retry ladder fired MaxSubmitAttempts times in-cycle.
+        Assert.Equal(Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts, script.CloseCalls);
+
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("PROFIT FLOOR EXIT FAILED"));
+        // Protection survives: the guard keeps the ticket in its command
+        // pipeline (the next cycle re-queues the exit).
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("protection remains active"));
+    }
+
+    [Fact]
+    public async Task Hard_Floor_Confirms_Only_On_Broker_Reconciliation()
+    {
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L, State = "PROFIT_PROTECTED", PeakR = 12.4,
+            MaeR = 0.4, FloorR = 8.2, GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var script = FloorBreachScript();
+        var host = NewHost(script, journal);
+
+        // Cycle 1: breach → submit. The venue still lists the position in
+        // the SAME cycle's reads, so nothing may claim confirmation yet.
+        await host.RunCycleAsync();
+        Assert.Equal(1, script.CloseCalls);
+        journal.Flush();
+        Assert.DoesNotContain(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+
+        // Cycle 2: the position vanished from the venue — only NOW is the
+        // exit confirmed (broker reconciliation, not assumed execution).
+        script.Positions = Array.Empty<object>();
+        await host.RunCycleAsync();
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
     }
 
     [Fact]
