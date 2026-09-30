@@ -1,5 +1,8 @@
 # Demo soak evidence
 
+> **Index:** promotion cases, incidents, and summaries are listed
+> [at the bottom](#index--promotion-cases-incidents-summaries) — one line each.
+
 Reports recorded by `scripts/soak_report.py --record docs/soak` after a demo
 session with the released app — one file per UTC day (`SOAK-YYYY-MM-DD.md`,
 overwritten on re-runs; the accumulation **is** the trend).
@@ -40,3 +43,66 @@ do not edit rows by hand.
 | 2026-09-21 | 276 | 0 | 0 | CLEAN |
 | 2026-09-19 | 73 | 0 | 0 | CLEAN |
 <!-- soak-trend:end -->
+
+## Index — promotion cases, incidents, summaries
+
+Everything else in this directory, one line each. Read the arc top-down;
+the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
+
+**The arc**
+
+- [WEEK-ONE-SUMMARY-2026-09-30.md](WEEK-ONE-SUMMARY-2026-09-30.md) — the
+  whole profit-capture arc: 0% → 22% capture, five verified saves
+  (~46R prevented), the hard floor's first commanded and confirmed exits,
+  with the PR-by-PR build table.
+- [PROFIT-FLOOR-2026-09-29.md](PROFIT-FLOOR-2026-09-29.md) — the origin:
+  score-0 ensemble diagnosis, the +20.25R round-trip backtest, and the
+  gate that became the profit-floor override tier.
+- [WEEK-TWO-TP1-LOG.md](WEEK-TWO-TP1-LOG.md) — week two opens: the TP1
+  partials watch, the grading runbook for the first armed ticket, and the
+  graded-ticket table (empty until the first live TP1-ARM).
+
+**Promotion cases (evidence bars for engine weights)**
+
+- [GIVEBACK-PROMOTION-CASE.md](GIVEBACK-PROMOTION-CASE.md) — the shadow
+  giveback voice's bar: first-save condition MET, 43% hit at 14 settled,
+  gate is 100 trades @ 60%; reassessment triggered 2026-09-30.
+- [DRAWDOWN-PROMOTION-CASE.md](DRAWDOWN-PROMOTION-CASE.md) — the weighted-2.0
+  drawdown voice's keep/adjust/demote matrix, plus the weight-1.0 backtest
+  (5,920 evaluations, 0 exit-boundary flips) and its replay tool
+  (`../../scripts/dd_weight_backtest.py`).
+- [GIVEBACK-WEIGHT-PR-SKELETON.md](GIVEBACK-WEIGHT-PR-SKELETON.md) — the
+  DO-NOT-MERGE PR text waiting on green gates: one-line weight diff 0 → 1.0,
+  frozen thresholds, McDrill-before/after checklist.
+
+**Incidents & chronicles**
+
+- [HARD-FLOOR-INCIDENT-2026-09-30.md](HARD-FLOOR-INCIDENT-2026-09-30.md) —
+  the enforcement layer's first live engagement: two breaches, ensemble
+  hold 0/100 overridden, the reconcile-starvation bug found and fixed,
+  EXIT_CONFIRMED ×2 at 12:32.
+- [CAP-INCIDENT-2026-09-29.md](CAP-INCIDENT-2026-09-29.md) — the
+  portfolio-cap operator-precedence bug and the four layered defenses on top.
+
+**Evidence & tooling**
+
+- [MC-DRILL.md](MC-DRILL.md) — the Monte-Carlo weight-flip fire drill:
+  STABLE 6.27% baseline (2026-09-30); reruns before and after every weight
+  change.
+- [FX-LAB-WEEKLY.md](FX-LAB-WEEKLY.md) — the rolling weekly digest the app
+  appends itself (fleet capture without TP1, graded-ticket TP1 capture,
+  saves); regenerates the trend chart each post.
+- [fx-capture-trend.svg](fx-capture-trend.svg) — the capture-trend chart
+  with the amber saves-per-week overlay (PR #144).
+- [STRUCTURE-STOPS-2026-09-29.md](STRUCTURE-STOPS-2026-09-29.md) — the
+  finding that R units hugged the venue's minimum stop band, and the
+  structural-sizing fix (PR #134).
+- [STOPPED-PATH-2026-09-29.md](STOPPED-PATH-2026-09-29.md) — the
+  stopped-order path proven live after the "one ruler per trade" fix.
+
+**Daily soak reports**
+
+- `SOAK-YYYY-MM-DD.md` — machine-recorded per-day verdicts
+  (`soak_report.py --record docs/soak`, one file per UTC day, overwritten
+  on re-runs). Not listed individually: the trend table above **is** their
+  index, newest first.
