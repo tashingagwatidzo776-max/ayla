@@ -68,6 +68,19 @@ public static class FxExitBrain
     /// <summary>Drawdown engine: MAE (in R) beyond this = abnormal adverse
     /// excursion — an override-grade emergency.</summary>
     public const double MaeEmergencyR = 1.6;
+    /// <summary>Profit-floor override: a trade that peaked ≥1R and returned
+    /// to ≤ this R has ROUND-TRIPPED — the 2026-09-29 backtest's +20.25R
+    /// failure mode, promoted to the override tier (safety outranks the
+    /// consensus that failed to see it).</summary>
+    public const double ProfitFloorR = 0.2;
+    /// <summary>Giveback vote: deep give-back of a major (≥2R) peak.</summary>
+    public const double GivebackVoteRatio = 0.75;
+    /// <summary>Giveback watch: heavy give-back of a real (≥1.5R) peak.</summary>
+    public const double GivebackWatchRatio = 0.60;
+    /// <summary>Profit-floor override: deep give-back bar for a major peak
+    /// (fraction of the peak returned) — the exact bar the 2026-09-29
+    /// backtest validated against six round-trip losses.</summary>
+    public const double GivebackOverrideRatio = 0.75;
     /// <summary>Structure engine: bars scanned back for the swing.</summary>
     public const int SwingLookback = 12;
 
@@ -151,7 +164,7 @@ public static class FxExitBrain
         votes.Add(VolatilityVote(atr, atrMedian20));
         votes.Add(TimeVote(state.BarsHeld, mfeR, plR));
         votes.Add(ThesisVote(currentRegime, entryRegime, isBuy));
-        votes.Add(DrawdownVote(maeR));
+        votes.Add(DrawdownVote(maeR, mfeR, plR));
 
         // ---- Shadow engines (observation only) ----------------------------
         // Future engines ride at weight 0: journaled every cycle but never
@@ -195,6 +208,17 @@ public static class FxExitBrain
         {
             overrideEngine = "drawdown";
             overrideReason = $"MAE {maeR:0.00}R beyond the {MaeEmergencyR:0.#}R emergency bar — adverse movement is abnormal; emergency close";
+        }
+        else if ((mfeR >= 1.0 && plR <= ProfitFloorR)
+                 || (mfeR >= 2.0 && (mfeR - plR) / mfeR >= GivebackOverrideRatio))
+        {
+            // The profit-floor override: the mirror of the MAE emergency.
+            // A trade that EARNED a real peak must not hand it all back —
+            // the ensemble's structural blindness to profit-side giveback
+            // (six round-trips, +20.25R, 2026-09-29) is exactly the class
+            // of failure overrides exist to outrank.
+            overrideEngine = "profit-floor";
+            overrideReason = $"gave back a {mfeR:0.0}R peak to {plR:0.00}R — the profit floor protects what was earned; emergency close";
         }
 
         if (overrideEngine is not null)
@@ -431,14 +455,39 @@ public static class FxExitBrain
                 : $"entry regime {entry} → {current}: thesis weakened");
     }
 
-    /// <summary>Drawdown engine (ensemble voice): a full-R adverse
-    /// excursion is worth a watching brief, ramping toward the
-    /// EMERGENCY bar; beyond it the tier is an override, not a vote — safety outranks consensus.</summary>
-    private static FxExitVote DrawdownVote(double maeR) =>
-        maeR >= 1.0
+    /// <summary>Drawdown engine (ensemble voice). Two independent
+    /// evidences, one heavyweight voice: (1) adverse excursion — the
+    /// classic MAE ramp toward the emergency bar; (2) PROFIT GIVEBACK —
+    /// the 2026-09-29 backtest (docs/soak/) showed +20.25R of round-trip
+    /// losses the ensemble never voted on because every other engine is
+    /// loss-side: structure/momentum/volatility/time all see a "healthy"
+    /// trade at give-back from peak. The curve below gives the ensemble
+    /// its missing profit-side voice. Weight unchanged (2.0), so the
+    /// Monte-Carlo fingerprint gate is not triggered.</summary>
+    private static FxExitVote DrawdownVote(double maeR, double mfeR, double plR)
+    {
+        // Profit-side giveback evidence (dominates the MAE ramp when both
+        // are present — the round-trip is the emergency).
+        if (mfeR >= 1.0 && plR <= ProfitFloorR)
+        {
+            return new("drawdown", 0.95, 2.0,
+                $"round-trip: peaked {mfeR:0.0}R, now {plR:0.00}R — the move was given back");
+        }
+        if (mfeR >= 2.0 && (mfeR - plR) / mfeR >= GivebackVoteRatio)
+        {
+            return new("drawdown", 0.85, 2.0,
+                $"give-back {(mfeR - plR) / mfeR:P0} of a {mfeR:0.0}R peak — protect what remains");
+        }
+        if (mfeR >= 1.5 && (mfeR - plR) / mfeR >= GivebackWatchRatio)
+        {
+            return new("drawdown", 0.65, 2.0,
+                $"give-back {(mfeR - plR) / mfeR:P0} of a {mfeR:0.0}R peak — giveback building");
+        }
+        return maeR >= 1.0
             ? new("drawdown", Math.Min(1.0, 0.45 + (maeR - 1.0) * 1.375), 2.0,
                 $"MAE {maeR:0.00}R at full risk — watch closely")
             : new FxExitVote("drawdown", 0, 2.0, $"MAE {maeR:0.00}R within budget");
+    }
 
     /// <summary>Snapshot a position's tracking state (MFE/MAE monotone up).</summary>
     public static FxPositionState UpdateState(FxPositionState state, double currentPrice, int barsHeld)

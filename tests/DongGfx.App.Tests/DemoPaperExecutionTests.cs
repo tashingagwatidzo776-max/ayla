@@ -563,4 +563,35 @@ public class DemoPaperExecutionTests
         Assert.Equal("full", row.GetProperty("ResolvedAction").GetString());
     }
 
+    [Fact]
+    public void Profit_State_Reseeds_From_The_Journal_After_A_Restart()
+    {
+        // The restart defect (2026-09-29): peaks (16.9R) and established
+        // floors wiped on relaunch — violating the never-down law and
+        // re-arming the giveback override on a peak it could no longer
+        // see. First sighting must merge the journal's last FX_PROFIT row.
+        var journal = NewJournal();
+        var host = NewHost(new BridgeScript(), journal);
+
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 777L,
+            State = "PROFIT_EXTENDED",
+            PeakR = 6.5,
+            MaeR = 0.4,
+            FloorR = 4.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #777: reseed — {prior}");
+        journal.Flush();
+
+        var state = host.LastProfitStateFromJournal(777L);
+        Assert.NotNull(state);
+        Assert.Equal(6.5, state.Value.MfeR, 6);
+        Assert.Equal(0.4, state.Value.MaeR, 6);
+        Assert.Equal(4.0, state.Value.FloorR, 6);
+
+        // An unknown ticket is a cold start, never a crash.
+        Assert.Null(host.LastProfitStateFromJournal(999L));
+    }
+
 }
