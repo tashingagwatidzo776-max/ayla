@@ -82,3 +82,63 @@ The matrix's guard rails: the hard floor is never touched by any row
 (it is not an ensemble citizen), every demotion is recoverable (weights
 are data, reviewed back in through the same evidence bar), and no row
 fires on a sample smaller than 30 decisive settlements.
+
+## Backtest: would weight 1.0 have changed any decision? (2026-09-30)
+
+The ADJUST ↓ row's central risk question, answered against the full
+journal: replay every journaled FX_EXIT evaluation at drawdown weight
+1.0 instead of 2.0 and diff the resolver's action.
+
+**Method.** `scripts/dd_weight_backtest.py` re-scores each evaluation
+from the votes as journaled — `score = Σ(exit·w)/Σw·100`, the resolver
+bands pinned in `FxExitBrain.Resolve` (85/70/55/35) — with only the
+drawdown engine's weight moved 2.0 → 1.0. No engines are re-estimated:
+the journal stores every vote, so the replay is arithmetic on the
+recorded evidence. Two integrity probes gate every result: (a) the
+logged `Score` must reproduce from the logged weights (0 mismatches on
+this sample — no schema drift), and (b) rows whose drawdown weight is
+not the roster 2.0 are skipped rather than counterfeited (173 rows:
+unparseable + pre-roster). Override-tier rows are counted but can never
+flip — overrides bypass the resolver at score 100.
+
+**Sample.** 2026-09-28 → 09-30 journals: 5,920 resolver-tier
+evaluations + 13 override rows (9 `drawdown`, 4 `profit-floor`).
+
+**Result: weight 1.0 would not have changed a single exit decision.**
+
+- **0 exit-boundary flips** — no evaluation crossed into or out of
+  `partial`/`full` at either weight, across all 9 tickets and 5,920
+  evaluations.
+- 76 advisory-band flips (1.28%), all inside hold/monitor/tighten:
+  `monitor→hold` ×10 rows across 6 tickets, `hold→monitor` ×66 rows
+  across 3 tickets. Advisory bands never close anything by themselves.
+- **The guard-save tickets stay guard-save tickets.** 56 of the 76 flip
+  rows are #9820712902 / #9820719898 moving hold→monitor (score
+  30.84→35.07): with less drawdown weight their scores sit slightly
+  higher, but still nowhere near an exit band. The ensemble never voted
+  to exit them at 2.0 **or** 1.0 — the guard's full close was the only
+  thing that closed them, exactly the separate-layer design. (These
+  positions were later re-sighted under new tickets — #9821030910 rows
+  — which also flip only hold→monitor.)
+- The 13 override rows replay unchanged: 9 drawdown and 4 profit-floor
+  emergency closes fire identically at either weight.
+
+**Fragility read.** 11 evaluations sat within 2.0 score of a band edge —
+all at the 35 monitor edge (33–35.1); none near the 70 partial edge.
+The ensemble's exit decisions have historically had a wide margin over
+drawdown weight: drawdown voted exit = 0 in 5,746 of 5,920 evaluations
+(97%), so moving its weight mostly reshuffles a handful of nonzero
+votes (174 rows) whose ensemble context never approached an exit band.
+
+**Verdict for the matrix.** If the ADJUST ↓ trigger ever fires
+(hit 45–60%, wins concentrated in guard saves), this sample says the
+rebalance is decision-neutral on exits: the guard keeps every save, the
+ensemble's close behavior is untouched, and only advisory labels move.
+Caveats: three days of journal, an ensemble whose drawdown votes are
+almost always 0 (the interesting rows are 174), and the guard-save
+sample is two tickets. The replay must be rerun inside any ADJUST PR —
+per the matrix — with the ledger grown by whatever settles between now
+and then.
+
+Run it: `python scripts/dd_weight_backtest.py` (reads the live journal
+dir; write nothing, touch nothing).
