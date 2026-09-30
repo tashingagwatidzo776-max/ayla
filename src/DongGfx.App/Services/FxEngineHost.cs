@@ -114,6 +114,55 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
+    /// <summary>The structural R unit an engine-owned ticket was sized
+    /// with, read back from the FX_ORDER journal (the restart reseed — the
+    /// in-memory <see cref="_sizedStops"/> map dies with the process, the
+    /// journal does not). Returns the newest positive
+    /// <c>SizedStopDistance</c> for the ticket, or 0 when none exists.
+    /// Static so tests can point it at a scratch journal dir.</summary>
+    internal static double SizedStopFromJournal(string journalDir, long ticket)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(journalDir)) return 0;
+            var found = 0.0;
+            foreach (var file in System.IO.Directory.GetFiles(journalDir, "journal_*.jsonl").OrderBy(f => f))
+            {
+                foreach (var line in System.IO.File.ReadLines(file))
+                {
+                    if (!line.Contains("FX_ORDER")) continue;
+                    try
+                    {
+                        // JSON envelope first, Details payload second — the
+                        // escaped-quote raw text is never string-surgered.
+                        using var env = System.Text.Json.JsonDocument.Parse(line);
+                        if (!env.RootElement.TryGetProperty("Details", out var det)) continue;
+                        var text = det.GetString();
+                        var brace = text?.IndexOf('{') ?? -1;
+                        if (brace < 0) continue;
+                        using var doc = System.Text.Json.JsonDocument.Parse(text![brace..]);
+                        var r = doc.RootElement;
+                        var order = r.TryGetProperty("Order", out var o) && o.ValueKind == System.Text.Json.JsonValueKind.Number ? o.GetInt64() : 0;
+                        var deal = r.TryGetProperty("Deal", out var d) && d.ValueKind == System.Text.Json.JsonValueKind.Number ? d.GetInt64() : 0;
+                        if (order != ticket && deal != ticket) continue;
+                        if (r.TryGetProperty("SizedStopDistance", out var v)
+                            && v.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            var sd = v.GetDouble();
+                            if (sd > 0) found = sd;
+                        }
+                    }
+                    catch (System.Text.Json.JsonException) { }
+                }
+            }
+            return found;
+        }
+        catch
+        {
+            return 0;   // best-effort substrate
+        }
+    }
+
     /// <summary>The venue's lot geometry for <see cref="Symbol"/>, fetched
     /// once from the bridge /symbols snapshot — sizing ground truth
     /// (contract size and volume grid) instead of a price heuristic.</summary>
@@ -600,8 +649,15 @@ public sealed class FxEngineHost : IDisposable
         var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
         var mid = tick is { } t && t.Ask > 0 && t.Bid > 0 ? (t.Ask + t.Bid) / 2 : 0;
         var vspec = _venueSpec ?? Core.Fx.FxVenueSymbolSpec.Heuristic(mid);
-        var stopDistance = Core.Fx.FxExitBrain.NormalizedStopDistance(
-            decision.Signal.StopDistanceHint, vspec.StopsLevel, vspec.Point);
+        // The R unit is the stop the trade was SIZED with — the engine's
+        // structural floor (ATR-scaled) already includes the venue band, so
+        // the hint is only re-normalized when sizing ran without the bar
+        // series (EffectiveStopDistance == 0). Sizing, the placed SL and
+        // the exit brain's MAE ruler then all measure one distance.
+        var stopDistance = decision.EffectiveStopDistance > 0
+            ? decision.EffectiveStopDistance
+            : Core.Fx.FxExitBrain.NormalizedStopDistance(
+                decision.Signal.StopDistanceHint, vspec.StopsLevel, vspec.Point);
         // Anchor the stop on the side the venue will measure it from: a
         // buy's SL is checked against BID (which is below mid by half the
         // spread), a sell's against ASK — anchoring on mid once landed
@@ -640,6 +696,10 @@ public sealed class FxEngineHost : IDisposable
                 Side = side,
                 Lots = lots,
                 Sl = sl,
+                // The structural R unit the size was computed with — the
+                // restart reseed reads this back for the exit brain.
+                SizedStopDistance = Core.Fx.FxJson.Sanitize(
+                    stopDistance is { } sd ? sd : 0),
                 PaperExec = paperExec,
                 result.Retcode,
                 result.Order,
@@ -662,6 +722,13 @@ public sealed class FxEngineHost : IDisposable
             {
                 // The thesis engine needs the regime the trade was born in.
                 _entryRegimes[ticket] = decision.Regime.Regime;
+                // Remember the structural R unit: a restart must re-seed the
+                // exit brain's ruler from the journal, not from a normalized
+                // venue SL.
+                if (stopDistance is { } sdMem && sdMem > 0)
+                {
+                    _sizedStops[ticket] = sdMem;
+                }
             }
         }
 
@@ -683,6 +750,13 @@ public sealed class FxEngineHost : IDisposable
     private readonly Core.Fx.FxShadowLedger? _shadowLedger;
     private readonly Dictionary<long, Core.Fx.FxPositionState> _exitStates = new();
     private readonly Dictionary<long, Core.Fx.FxRegime> _entryRegimes = new();
+
+    /// <summary>The structural stop each engine-owned position was born
+    /// with (the SizeWithStop effective distance, journaled at dispatch).
+    /// The exit brain's R ruler must equal the sizing R unit: reading the
+    /// venue's SL instead lets MT5's min-stop normalization silently
+    /// shrink the unit and re-arm the MAE emergency on spread noise.</summary>
+    private readonly Dictionary<long, double> _sizedStops = new();
 
     /// <summary>The brain's own book: lots it currently tracks as open.
     /// A FLOOR for the portfolio exposure guard — venue reads can degrade
@@ -805,11 +879,22 @@ public sealed class FxEngineHost : IDisposable
                 // peak it can no longer see. The entry regime may still be
                 // unknown — fall back to the current regime.
                 _entryRegimes[p.Ticket] = currentRegime;
+                // R unit, in priority order: (1) the structural stop the
+                // order was SIZED with (memory or journal), (2) the venue
+                // SL, (3) the ATR fallback. Sizing and the exit brain must
+                // measure the same distance — MT5 can normalize the placed
+                // SL outward, which would otherwise shrink the R unit.
+                var sizedStop = _sizedStops.TryGetValue(p.Ticket, out var memStop) && memStop > 0
+                    ? memStop
+                    : SizedStopFromJournal(_journal.JournalDir, p.Ticket) is { } jStop && jStop > 0
+                        ? jStop
+                        : 0.0;
                 var prior = LastProfitStateFromJournal(p.Ticket);
                 st = new Core.Fx.FxPositionState(
                     p.Ticket, p.Symbol, p.Side, p.PriceOpen, p.Volume,
-                    Core.Fx.FxExitBrain.RiskPerLot(p.PriceOpen, p.Sl, double.IsNaN(atr) ? 0 : atr),
-                    MfeR: prior?.MfeR ?? 0, MaeR: prior?.MaeR ?? 0, BarsHeld: 0);
+                    Core.Fx.FxExitBrain.RiskPerLot(p.PriceOpen, sizedStop > 0 ? p.PriceOpen - sizedStop * (p.Side == "sell" ? -1 : 1) : p.Sl, double.IsNaN(atr) ? 0 : atr),
+                    MfeR: prior?.MfeR ?? 0, MaeR: prior?.MaeR ?? 0, BarsHeld: 0,
+                    InitialStopDistance: sizedStop > 0 ? sizedStop : 0);
                 if (prior is { } pr && pr.FloorR > 0)
                 {
                     _profitFloors[p.Ticket] = pr.FloorR;
@@ -875,6 +960,7 @@ public sealed class FxEngineHost : IDisposable
                     CurrentR = Core.Fx.FxJson.Sanitize(profit.CurrentR),
                     PeakR = Core.Fx.FxJson.Sanitize(profit.PeakR),
                     MaeR = Core.Fx.FxJson.Sanitize(st.MaeR),
+                    RiskPerLot = Core.Fx.FxJson.Sanitize(st.RiskPerLot),
                     GivebackPct = Core.Fx.FxJson.Sanitize(profit.GivebackPct),
                     GivebackClass = profit.GivebackClass,
                     FloorR = Core.Fx.FxJson.Sanitize(profit.FloorR),

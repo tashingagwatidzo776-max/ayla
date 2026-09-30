@@ -445,4 +445,117 @@ public class FxEngineTests
         Assert.True(engine.IsLive);
         Assert.Contains(j.Entries, e => e.Cat == "FX_MODE");
     }
+
+    // ── structural stop floor (the sizing R unit stops hugging the venue's minimum band) ──
+
+    /// <summary>A quiet, low-range series: every bar trades high−low =
+    /// 2×range around a flat close, so ATR(14) = 2×range = 3.0 at price
+    /// 4344 — far above gold's venue floor, so the floor (not the hint)
+    /// dominates.</summary>
+    private static List<FxBar> QuietBars(int n = 60, double price = 4344.0, double range = 1.5)
+    {
+        var bars = new List<FxBar>();
+        for (var i = 0; i < n; i++)
+        {
+            bars.Add(new FxBar(1790000000L + 60 * i, price, price + range, price - range, price, 100));
+        }
+        return bars;
+    }
+
+    [Fact]
+    public void Sizing_Raises_Substructure_Stop_Hints_To_The_ATR_Floor()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+
+        // Hint 0.5 is well under 1.5×ATR = 4.5: the size must be computed
+        // on the structural floor, not on the venue-floor-hugging hint.
+        // budget 200 / (4.5 × 1) = 44.4 raw → cap 1.0 → exactly 1.0.
+        var sized = engine.SizeWithStop(
+            new FxSignal("test", FxDirection.Buy, 0.8, 0.5, "sub-noise hint", 0), 4344.0, QuietBars());
+        Assert.Equal(1.0, sized.Lots, 9);
+        Assert.Equal(4.5, sized.EffectiveStopDistance, 9);
+    }
+
+    [Fact]
+    public void Sizing_Keeps_A_Fuller_Stop_Hint_And_Sizes_On_It()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+
+        // Hint 5.0 > 1.5×ATR = 4.5: the alpha spoke a wider stop and sizing
+        // honors it — the floor raises, never widens an honest hint.
+        // budget 200 / (5.0 × 1) = 40 raw → cap 1.0 → exactly 1.0.
+        var sized = engine.SizeWithStop(
+            new FxSignal("test", FxDirection.Buy, 0.8, 5.0, "structural hint", 0), 4344.0, QuietBars());
+        Assert.Equal(1.0, sized.Lots, 9);
+        Assert.Equal(5.0, sized.EffectiveStopDistance, 9);
+    }
+
+    [Fact]
+    public void Sizing_Raises_Subband_Hints_To_The_Venue_Band_But_Never_Shrinks_Above_Band_Hints()
+    {
+        var j = new RecordingJournal();
+        // EURUSD-like: venue floor 0.0020 (20 pts × 0.0001), 1.5×ATR
+        // (range 0.0005 → ATR 0.0010) = 0.0015 — both floors below the
+        // band, so the venue's forbidden band is the effective floor.
+        var engine = new FxEngine("EURUSD", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(
+            ContractSize: 100_000.0, VolumeMin: 0.01, VolumeStep: 0.01, VolumeMax: 100.0,
+            StopsLevel: 20, Point: 0.0001));
+
+        // A 1.5-pip hint sits INSIDE the forbidden band: the old path sized
+        // on 0.0015 and let the SL placement silently normalize outward —
+        // sizing and the placed stop disagreed. Now sizing happens on the
+        // band itself.
+        var subband = engine.SizeWithStop(
+            new FxSignal("test", FxDirection.Buy, 0.8, 0.0015, "sub-band hint", 0), 1.15, QuietBars(range: 0.0005));
+        Assert.Equal(0.0020, subband.EffectiveStopDistance, 9);
+
+        // And an honest above-band hint (the live 2.7-pip case) is kept —
+        // the floor raises, never shrinks.
+        var above = engine.SizeWithStop(
+            new FxSignal("test", FxDirection.Buy, 0.8, 0.0027, "the 2.7-pip hint", 0), 1.15, QuietBars(range: 0.0005));
+        Assert.Equal(0.0027, above.EffectiveStopDistance, 9);
+    }
+
+    [Fact]
+    public void Sizing_Without_Bars_Keeps_The_Legacy_Hint_Sizing()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+
+        // Legacy Size(sig, mid): no series → no structural floor — pinned
+        // behavior for every existing call site.
+        var sized = engine.SizeWithStop(
+            new FxSignal("test", FxDirection.Buy, 0.8, 0.5, "hint", 0), 4344.0, null);
+        Assert.Equal(0.5, sized.EffectiveStopDistance, 9);
+    }
+
+    [Fact]
+    public void RunOnce_Decision_Carries_The_Effective_Stop()
+    {
+        var j = new RecordingJournal();
+        var engine = new FxEngine("XAUUSDmicro", "M1", j.Add, lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.AddAlpha(new SubNoiseStub());
+        engine.SetVenueSpec(new FxVenueSymbolSpec(ContractSize: 1.0, VolumeMin: 0.1, VolumeStep: 0.1, VolumeMax: 100.0));
+
+        var bars = QuietBars();
+        var d = engine.RunOnce(new DateTimeOffset(2026, 9, 23, 18, 0, 0, TimeSpan.Zero), bars, 4344.0, 4344.3);
+
+        Assert.Equal(FxDecisionAction.PaperExecuted, d.Action);
+        Assert.Equal(4.5, d.EffectiveStopDistance, 9);
+    }
+
+    /// <summary>Speaks a sub-noise stop hint in every regime.</summary>
+    private sealed class SubNoiseStub : IFxAlpha
+    {
+        public string Name => "sub-noise-stub";
+        public FxRegime[] Regimes { get; } = [FxRegime.Trend, FxRegime.Range, FxRegime.HighVol, FxRegime.LowLiquidity, FxRegime.StandDown];
+        public FxSignal? Evaluate(IReadOnlyList<FxBar> bars, FxRegimeVerdict regime) =>
+            new(Name, FxDirection.Buy, 0.9, 0.5, "stub speaks a sub-noise hint", regime.TimeUtc);
+    }
 }

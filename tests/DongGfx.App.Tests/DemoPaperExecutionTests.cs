@@ -255,12 +255,36 @@ public class DemoPaperExecutionTests
 
         Assert.Equal(1, script.OrderCalls);
         Assert.NotNull(script.LastOrderBody);
-        // Buy 0.1 at mid 1.150015, hint = ATR(14) of the rising tape ≈
-        // 0.0006 → SL = mid − hint, ≈ 1.1494 and comfortably below entry.
-        Assert.Contains("\"sl\":1.149", script.LastOrderBody);
+        // Buy at mid ≈ 1.150015; the sized stop is the engine's structural
+        // floor — 1.5×ATR(14) of the rising tape ≈ 0.0012 (far above the
+        // hint) → SL ≈ 1.1488, comfortably below entry and clear of the
+        // venue's forbidden band.
+        Assert.Contains("\"sl\":1.148", script.LastOrderBody);
         journal.Flush();
         Assert.Contains(journal.GetRecent(null, 200),
-            e => e.Category == "FX_ORDER" && e.Details.Contains("\"Sl\":1.149"));
+            e => e.Category == "FX_ORDER" && e.Details.Contains("\"Sl\":1.148"));
+    }
+
+    [Fact]
+    public async Task Order_Journals_The_Structural_R_Unit_And_Seeds_The_Exit_Ruler()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        // The FX_ORDER row carries the R unit sizing actually used, so a
+        // restart can re-seed the exit brain's ruler from the journal.
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 200), e =>
+            e.Category == "FX_ORDER" && e.Details.Contains("\"SizedStopDistance\":0.001"));
+
+        // The static reader reproduces the unit from the journal alone —
+        // the restart-reseed path for a ticket the process has forgotten.
+        var dir = journal.JournalDir;
+        Assert.Equal(0.0012, FxEngineHost.SizedStopFromJournal(dir, 999), 9);
+        Assert.Equal(0, FxEngineHost.SizedStopFromJournal(dir, 42));
     }
 
     [Fact]

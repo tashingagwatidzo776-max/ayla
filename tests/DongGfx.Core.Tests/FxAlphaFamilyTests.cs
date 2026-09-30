@@ -285,9 +285,11 @@ public class FxEngineDecisionTests
 
         var d = engine.RunOnce(London10, TrendBars(), 2464.0, 2465.0);
 
-        // budget 200 / (0.005 x 100) = 400 -> cap 1.0 -> 1.0 lot exactly.
-        // Paper now routes to the demo venue (PaperExecuted) — the host
-        // re-verifies demo before placing; the engine's sizing is unchanged.
+        // Structural floor (1.5×ATR ≈ 0.9 on this tape) beats the 0.005
+        // hint: budget 200 / (0.9 × 100) ≈ 2.2 raw -> cap 1.0 -> 1.0 lot
+        // exactly. Paper now routes to the demo venue (PaperExecuted) — the
+        // host re-verifies demo before placing; the engine's sizing is
+        // otherwise unchanged.
         Assert.Equal(FxDecisionAction.PaperExecuted, d.Action);
         Assert.Equal(1.0, d.SuggestedLots, 9);
     }
@@ -304,7 +306,9 @@ public class FxEngineDecisionTests
         var d = engine.RunOnce(London10, TrendBars(), 2464.0, 2465.0);
 
         Assert.Equal(FxDecisionAction.Ordered, d.Action);
+        // Sized on the structural floor (1.5×ATR), not the 0.005 hint.
         Assert.InRange(d.SuggestedLots, 0.01, 1.0);
+        Assert.True(d.EffectiveStopDistance > 0.005);
     }
 
     [Fact]

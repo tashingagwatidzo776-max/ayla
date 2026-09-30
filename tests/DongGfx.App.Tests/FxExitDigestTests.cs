@@ -244,6 +244,126 @@ public class FxExitDigestTests
         Assert.Contains("### Shadow engines (promotion ledger)", md);
     }
 
+    // ── The weekly profit-capture trend ─────────────────────────────
+
+    /// <summary>An FX_EXIT entry pinned to an explicit instant (the series
+    /// groups by ISO week — relative day offsets would smear across
+    /// boundaries depending on when the suite runs).</summary>
+    private static JournalEntry ExitAt(
+        DateTimeOffset ts, string action, string? overrideEngine,
+        double maeR, double mfeR, double profitR) => new()
+    {
+        Timestamp = ts,
+        Category = "FX_EXIT",
+        Details = $"XAUUSD #42: {action} score 61 — "
+            + JsonSerializer.Serialize(new
+            {
+                Ticket = 42L,
+                Action = action,
+                Override = overrideEngine,
+                MfeR = mfeR,
+                MaeR = maeR,
+                ProfitR = profitR,
+            }),
+    };
+
+    [Fact]
+    public void CaptureSeries_Groups_Decisive_Exits_By_Iso_Week()
+    {
+        // W39: two decisive exits bank 3R of 5R available = 60%.
+        // W40: one drawdown override banks 4R of 4R = 100%.
+        // Noise that must never count: a hold (no exit), a decisive exit
+        // with sub-0.5R MFE, a close confirmation with no Action.
+        var w39 = new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero);
+        var w40 = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
+        var entries = new List<JournalEntry>
+        {
+            ExitAt(w39, "full", null, 0.2, 3.0, 1.0),
+            ExitAt(w39, "partial", null, 0.2, 2.0, 2.0),
+            ExitAt(w40, "hold", null, 0.1, 9.0, 0.0),
+            ExitAt(w40, "full", null, 0.1, 0.4, 0.4),
+            ExitAt(w40, string.Empty, null, 0.0, 0.0, 0.0),
+            ExitAt(w40, "full", "drawdown", 1.7, 4.0, 4.0),
+        };
+
+        var series = FxExitWeeklyDigest.WeeklyCaptureSeries(entries);
+
+        Assert.Equal(2, series.Count);
+        Assert.Equal("ISO 2026-W39", series[0].Label);
+        Assert.Equal(2, series[0].Trades);
+        Assert.Equal(3.0, series[0].CapturedR, 6);
+        Assert.Equal(5.0, series[0].AvailableR, 6);
+        Assert.Equal(0.6, series[0].CaptureRatio, 6);
+        Assert.Equal(1, series[1].Trades);
+        Assert.Equal(1.0, series[1].CaptureRatio, 6);
+    }
+
+    [Fact]
+    public void IsoWeek_Handles_The_Year_Boundaries_Correctly()
+    {
+        // Hand-checked against the ISO-8601 calendar: 2026-W01 begins
+        // Mon 2025-12-29, and 2026 is a 53-week year (2027-W01 begins
+        // Mon 2027-01-04) — the year follows the week's THURSDAY.
+        Assert.Equal((2026, 1), FxExitWeeklyDigest.IsoWeek(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Equal((2026, 1), FxExitWeeklyDigest.IsoWeek(new DateTimeOffset(2025, 12, 30, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Equal((2026, 53), FxExitWeeklyDigest.IsoWeek(new DateTimeOffset(2026, 12, 31, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Equal((2026, 53), FxExitWeeklyDigest.IsoWeek(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Equal((2027, 1), FxExitWeeklyDigest.IsoWeek(new DateTimeOffset(2027, 1, 4, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Equal((2026, 39), FxExitWeeklyDigest.IsoWeek(new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Equal((2026, 40), FxExitWeeklyDigest.IsoWeek(new DateTimeOffset(2026, 9, 29, 0, 0, 0, TimeSpan.Zero)));
+    }
+
+    [Fact]
+    public void CaptureTrend_Renders_Sparkline_And_Empty_State()
+    {
+        var w39 = new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero);
+        var w40 = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
+        var entries = new List<JournalEntry>
+        {
+            ExitAt(w39, "full", null, 0.2, 3.0, 1.0),
+            ExitAt(w40, "full", "drawdown", 1.7, 4.0, 4.0),
+        };
+
+        var md = FxExitWeeklyDigest.CaptureTrendMarkdown(entries);
+        Assert.Contains("### Profit-capture trend", md);
+        Assert.Contains("ISO 2026-W39 33%", md);
+        Assert.Contains("ISO 2026-W40 100%", md);
+        Assert.Contains("spark: ", md);
+        // Two distinct values must map to distinct sparkline blocks.
+        var spark = md.Split("spark: ")[1].Split('\n')[0].Trim();
+        Assert.NotEqual(spark[0], spark[1]);
+
+        var empty = FxExitWeeklyDigest.CaptureTrendMarkdown([]);
+        Assert.Contains("no decisive exits with meaningful MFE yet", empty);
+    }
+
+    [Fact]
+    public void CaptureTrendSvg_Writes_A_SelfContained_Chart_And_Survives_A_Bad_Directory()
+    {
+        var w39 = new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero);
+        var w40 = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
+        var entries = new List<JournalEntry>
+        {
+            ExitAt(w39, "full", null, 0.2, 3.0, 1.0),
+            ExitAt(w40, "partial", null, 0.3, 2.0, 1.5),
+        };
+
+        var dir = Path.Combine(Path.GetTempPath(), "dg-capture-svg", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = FxExitWeeklyDigest.WriteCaptureTrendSvg(entries, dir);
+
+        Assert.NotNull(path);
+        var svg = File.ReadAllText(path!);
+        Assert.StartsWith("<svg xmlns=", svg);
+        Assert.Contains("ISO 2026-W39", svg);
+        Assert.Contains("ISO 2026-W40", svg);
+        Assert.Contains("fill=\"#2e7d32\"", svg);
+
+        // No series → no chart; an unwritable directory never throws.
+        Assert.Null(FxExitWeeklyDigest.WriteCaptureTrendSvg([], dir));
+        Assert.Null(FxExitWeeklyDigest.WriteCaptureTrendSvg(entries, Path.Combine(dir, "missing", "deeper")));
+    }
+
     // ── The promotion ledger ─────────────────────────────────────────
 
     [Fact]

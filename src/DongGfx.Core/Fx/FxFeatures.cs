@@ -71,6 +71,10 @@ public static class FxFeatures
         return 100 - 100 / (1 + rs);
     }
 
+    /// <summary>Minimum bars ATR(period) responds to at all (period + 1).
+    /// Callers that want a real reading — not the NaN stub — need more.</summary>
+    public const int AtrMinBars = 15;
+
     /// <summary>Average True Range (Wilder), last value.</summary>
     public static double Atr(IReadOnlyList<FxBar> bars, int period = 14)
     {
