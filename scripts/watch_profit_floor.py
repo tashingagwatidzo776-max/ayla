@@ -115,10 +115,14 @@ def find_saves(rs: list[dict]) -> list[dict]:
             saves.append({**r, "ticket": p.get("Ticket"), "kind": "override"})
             continue
         for v in p.get("Votes", []):
+            reason = str(v.get("Reason", "")).lower()
             if (v.get("Engine") == "drawdown"
                     and isinstance(v.get("Exit"), (int, float))
                     and v["Exit"] >= GIVEBACK_VOTE_MIN
-                    and "gave back" in str(v.get("Reason", "")).lower()):
+                    # Marker strings mirror FxExitBrain.DrawdownVote's
+                    # reasons: "the move was given back" (round-trip vote)
+                    # and "give-back ... of a peak" (deep-giveback vote).
+                    and ("given back" in reason or "give-back" in reason)):
                 saves.append({**r, "ticket": p.get("Ticket"), "kind": "vote"})
                 break
     return saves

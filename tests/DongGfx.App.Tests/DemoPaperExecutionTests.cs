@@ -588,6 +588,130 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Floor_Breach_Alerts_The_Webhook_In_Process()
+    {
+        var (listener, port) = TestHttpListenerFactory.CreateOnFreeLoopbackPort();
+        var bodies = new List<string>();
+        using var cts = new CancellationTokenSource();
+        var capture = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await listener.GetContextAsync().WaitAsync(cts.Token); }
+                catch { return; }
+                using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
+                var body = await reader.ReadToEndAsync(cts.Token);
+                lock (bodies) { bodies.Add(body); }
+                ctx.Response.StatusCode = 204;
+                ctx.Response.Close();
+            }
+        });
+        try
+        {
+            var journal = NewJournal();
+            // A prior FX_PROFIT row (the restart-reseed substrate) arms the
+            // position's never-down floor at 4.0R; the venue position sits
+            // near entry, so the FIRST cycle reads current ~0.1R < floor —
+            // a genuine breach without waiting for a peak to build.
+            var prior = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Ticket = 444L,
+                State = "PROFIT_PROTECTED",
+                PeakR = 6.5,
+                MaeR = 0.4,
+                FloorR = 4.0,
+                GivebackPct = 38.0,
+            });
+            journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #444: prior — {prior}");
+            journal.Flush();
+            var script = new BridgeScript
+            {
+                Positions = new object[]
+                {
+                    new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                          price_open = 1.1480, price_current = 1.1482, profit = 2.0,
+                          sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+                },
+            };
+            using var webhook = new WebhookService(TimeSpan.FromSeconds(30))
+            {
+                WebhookUrl = $"http://127.0.0.1:{port}/hook",
+                MinInterval = TimeSpan.Zero,
+            };
+            var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
+            var host = new FxEngineHost(
+                client, journal, "XAUUSDmicro",
+                killSwitchEngaged: () => false,
+                lotsCap: () => 1.00m,
+                realMoneyUnlocked: () => false,
+                webhook: webhook);
+
+            await host.RunCycleAsync();
+
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (DateTime.UtcNow < deadline && bodies.Count == 0)
+            {
+                await Task.Delay(50);
+            }
+            Assert.NotEmpty(bodies);
+            Assert.Contains("Profit floor breached", bodies[0]);
+            Assert.Contains("444", bodies[0]);
+            Assert.Contains("embeds", bodies[0]);   // Discord shape
+
+            // The journal marker the evidence chain reads is unchanged.
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_RISK" && e.Details.Contains("breached"));
+        }
+        finally
+        {
+            cts.Cancel();
+            try { listener.Close(); } catch { /* best effort */ }
+            GC.KeepAlive(capture);
+        }
+    }
+
+    [Fact]
+    public void Shadow_Ledger_Credits_The_Giveback_Evidence_On_A_Verified_Save()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "dg-shadow", Guid.NewGuid().ToString("N") + ".jsonl");
+        var ledger = new FxShadowLedger(path);
+
+        var save = new FxExitDecision(9, "full", 100,
+            new[] { new FxExitVote("drawdown", 0.95, 2.0,
+                "round-trip: peaked 8.0R, now +0.10R — the move was given back") },
+            0, 0, 8.0, 0, 0.1, "profit-floor", "gave back a peak");
+        var shadows = new List<FxExitVote>
+        {
+            FxEngineHost.GivebackShadowVote(save),
+        };
+        ledger.Append(9, "XAUUSDmicro", shadows, "full", won: true, DateTimeOffset.UtcNow, save);
+
+        var rows = ledger.Summarize().ToDictionary(r => r.Engine);
+        Assert.Equal(1, rows["giveback"].Helped);
+        Assert.Equal(1.0, rows["giveback"].HitRate, 6);
+    }
+
+    [Fact]
+    public void Giveback_Shadow_Vote_Mirrors_The_Drawdown_Evidence()
+    {
+        var decided = new FxExitDecision(1, "full", 100,
+            new[] { new FxExitVote("drawdown", 0.85, 2.0,
+                "give-back 81% of a 8.0R peak — protect what remains") },
+            0, 0, 8.0, 0, 1.5, null, "ensemble full");
+        var vote = FxEngineHost.GivebackShadowVote(decided);
+        Assert.Equal("giveback", vote.Engine);
+        Assert.Equal(0, vote.Weight, 6);
+        Assert.Equal(0.85, vote.Exit, 6);
+        Assert.Contains("give-back 81%", vote.Reason);
+
+        var noEvidence = FxEngineHost.GivebackShadowVote(new FxExitDecision(
+            1, "hold", 0, Array.Empty<FxExitVote>(), 0, 0, 0, 0, 0, null, ""));
+        Assert.Equal(0, noEvidence.Exit, 6);
+    }
+
+    [Fact]
     public void Profit_State_Reseeds_From_The_Journal_After_A_Restart()
     {
         // The restart defect (2026-09-29): peaks (16.9R) and established

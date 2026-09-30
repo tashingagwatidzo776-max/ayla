@@ -100,8 +100,10 @@ def profit_row(ts, ticket, peak, cur, gb):
 
 
 def vote_save(mfe=8.0, cur=1.5):
+    # Mirrors FxExitBrain.DrawdownVote's deep-giveback reason verbatim.
     return {"Engine": "drawdown", "Exit": 0.85, "Weight": 1.0,
-            "Reason": f"gave back a {mfe:.1f}R peak to +{cur:.2f}R"}
+            "Reason": f"give-back {(mfe - cur) / mfe:.0%} of a {mfe:.1f}R peak "
+                      "— protect what remains"}
 
 
 def test_healthy_book_exits_zero():

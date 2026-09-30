@@ -210,6 +210,11 @@ public sealed class FxEngineHost : IDisposable
     /// this seam.</summary>
     private readonly Func<DateTimeOffset> _clock;
 
+    /// <summary>The portfolio's shared webhook (null in bare tests): breach
+    /// alerts are in-process and instant, minutes before the scheduled
+    /// watcher can confirm the close.</summary>
+    private readonly WebhookService? _webhook;
+
     public FxEngineHost(
         Mt5BridgeClient mt5,
         TradeJournal journal,
@@ -237,6 +242,7 @@ public sealed class FxEngineHost : IDisposable
         _newsVeto = newsVeto;
         _mt5 = mt5;
         _journal = journal;
+        _webhook = webhook;
         Symbol = symbol;
         _killSwitchEngaged = killSwitchEngaged;
         _lotsCap = lotsCap;
@@ -1008,10 +1014,18 @@ public sealed class FxEngineHost : IDisposable
             {
                 // The floor was crossed: request an Exit Brain evaluation on
                 // the next cycle's evidence. Journal-only — the Exit Brain
-                // (with its own overrides) still owns the decision.
+                // (with its own overrides) still owns the decision. The
+                // webhook fires NOW (in-process, minutes before the close
+                // the scheduled watcher can only confirm afterwards); the
+                // journal marker lets a pass dedup repeat breaches.
                 Journal("FX_RISK",
                     $"{p.Symbol} #{p.Ticket}: profit floor {profit.FloorR:0.0}R breached " +
                     $"(current {profit.CurrentR:0.0}R) — exit evaluation requested", "{}");
+                _webhook?.PostRiskRail(
+                    $"🛟 Profit floor breached — #{p.Ticket}",
+                    $"{p.Symbol} gave back to {profit.CurrentR:+0.0;-0.0}R below its " +
+                    $"{profit.FloorR:0.0}R floor (peak {profit.PeakR:0.0}R). " +
+                    $"Exit evaluation requested — the never-down floor protects what was earned.");
             }
 
             if (decision.Action == "full"
@@ -1040,11 +1054,16 @@ public sealed class FxEngineHost : IDisposable
                     // the same evidence bar must confirm or bury.
                     var shadow = decision.Votes.Where(v => v.Weight == 0).ToList();
                     shadow.Add(profit.TargetTpVote);
+                    // The giveback shadow voice rides the final evaluation
+                    // too, so a profit-floor SAVE can credit it (the plain
+                    // votes list above carries weight-0 engines only).
+                    shadow.Add(GivebackShadowVote(decision));
                     var won = decision.ProfitR > 0;
                     _shadowLedger?.Append(
                         p.Ticket, p.Symbol,
                         shadow,
-                        decision.Action, won, DateTimeOffset.UtcNow);
+                        decision.Action, won, DateTimeOffset.UtcNow,
+                        decision);
                     _exitStates.Remove(p.Ticket);
                     _entryRegimes.Remove(p.Ticket);
                     _profitFloors.Remove(p.Ticket);
@@ -1095,6 +1114,19 @@ public sealed class FxEngineHost : IDisposable
     {
         var step = _venueSpec is { } spec && spec.VolumeStep > 0 ? spec.VolumeStep : 0.01;
         return Math.Round(Math.Max(step, Math.Round(lots / step) * step), 2);
+    }
+
+    /// <summary>The giveback engine's weight-0 shadow voice, reconstructed
+    /// from the settled decision's final evidence so a profit-floor SAVE
+    /// can credit the shadow ledger's giveback row (the ensemble's vote list
+    /// carries weighted engines only at close time).</summary>
+    internal static FxExitVote GivebackShadowVote(FxExitDecision decision)
+    {
+        var dd = decision.Votes.FirstOrDefault(v => v.Engine == "drawdown");
+        return dd is not null
+            ? new FxExitVote("giveback", dd.Exit, 0,
+                $"giveback (shadow, settled): mirror of the drawdown engine's final evidence — {dd.Reason}")
+            : new FxExitVote("giveback", 0, 0, "giveback (shadow, settled): no drawdown evidence in the final evaluation");
     }
 
     /// <summary>Pip-size heuristic for the spread override (gold-like 0.1,
