@@ -769,6 +769,15 @@ public sealed class FxEngineHost : IDisposable
     /// always projects ahead of price, so execution waits for the cross.</summary>
     private readonly Dictionary<long, double> _tp1ArmedTickets = new();
 
+    /// <summary>The per-ticket HARD PROFIT FLOOR guards (the independent
+    /// risk-control layer): a breached never-down floor COMMANDS a full
+    /// exit no ensemble vote can veto.</summary>
+    private readonly Dictionary<long, Core.Fx.FxProfitFloorGuard> _floorGuards = new();
+
+    /// <summary>Tickets whose 🛡️ ARMED notification already fired — the
+    /// alert-once law (spec §10): alerts ride STATE CHANGES, not ticks.</summary>
+    private readonly HashSet<long> _floorArmedAlerted = new();
+
     /// <summary>Tickets whose TP1 rung has already been banked (or
     /// attempted) — one execution per ticket, per process lifetime.</summary>
     private readonly HashSet<long> _tp1ExecutedTickets = new();
@@ -874,12 +883,18 @@ public sealed class FxEngineHost : IDisposable
             var owned = positions
                 .Where(p => Core.Fx.FxExitBrain.Owns(p.Comment) && p.Symbol == Symbol)
                 .ToList();
-        if (owned.Count == 0)
+        if (owned.Count == 0 && _floorGuards.Count == 0)
         {
+            // Nothing to manage AND no floor protection in flight. When a
+            // guard EXISTS, the pass continues even with an empty book: the
+            // submitted-exit reconciliation below is how an exit becomes
+            // EXIT_CONFIRMED — skipping it on the very cycle the position
+            // vanished would leave protection unconfirmed forever.
             return;
         }
 
-        var atr = bars.Count >= 15 ? Core.Fx.FxFeatures.Atr(bars, 14) : double.NaN;
+        var atr = owned.Count > 0 && bars.Count >= 15
+            ? Core.Fx.FxFeatures.Atr(bars, 14) : double.NaN;
         var atrMedian = Core.Fx.FxFeatures.AtrMedian(bars, 20);
         var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
         var tick = await _mt5.GetTickAsync(Symbol).ConfigureAwait(true);
@@ -928,6 +943,110 @@ public sealed class FxEngineHost : IDisposable
             _exitStates[p.Ticket] = st;
             var entryRegime = _entryRegimes[p.Ticket];
 
+            // ── THE HARD PROFIT FLOOR (independent risk-control layer) ──
+            // The guard runs BEFORE the ensemble: a breached never-down
+            // floor COMMANDS a full exit that no HOLD vote, regime engine,
+            // or model consensus can veto (the ensemble's decision for a
+            // command-locked ticket is demoted to telemetry). The breach is
+            // measured on the EXECUTABLE price (bid for longs, ask for
+            // shorts) against the ORIGINAL risk baseline, fires exactly
+            // once per breach event, retries on broker refusal, and is
+            // confirmed only by broker reconciliation.
+            if (!_floorGuards.TryGetValue(p.Ticket, out var guard))
+            {
+                guard = new Core.Fx.FxProfitFloorGuard(p.Ticket, p.Symbol, p.Side);
+                if (_profitFloors.TryGetValue(p.Ticket, out var restoredFloor) && restoredFloor > 0)
+                {
+                    // A floor restored from the journal (restart reseed or
+                    // earlier cycles) re-enters the machine already locked.
+                    guard.Advance(double.MaxValue, restoredFloor, restoredFloor);
+                }
+                _floorGuards[p.Ticket] = guard;
+            }
+
+            // The executable price: a long exits at the BID, a short at the
+            // ASK (the venue will fill the close there) — never the mid.
+            var executablePrice = tick is { } tk && tk.Ask > 0 && tk.Bid > 0
+                ? (st.Side == "buy" ? tk.Bid : tk.Ask)
+                : price;
+            var executableR = st.Side == "buy"
+                ? (executablePrice - st.EntryPrice) / Math.Max(st.RiskPerLot, 1e-9)
+                : (st.EntryPrice - executablePrice) / Math.Max(st.RiskPerLot, 1e-9);
+
+            var guardVerdict = guard.Advance(executableR,
+                _profitFloors.TryGetValue(p.Ticket, out var modelFloor) ? modelFloor : 0.0,
+                Math.Max(st.MfeR, executableR));
+
+            if (guardVerdict.Command == Core.Fx.FxFloorCommand.ExecuteExit)
+            {
+                Journal("FX_FLOOR",
+                    $"{p.Symbol} #{p.Ticket}: {guardVerdict.Reason}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = p.Ticket,
+                        Symbol = p.Symbol,
+                        Direction = p.Side,
+                        OriginalRisk = Core.Fx.FxJson.Sanitize(st.RiskPerLot),
+                        CurrentR = Core.Fx.FxJson.Sanitize(guardVerdict.ExecutableR),
+                        PeakR = Core.Fx.FxJson.Sanitize(guardVerdict.PeakR),
+                        ProtectedFloorR = Core.Fx.FxJson.Sanitize(guardVerdict.FloorR),
+                        ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
+                        FloorState = guardVerdict.State.ToString(),
+                        EventId = guardVerdict.EventId,
+                        ExitReason = "hard profit floor breach",
+                    }));
+
+                // Submit with an in-cycle retry ladder; reconciliation and
+                // any further retries continue on the next cycle.
+                for (var attempt = 1; attempt <= Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts; attempt++)
+                {
+                    var close = await _mt5.ClosePositionAsync(p.Ticket, null).ConfigureAwait(true);
+                    if (close.Ok)
+                    {
+                        guard.MarkSubmitted(close.Order?.ToString() ?? close.Deal?.ToString() ?? "?");
+                        _webhook?.PostRiskRail(
+                            $"🚨 HARD PROFIT FLOOR BREACH — #{p.Ticket}",
+                            $"{p.Symbol} | Current: {guardVerdict.ExecutableR:+0.0;-0.0}R | Floor: {guardVerdict.FloorR:0.0}R " +
+                            $"(peak {guardVerdict.PeakR:0.0}R). Hard exit submitted (deal {close.Deal ?? close.Order}).");
+                        Journal("FX_FLOOR",
+                            $"{p.Symbol} #{p.Ticket}: PROFIT FLOOR EXIT SUBMITTED — deal {close.Deal ?? close.Order} " +
+                            $"(event {guardVerdict.EventId}, attempt {attempt})",
+                            System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                Ticket = p.Ticket,
+                                EventId = guardVerdict.EventId,
+                                ExitOrderId = close.Order,
+                                Deal = close.Deal,
+                                BrokerResponse = close.RetcodeName,
+                                Attempt = attempt,
+                                ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
+                            }));
+                        break;
+                    }
+
+                    Journal("FX_FLOOR",
+                        $"{p.Symbol} #{p.Ticket}: PROFIT FLOOR EXIT FAILED — {close.RetcodeName} " +
+                        $"(attempt {attempt}/{Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts}); protection remains active, retrying",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Ticket = p.Ticket,
+                            EventId = guardVerdict.EventId,
+                            BrokerResponse = close.RetcodeName,
+                            Attempt = attempt,
+                        }));
+                }
+
+                if (guard.State != Core.Fx.FxFloorState.ExitSubmitted)
+                {
+                    guard.MarkFailed();
+                    _webhook?.PostRiskRail(
+                        $"❌ PROFIT FLOOR EXIT FAILED — #{p.Ticket}",
+                        $"{p.Symbol} | All {Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts} submit attempts refused. " +
+                        $"Protection remains active at {guardVerdict.FloorR:0.0}R — retrying next cycle. NEVER reverting to HOLD.");
+                }
+            }
+
+
             var decision = Core.Fx.FxExitBrain.Evaluate(
                 st, price, p.Volume,
                 double.IsNaN(atr) ? 0 : atr, atrMedian,
@@ -957,6 +1076,18 @@ public sealed class FxEngineHost : IDisposable
                         Reason = v.Reason,
                     }).ToList(),
                 }));
+
+            // COMMAND LOCK: while the floor's exit is in flight, the
+            // ensemble may not act on this ticket — its decision is demoted
+            // to telemetry (the FX_EXIT row above still records the true
+            // opinion). A recommendation can be rejected; a hard risk
+            // constraint cannot be.
+            if (guardVerdict.State is Core.Fx.FxFloorState.ExitPending
+                or Core.Fx.FxFloorState.ExitSubmitted
+                or Core.Fx.FxFloorState.ExitFailed)
+            {
+                decision = decision with { Action = "hold", Reason = "telemetry only — hard profit floor owns this ticket" };
+            }
 
             // HWARANG Profit Brain — ADVISORY ONLY. It computes the target
             // ladder, probabilities, giveback classification, and the
@@ -1026,22 +1157,30 @@ public sealed class FxEngineHost : IDisposable
                     TrailingMode = profit.TrailingMode,
                     ProfitScore = Core.Fx.FxJson.Sanitize(profit.ProfitScore),
                 }));
-            if (profit.FloorBreached)
+            // Floor telemetry (the ALERT-ONLY era is over: the guard above
+            // COMMANDS the exit; this row + a single ARMED notification are
+            // evidence, not enforcement).
+            if (profit.FloorR > 0 && guard.State == Core.Fx.FxFloorState.Protected)
             {
-                // The floor was crossed: request an Exit Brain evaluation on
-                // the next cycle's evidence. Journal-only — the Exit Brain
-                // (with its own overrides) still owns the decision. The
-                // webhook fires NOW (in-process, minutes before the close
-                // the scheduled watcher can only confirm afterwards); the
-                // journal marker lets a pass dedup repeat breaches.
+                var justArmed = _floorArmedAlerted.Add(p.Ticket);
+                if (justArmed)
+                {
+                    Journal("FX_FLOOR",
+                        $"{p.Symbol} #{p.Ticket}: PROFIT FLOOR ARMED — protected floor {profit.FloorR:0.0}R " +
+                        $"(peak {profit.PeakR:0.0}R, current {profit.CurrentR:+0.0;-0.0}R)", "{}");
+                    _webhook?.PostRiskRail(
+                        $"🛡️ PROFIT FLOOR ARMED — #{p.Ticket}",
+                        $"{p.Symbol} | Peak: {profit.PeakR:+0.0;-0.0}R | Protected: {profit.FloorR:0.0}R");
+                }
+            }
+            if (profit.FloorBreached && guard.State == Core.Fx.FxFloorState.Protected)
+            {
+                // Belt-and-braces: the advisory layer still requests an
+                // evaluation if it sees a breach the guard hasn't commanded
+                // (e.g. the model floor moved within the same cycle).
                 Journal("FX_RISK",
                     $"{p.Symbol} #{p.Ticket}: profit floor {profit.FloorR:0.0}R breached " +
                     $"(current {profit.CurrentR:0.0}R) — exit evaluation requested", "{}");
-                _webhook?.PostRiskRail(
-                    $"🛟 Profit floor breached — #{p.Ticket}",
-                    $"{p.Symbol} gave back to {profit.CurrentR:+0.0;-0.0}R below its " +
-                    $"{profit.FloorR:0.0}R floor (peak {profit.PeakR:0.0}R). " +
-                    $"Exit evaluation requested — the never-down floor protects what was earned.");
             }
 
             // ── TP1 partial prototype (gated, advisory-derived) ──────
@@ -1186,6 +1325,47 @@ public sealed class FxEngineHost : IDisposable
             {
                 _exitStates.Remove(gone);
                 _entryRegimes.Remove(gone);
+            }
+        }
+
+        // Reconciliation (§13): a floor exit is CONFIRMED only when the
+        // broker verifiably no longer holds the ticket. Two safe shapes:
+        // (a) non-empty agreeing reads that both lack the ticket — the
+        // closure is real; (b) an EMPTY book right after this guard's own
+        // close submission SUCCEEDED (the venue returned ok + deal — that
+        // response is the primary execution evidence; the agreeing empty
+        // reads corroborate). A degraded empty read alone can never invent
+        // a confirmation, because a guard only reaches ExitSubmitted through
+        // an accepted close request for that very ticket.
+        var confirmLive = confirm.Select(p => p.Ticket).ToHashSet();
+        var readsAgree = confirmLive.SetEquals(owned.Select(p => p.Ticket).ToHashSet());
+        if (readsAgree
+            && (owned.Count > 0
+                || _floorGuards.Values.Any(g => g.State == Core.Fx.FxFloorState.ExitSubmitted)))
+        {
+            foreach (var gone in _floorGuards.Keys.Where(k => !confirmLive.Contains(k)).ToList())
+            {
+                var g = _floorGuards[gone];
+                var wasSubmitted = g.State == Core.Fx.FxFloorState.ExitSubmitted;
+                g.MarkConfirmed();
+                if (wasSubmitted)
+                {
+                    Journal("FX_FLOOR",
+                        $"#{gone}: PROFIT FLOOR EXIT CONFIRMED — the broker no longer holds the ticket; giveback prevented",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Ticket = gone,
+                            EventId = g.EventId,
+                            ExitOrderId = g.ExitOrderId,
+                            FloorState = g.State.ToString(),
+                        }));
+                    _webhook?.PostRiskRail(
+                        $"✅ PROFIT FLOOR EXIT CONFIRMED — #{gone}",
+                        $"{Symbol} | Exit confirmed by broker reconciliation (floor event {g.EventId}). Giveback prevented.");
+                }
+                g.MarkReset();
+                _floorGuards.Remove(gone);
+                _floorArmedAlerted.Remove(gone);
             }
         }
     }

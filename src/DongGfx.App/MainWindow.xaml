@@ -345,6 +345,16 @@
                             <CheckBox Content="Circuit breaker events" IsChecked="{Binding SettingsVm.WebhookOnCircuitBreaker}" />
                         </StackPanel>
 
+                        <TextBlock Grid.Row="23" Grid.Column="0" Text="Prototype" Style="{StaticResource FieldLabel}" VerticalAlignment="Top"
+                                   ToolTip="Experimental execution paths, explicitly opted in" />
+                        <StackPanel Grid.Row="23" Grid.Column="1" Margin="0,0,0,10">
+                            <CheckBox Content="Execute TP1 partials (prototype)"
+                                      IsChecked="{Binding SettingsVm.FxExecuteTp1Partials}"
+                                      ToolTip="When armed: once per trade, if the trade banked at least 1R and price crosses the Profit Brain's first target, the allocation plan's percentage of the position is closed through the Exit Brain's path. Requires confirmation. Places real demo orders." />
+                            <TextBlock Text="{Binding SettingsVm.Tp1ToggleHint}" FontSize="11"
+                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+
                         <TextBlock Grid.Row="24" Grid.ColumnSpan="2" Text="LOGGING" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
                         <TextBlock Grid.Row="25" Grid.Column="0" Text="Log level" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" />
                         <ComboBox Grid.Row="25" Grid.Column="1" Margin="0,0,0,10" Width="120" HorizontalAlignment="Left"

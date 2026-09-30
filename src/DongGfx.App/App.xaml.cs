@@ -233,6 +233,28 @@ public partial class App : System.Windows.Application
         // live when this is armed (default OFF — an explicit opt-in).
         Services.FxEngineHost.ExecuteTp1Partials = settings.FxExecuteTp1Partials;
 
+        // TP1 arming: the operator's confirmation gate (fail-closed when no
+        // dialog host exists, e.g. headless/tests), plus a journal record —
+        // arming an execution path is an event worth an audit trail.
+        var settingsVm = provider.GetRequiredService<SettingsViewModel>();
+        var journal = provider.GetRequiredService<TradeJournal>();
+        settingsVm.ConfirmTp1Arm = summary =>
+        {
+            var result = System.Windows.MessageBox.Show(
+                summary + "\n\nArm TP1 partial execution?",
+                "Arm TP1 partials (prototype)",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Warning,
+                System.Windows.MessageBoxResult.No);
+            if (result == System.Windows.MessageBoxResult.Yes)
+            {
+                journal.Log(Guid.Empty, "FX_MODE",
+                    "TP1 partial execution ARMED by operator (settings toggle confirmed)", "{}");
+                return true;
+            }
+            return false;
+        };
+
         // Cycle-telemetry digest: periodically posts the live latency/error
         // digest to the same webhook trade settlements use, so monitoring
         // sees session health without anyone exporting manually. Gated by

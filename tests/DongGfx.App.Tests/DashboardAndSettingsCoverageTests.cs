@@ -2,6 +2,7 @@ using System.IO;
 using System.Threading;
 using System.Windows;
 using DongGfx.App.Infrastructure;
+using DongGfx.App.Services;
 using DongGfx.App.ViewModels;
 using DongGfx.Core.Models;
 using Xunit;
@@ -35,6 +36,46 @@ public class DashboardAndSettingsCoverageTests : IDisposable
     }
 
     // ── SettingsViewModel ─────────────────────────────────────────────
+
+    // ── TP1 prototype arming (the confirm gate) ─────────────────────
+
+    [Fact]
+    public void Tp1_Arm_Requires_Confirmation_And_Fails_Closed()
+    {
+        var vm = new SettingsViewModel(new SettingsService());
+        // No confirmation hook at all: fail-closed — the arm must not stick.
+        vm.FxExecuteTp1Partials = true;
+        Assert.False(vm.FxExecuteTp1Partials);
+        Assert.Contains("not confirmed", vm.Tp1ToggleHint);
+        Assert.False(FxEngineHost.ExecuteTp1Partials);
+
+        // A declined confirmation behaves the same.
+        var declined = new SettingsViewModel(new SettingsService()) { ConfirmTp1Arm = _ => false };
+        declined.FxExecuteTp1Partials = true;
+        Assert.False(declined.FxExecuteTp1Partials);
+    }
+
+    [Fact]
+    public void Tp1_Arm_Applies_Live_And_Disarm_Clears_Immediately()
+    {
+        try
+        {
+            var vm = new SettingsViewModel(new SettingsService()) { ConfirmTp1Arm = _ => true };
+            vm.FxExecuteTp1Partials = true;
+            Assert.True(vm.FxExecuteTp1Partials);
+            Assert.True(FxEngineHost.ExecuteTp1Partials, "arming applies without a restart");
+            Assert.Contains("ARMED", vm.Tp1ToggleHint);
+
+            // Disarm is unconditional and fail-safe.
+            vm.FxExecuteTp1Partials = false;
+            Assert.False(FxEngineHost.ExecuteTp1Partials);
+            Assert.Contains("OFF", vm.Tp1ToggleHint);
+        }
+        finally
+        {
+            FxEngineHost.ExecuteTp1Partials = false;   // never leak into other tests
+        }
+    }
 
     [Fact]
     public void ModeLabel_Follows_The_Demo_Flag()

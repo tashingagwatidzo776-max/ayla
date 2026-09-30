@@ -191,6 +191,46 @@ def test_events_before_save_do_not_verify():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_daily_capture_rolls_up_decisive_exits_per_day():
+    """The daily capture rollup: decisive exits with MFE >= 0.5R bucket per
+    UTC day; sub-noise MFE, holds and close-rows never count; zero-trade
+    days are dropped (absence of evidence is not 0%)."""
+    d = TmpData()
+    d.journal([
+        # Day 1: banks 2R of 5R -> 40%.
+        exit_row("2026-10-01T10:00:00.0+00:00", 42, 5.0, 2.0, action="full"),
+        # Day 1 noise: a hold, and a decisive exit with 0.4R MFE.
+        exit_row("2026-10-01T11:00:00.0+00:00", 42, 9.0, 0.1, action="hold"),
+        exit_row("2026-10-01T12:00:00.0+00:00", 43, 0.4, 0.4, action="full"),
+        # Day 2: a drawdown override banks 4R of 4R -> 100%.
+        exit_row("2026-10-02T10:00:00.0+00:00", 44, 4.0, 4.0,
+                 override="profit-floor"),
+    ])
+    r = d.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "daily profit capture" in r.stdout
+    # Capture lines (not the giveback-event lines above them) carry
+    # 'trade(s)'.
+    day1 = next(ln for ln in r.stdout.splitlines()
+                if ln.strip().startswith("2026-10-01") and "trade(s)" in ln)
+    day2 = next(ln for ln in r.stdout.splitlines()
+                if ln.strip().startswith("2026-10-02") and "trade(s)" in ln)
+    assert "40.0%" in day1 and "2.00R" in day1 and "/" in day1 and "5.00R" in day1
+    assert "1 trade(s)" in day1
+    assert "100.0%" in day2 and "4.00R /" in day2 and "1 trade(s)" in day2
+    # The gap day (no trades) must be absent.
+    assert "2026-10-03" not in r.stdout
+
+
+def test_daily_capture_silent_when_no_decisive_exits():
+    d = TmpData()
+    d.journal([exit_row("2026-10-01T10:00:00.0+00:00", 42, 9.0, 0.1,
+                        action="hold")])
+    r = d.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "daily profit capture" not in r.stdout
+
+
 def test_posture_flags_watch_and_override_bands():
     """40% on a 3R peak is sub-watch; 62% on a 2R peak hits the watch band;
     76% on a 5R peak hits the override bar."""

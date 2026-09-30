@@ -64,6 +64,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool fxLabEnabled = true;
 
+    /// <summary>TP1 partial prototype: when armed, the Profit Brain's first
+    /// rung EXECUTES through the Exit Brain's close path. Off by default;
+    /// arming requires the confirm dialog (RequestTp1ToggleAsync) and is
+    /// journaled as an explicit operator act.</summary>
+    [ObservableProperty]
+    private bool fxExecuteTp1Partials;
+
+    [ObservableProperty]
+    private string tp1ToggleHint = "TP1 partials: OFF — the allocation plan is advisory only";
+
     /// <summary>Maps colormap picker: "Auto" or a colormap name.</summary>
     [ObservableProperty]
     private string mapsColormap = "Auto";
@@ -145,6 +155,43 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string statusMessage = "Settings load on startup; Save writes them to %APPDATA%\\tf\\data.";
 
+    /// <summary>Injected confirmation hook (App layer supplies the dialog).
+    /// Returns true when the operator confirmed arming TP1 execution.
+    /// Null (tests, headless) = refuse to arm — fail-closed.</summary>
+    public Func<string, bool>? ConfirmTp1Arm { get; set; }
+
+    /// <summary>The arming gate. Flipping TP1 execution ON demands an
+    /// explicit confirmation; flipping OFF is always allowed (and clears
+    /// the static arm immediately — fail-safe direction). The change is
+    /// journaled as an operator act and reflected in the hint line.</summary>
+    partial void OnFxExecuteTp1PartialsChanged(bool value)
+    {
+        if (value)
+        {
+            var summary = "Execute the Profit Brain's TP1 rung live: once per trade, " +
+                "when price crosses the armed target, the plan's percentage of the " +
+                "position is closed through the Exit Brain's path. This places REAL " +
+                "demo orders beyond the advisory boundary.";
+            var confirmed = ConfirmTp1Arm?.Invoke(summary) ?? false;
+            if (!confirmed)
+            {
+                // Revert the toggle; the property-changed recursion is guarded
+                // by the value check (false != the pending true).
+                FxExecuteTp1Partials = false;
+                Tp1ToggleHint = "TP1 partials: OFF — arming was not confirmed";
+                StatusMessage = "TP1 execution NOT armed (confirmation declined).";
+                return;
+            }
+        }
+
+        // Apply immediately (the App config pass re-applies from settings
+        // on save; this makes the toggle live without a restart).
+        Services.FxEngineHost.ExecuteTp1Partials = value;
+        Tp1ToggleHint = value
+            ? "TP1 partials: ARMED — the first rung executes on the cross (once per trade)"
+            : "TP1 partials: OFF — the allocation plan is advisory only";
+    }
+
     /// <summary>Human-readable trading-mode label.</summary>
     public string ModeLabel => IsDemo ? "Demo" : "Real";
 
@@ -208,6 +255,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         AnalystMemoryEnabled = settings.AnalystMemoryEnabled;
         RiskNarratorEnabled = settings.RiskNarratorEnabled;
         FxLabEnabled = settings.FxLabEnabled;
+        FxExecuteTp1Partials = settings.FxExecuteTp1Partials;
         MapsColormap = settings.MapsColormap;
         ArmStalenessHours = settings.ArmStalenessHours;
         LogLevel = settings.LogLevel;
@@ -244,6 +292,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         AnalystMemoryEnabled = AnalystMemoryEnabled,
         RiskNarratorEnabled = RiskNarratorEnabled,
         FxLabEnabled = FxLabEnabled,
+        FxExecuteTp1Partials = FxExecuteTp1Partials,
         MapsColormap = MapsColormap,
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         LogLevel = LogLevel
