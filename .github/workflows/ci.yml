@@ -166,6 +166,10 @@ jobs:
       run: python scripts/test_soak_evening.py
     - name: Test the weekly P&L report
       run: python scripts/test_weekly_pnl.py
+    - name: Test the profit-floor watcher (save-chain + alert dedup)
+      run: python scripts/test_watch_profit_floor.py
+    - name: Test the profit-floor watcher's register script
+      run: python scripts/test_register_profit_floor_watch.py
 
     - name: Lint script hygiene (subprocess-decode + UTF-16-log classes stay dead)
       run: python scripts/check_script_hygiene.py

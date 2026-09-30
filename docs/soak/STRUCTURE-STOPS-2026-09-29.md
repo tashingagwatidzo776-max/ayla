@@ -61,6 +61,21 @@ trend makes recovery (or its absence) visible week over week.
   ISO week, ISO week boundaries (Dec/Jan, 53-week years), sparkline + SVG
   writer, fail-silent on bad directories.
 
+## The watch, made autonomous (same day)
+
+`scripts/watch_profit_floor.py` now runs as a Windows scheduled task
+("DongGfx profit-floor watcher", registered via
+`scripts/register-profit-floor-watch.ps1`): logon + every 4 minutes. When a
+save VERIFIES through the chain, the script alerts the app's configured
+webhook (Discord/Slack payload shapes per WebhookService) **exactly once per
+event** — dedup state in `data/watcher/profit-floor-alerts.json` survives
+restarts; a failed POST leaves state untouched so the next pass retries.
+One pass takes ~5 s against the live journal. Tests:
+`test_watch_profit_floor.py` (14: chain verdicts, alert/dedup/retry against
+a fake endpoint, corrupt-row tolerance, scheduled-invocation smoke) and
+`test_register_profit_floor_watch.py` (16: task contract). Both wired into
+CI's integration job.
+
 ## Follow-ups
 
 - Watch the live journal for the first giveback vote ≥0.85 or `profit-floor`
