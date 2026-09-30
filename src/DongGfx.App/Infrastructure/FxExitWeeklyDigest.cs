@@ -309,6 +309,7 @@ public sealed class FxExitWeeklyDigest : IDisposable
             $"- round-trips (MFE ≥1R, closed ≤0.2R): {roundTrips}/{decisive.Count} ({roundTripPct:P0})\n" +
             $"- profit capture (realized/MFE, decisive ≥0.5R MFE): {profitCapture:P0}\n" +
             CaptureTrendMarkdown(entries) +
+            Tp1CaptureMarkdown(entries) +
             (profitStates.Count > 0
                 ? $"\n### Profit brain (FX_PROFIT telemetry)\n\n" +
                   $"- reports: {profitStates.Count}; floor breaches: {profitStates.Count(p => p.Breach)}; " +
@@ -336,6 +337,84 @@ public sealed class FxExitWeeklyDigest : IDisposable
             "- weekly capture: " + string.Join(", ", series.Select(w =>
                 $"{w.Label} {w.CaptureRatio * 100:0}% ({w.CapturedR:0.##}R of {w.AvailableR:0.##}R, {w.Trades} trade(s))")) + "\n" +
             "- spark: " + Sparkline(series.Select(w => w.CaptureRatio).ToList()) + "\n";
+    }
+
+    /// <summary>The TP1 prototype's grading section: for every ticket that
+    /// BANKED a rung (FX_PROFIT TP1-EXEC with Executed true), compares its
+    /// final capture (realized ÷ MFE from the settlement FX_EXIT row)
+    /// against the fleet capture ratio of non-TP1 decisive exits — the
+    /// rung-graded view beside the fleet number. Silent until the armed
+    /// prototype produces rows; malformed rows never crash the digest.
+    /// One line per graded ticket (latest EXEC per ticket), oldest first.
+    /// </summary>
+    internal static string Tp1CaptureMarkdown(IReadOnlyList<JournalEntry> entries)
+    {
+        var execTickets = new Dictionary<long, string>();   // ticket → exec summary
+        foreach (var e in entries)
+        {
+            if (e.Category != "FX_PROFIT" || !e.Details.Contains("TP1-EXEC"))
+            {
+                continue;
+            }
+
+            var brace = e.Details.IndexOf('{');
+            if (brace < 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(e.Details[brace..]);
+                var r = doc.RootElement;
+                if (r.TryGetProperty("Ticket", out var t) && t.TryGetInt64(out var ticket)
+                    && r.TryGetProperty("Executed", out var ok) && ok.ValueKind == JsonValueKind.True)
+                {
+                    execTickets[ticket] = e.Details[..brace].Trim();
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        if (execTickets.Count == 0)
+        {
+            return string.Empty;   // silent until the prototype banks a rung
+        }
+
+        // The settled picture per TP1 ticket: its decisive FX_EXIT rows
+        // (a banked rung followed by a full close produces settlement
+        // evidence with the ticket's final MFE/realized R).
+        var lines = new List<string>();
+        var fleetWithoutTp1 = new List<(double Realized, double Mfe)>();
+        foreach (var e in entries)
+        {
+            if (e.Category != "FX_EXIT" || Decode(e.Details) is not { } p
+                || p.Ticket <= 0 || p.MfeR < 0.5)
+            {
+                continue;
+            }
+
+            if (execTickets.ContainsKey(p.Ticket))
+            {
+                lines.Add($"- #{p.Ticket}: banked a rung, captured " +
+                          $"{p.ProfitR:0.##}R of its {p.MfeR:0.##}R peak " +
+                          $"({(p.MfeR > 0 ? p.ProfitR / p.MfeR : 0) * 100:0}% capture)");
+            }
+            else
+            {
+                fleetWithoutTp1.Add((p.ProfitR, p.MfeR));
+            }
+        }
+
+        var fleet = fleetWithoutTp1.Count > 0
+            ? fleetWithoutTp1.Sum(f => f.Realized) / fleetWithoutTp1.Sum(f => f.Mfe)
+            : 0;
+        var head = $"\n### TP1 banked-run capture\n\n" +
+                   $"- fleet capture WITHOUT a TP1 rung (this window): {fleet * 100:0}% " +
+                   $"({fleetWithoutTp1.Count} decisive exit(s))\n";
+        return lines.Count > 0 ? head + string.Join("\n", lines) + "\n" : string.Empty;
     }
 
     /// <summary>The giveback engine's promotion review: when one of its
