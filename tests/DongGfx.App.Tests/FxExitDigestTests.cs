@@ -425,6 +425,60 @@ public class FxExitDigestTests
         Assert.Null(FxExitWeeklyDigest.WriteCaptureTrendSvg(entries, Path.Combine(dir, "missing", "deeper")));
     }
 
+    [Fact]
+    public void WeeklySaves_Dedupes_By_Ticket_And_Day_And_Renders_Amber_Dots()
+    {
+        // One override save and one guard save on the same ticket+day must
+        // count ONCE (two evidence families, one event); a different ticket
+        // counts separately. The chart renders an amber dot strip for
+        // weeks with saves and nothing for weeks without.
+        var w40 = new DateTimeOffset(2026, 9, 30, 6, 5, 0, TimeSpan.Zero);
+        var overrideEntry = new JournalEntry
+        {
+            Timestamp = w40,
+            Category = "FX_EXIT",
+            Details = $"XAUUSDmicro #501: full score 100 — "
+                + JsonSerializer.Serialize(new
+                {
+                    Ticket = 501L,
+                    Action = "full",
+                    Override = "profit-floor",
+                    MfeR = 9.3,
+                    MaeR = 0.2,
+                    ProfitR = 1.6,
+                }),
+        };
+        var guardEntry = new JournalEntry
+        {
+            Timestamp = w40.AddHours(5),
+            Category = "FX_FLOOR",
+            Details = "XAUUSDmicro #501: PROFIT FLOOR EXIT SUBMITTED — deal 501 "
+                + JsonSerializer.Serialize(new { Ticket = 501L, EventId = "501|1|1" }),
+        };
+        var otherGuard = new JournalEntry
+        {
+            Timestamp = w40.AddHours(5),
+            Category = "FX_FLOOR",
+            Details = "XAUUSDmicro #502: PROFIT FLOOR EXIT SUBMITTED — deal 502 "
+                + JsonSerializer.Serialize(new { Ticket = 502L, EventId = "502|1|1" }),
+        };
+        var plainExit = ExitAt(w40, "full", null, 0.1, 2.0, 1.5);   // not a save
+        var entries = new List<JournalEntry> { overrideEntry, guardEntry, otherGuard, plainExit };
+
+        var weeks = FxExitWeeklyDigest.WeeklyCaptureSeries(entries);
+        var saves = FxExitWeeklyDigest.WeeklySaves(entries, weeks);
+
+        Assert.Equal(2, saves[^1]);   // #501 once (override+guard same day), #502 once
+
+        var svg = FxExitWeeklyDigest.CaptureTrendSvg(weeks, saves);
+        Assert.Contains("fill=\"#ef6c00\"", svg);
+        Assert.Contains("2 save(s)", svg);
+
+        // A week without saves renders no dot strip at all.
+        var bare = FxExitWeeklyDigest.CaptureTrendSvg(weeks);
+        Assert.DoesNotContain("fill=\"#ef6c00\"", bare);
+    }
+
     // ── The promotion ledger ─────────────────────────────────────────
 
     [Fact]

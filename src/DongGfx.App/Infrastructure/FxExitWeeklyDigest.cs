@@ -521,7 +521,7 @@ public sealed class FxExitWeeklyDigest : IDisposable
             }
 
             var path = Path.Combine(directory, "fx-capture-trend.svg");
-            File.WriteAllText(path, CaptureTrendSvg(weeks), Encoding.UTF8);
+            File.WriteAllText(path, CaptureTrendSvg(weeks, WeeklySaves(entries, weeks)), Encoding.UTF8);
             return path;
         }
         catch
@@ -530,11 +530,124 @@ public sealed class FxExitWeeklyDigest : IDisposable
         }
     }
 
+    /// <summary>Saves per ISO week, aligned with <paramref name="weeks"/>
+    /// (index i is the saves count for weeks[i]). A save is ONE distinct
+    /// (UTC day, ticket) event from either evidence family: an FX_EXIT row
+    /// carrying the profit-floor override or a deep (≥0.85) giveback
+    /// drawdown vote, or an FX_FLOOR "PROFIT FLOOR EXIT SUBMITTED" row
+    /// (the hard floor's command). Retries, re-evaluations and the same
+    /// ticket's confirmation never double-count.</summary>
+    internal static IReadOnlyList<int> WeeklySaves(IReadOnlyList<JournalEntry> entries, IReadOnlyList<CaptureWeek> weeks)
+    {
+        var seen = new HashSet<(string Label, long Ticket)>
+        ();
+        foreach (var e in entries)
+        {
+            if ((TryGivebackOverrideSave(e, out var ticket)
+                    || TryGuardSave(e, out ticket))
+                && ticket > 0)
+            {
+                var (year, week) = IsoWeek(e.Timestamp);
+                seen.Add((FormattableString.Invariant($"ISO {year}-W{week:00}"), ticket));
+            }
+        }
+
+        return weeks.Select(w => seen.Count(s => s.Label == w.Label)).ToList();
+    }
+
+    /// <summary>An FX_EXIT row whose payload carries the profit-floor
+    /// override or a deep giveback drawdown vote — the ensemble-side save
+    /// evidence (mirrors FxExitBrain.IsProfitFloorSave's markers).</summary>
+    private static bool TryGivebackOverrideSave(JournalEntry e, out long ticket)
+    {
+        ticket = 0;
+        if (e.Category != "FX_EXIT")
+        {
+            return false;
+        }
+
+        var brace = e.Details.IndexOf('{');
+        if (brace < 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(e.Details[brace..]);
+            var r = doc.RootElement;
+            if (r.TryGetProperty("Ticket", out var t) && t.TryGetInt64(out ticket)
+                && r.TryGetProperty("Override", out var ov)
+                && ov.ValueKind == JsonValueKind.String && ov.GetString() == "profit-floor")
+            {
+                return true;
+            }
+
+            if (r.TryGetProperty("Votes", out var votes) && votes.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var v in votes.EnumerateArray())
+                {
+                    if (v.TryGetProperty("Engine", out var en) && en.GetString() == "drawdown"
+                        && v.TryGetProperty("Exit", out var ex) && ex.TryGetDouble(out var exit) && exit >= 0.85
+                        && v.TryGetProperty("Reason", out var re) && re.GetString() is { } reason
+                        && (reason.Contains("given back") || reason.Contains("give-back")))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>An FX_FLOOR "PROFIT FLOOR EXIT SUBMITTED" row — the hard
+    /// floor's own command (the guard's save evidence). Ticket comes from
+    /// the payload or the "#123:" summary prefix.</summary>
+    private static bool TryGuardSave(JournalEntry e, out long ticket)
+    {
+        ticket = 0;
+        if (e.Category != "FX_FLOOR" || !e.Details.Contains("PROFIT FLOOR EXIT SUBMITTED"))
+        {
+            return false;
+        }
+
+        var brace = e.Details.IndexOf('{');
+        if (brace >= 0)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(e.Details[brace..]);
+                if (doc.RootElement.TryGetProperty("Ticket", out var t) && t.TryGetInt64(out ticket))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // fall through to the summary prefix
+            }
+        }
+
+        var hash = e.Details.IndexOf('#');
+        if (hash >= 0)
+        {
+            var digits = new string(e.Details[(hash + 1)..].TakeWhile(char.IsDigit).ToArray());
+            _ = long.TryParse(digits, out ticket);
+        }
+
+        return ticket > 0;
+    }
+
     /// <summary>The weekly profit-capture chart: one bar per ISO week,
     /// labeled with the capture ratio, the R banked of R available, and the
     /// trade count. Self-contained inline styles — renders in any viewer
     /// the soak doc travels with.</summary>
-    internal static string CaptureTrendSvg(IReadOnlyList<CaptureWeek> weeks)
+    internal static string CaptureTrendSvg(IReadOnlyList<CaptureWeek> weeks, IReadOnlyList<int>? savesPerWeek = null)
     {
         if (weeks.Count == 0)
         {
@@ -571,6 +684,23 @@ public sealed class FxExitWeeklyDigest : IDisposable
             sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(y - 5).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"10\" fill=\"#333\">{(wk.CaptureRatio * 100).ToString("0", inv)}%</text>");
             sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(Top + plotH + 16).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"9\" fill=\"#555\">{wk.Label}</text>");
             sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(Top + plotH + 29).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"8\" fill=\"#999\">{wk.CapturedR.ToString("0.##", inv)}R/{wk.AvailableR.ToString("0.##", inv)}R · {wk.Trades} trade(s)</text>");
+
+            // Saves-per-week strip (amber dots above the capture bar): one
+            // dot per distinct (day, ticket) save — save frequency and
+            // capture ratio read together, which is the whole point of the
+            // chart: saves ARE the capture mechanism.
+            if (savesPerWeek is { } saves && i < saves.Count && saves[i] > 0)
+            {
+                var n = Math.Min(saves[i], 8);   // strip cap: keep the layout stable
+                var lastCx = x + barW / 2;
+                for (var d = 0; d < n; d++)
+                {
+                    var cx = x + barW / 2 + (d - (n - 1) / 2.0) * 9;
+                    lastCx = cx;
+                    sb.Append($"<circle cx=\"{cx.ToString(inv)}\" cy=\"{y - 16}\" r=\"3\" fill=\"#ef6c00\"/>");
+                }
+                sb.Append($"<text x=\"{lastCx.ToString(inv)}\" y=\"{y - 24}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"8\" fill=\"#ef6c00\">{saves[i]} save(s)</text>");
+            }
         }
 
         sb.Append("</svg>");
