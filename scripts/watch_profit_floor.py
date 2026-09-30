@@ -5,18 +5,29 @@ The verification chain for one event (evidence, not hope):
   1. FX_EXIT row with Override == "profit-floor", or a drawdown vote with
      Exit >= 0.85 whose reason says the peak was given back.
   2. FX_RISK row "exit evaluation requested" for the same ticket.
-  3. FX_ORDER close confirmation for the same ticket.
+  3. a close-confirmation row for the same ticket ("closed #N" — the
+     confirmations share the FX_EXIT category, per the digest's rule).
+
+When a save VERIFIES (all three legs), the script alerts the configured
+webhook (Settings -> notifications in the app, same Discord/Slack channel
+the settlements use) exactly once per event — dedup state in
+data/watcher/profit-floor-alerts.json survives restarts. Exit code 2 when
+a verified save exists (0 otherwise) so any scheduler can react too.
 
 Each pass also prints the open book's giveback posture (newest FX_PROFIT
 row per ticket) so the approach to the 60% watch bar and the 75% override
 bar is visible before anything fires.
 
-Journal-only by construction: reads, never trades. Exit code 0 normally,
-2 when a verified save is found (so a scheduled task can alert).
+Journal-only by construction: reads, never trades.
 
 Usage:
-  python scripts/watch_profit_floor.py            # one pass
-  python scripts/watch_profit_floor.py --loop 60  # poll every 60s
+  python scripts/watch_profit_floor.py                # one pass (scheduler)
+  python scripts/watch_profit_floor.py --loop 60      # poll every 60s
+  python scripts/watch_profit_floor.py --no-alert     # observe, never post
+  python scripts/watch_profit_floor.py --dry-run      # show alert, no POST
+
+The journal lives under %APPDATA%\\tf\\data\\journal, or
+$TF_DATA_DIR\\journal when the tests set the app's data-dir override.
 """
 from __future__ import annotations
 
@@ -26,15 +37,35 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 
 GIVEBACK_VOTE_MIN = 0.85     # the deep-giveback vote bar (GivebackVoteRatio)
 GIVEBACK_WATCH = 0.60        # the watch bar (GivebackWatchRatio)
 GIVEBACK_OVERRIDE = 0.75     # the override bar (GivebackOverrideRatio)
 
 
+def data_dir() -> str:
+    """The app's data dir: TF_DATA_DIR override, else the real %APPDATA%
+    location. Same convention the app itself honors."""
+    override = os.environ.get("TF_DATA_DIR")
+    return override if override else os.path.expandvars(r"%APPDATA%\tf\data")
+
+
 def journal_files() -> list[str]:
-    base = os.path.expandvars(r"%APPDATA%\tf\data\journal")
-    return sorted(glob.glob(os.path.join(base, "journal_*.jsonl")))
+    return sorted(glob.glob(os.path.join(data_dir(), "journal", "journal_*.jsonl")))
+
+
+def default_state_path() -> str:
+    return os.path.join(data_dir(), "watcher", "profit-floor-alerts.json")
+
+
+def load_settings() -> dict:
+    try:
+        with open(os.path.join(data_dir(), "settings.json"), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
 
 
 def rows() -> list[dict]:
@@ -94,7 +125,10 @@ def find_saves(rs: list[dict]) -> list[dict]:
 
 
 def verify_chain(rs: list[dict], save: dict) -> dict:
-    """Stages 2 and 3 for one save: FX_RISK request + FX_ORDER close."""
+    """Stages 2 and 3 for one save: the FX_RISK request and the close
+    confirmation. Stage 3 scans ANY row containing 'closed #<ticket>' —
+    close confirmations share the FX_EXIT category (digest's rule), so
+    pinning them to FX_ORDER would never match."""
     ticket = save["ticket"]
     risk = any(
         r["cat"] == "FX_RISK"
@@ -103,13 +137,8 @@ def verify_chain(rs: list[dict], save: dict) -> dict:
         and r["ts"] >= save["ts"]
         for r in rs
     )
-    close = any(
-        r["cat"] == "FX_ORDER"
-        and f"#{ticket}" in r["details"]
-        and "closed" in r["details"]
-        and r["ts"] >= save["ts"]
-        for r in rs
-    )
+    marker = f"closed #{ticket}"
+    close = any(marker in r["details"] and r["ts"] >= save["ts"] for r in rs)
     return {"risk": risk, "close": close}
 
 
@@ -129,7 +158,103 @@ def book_posture(rs: list[dict]) -> dict[int, dict]:
     return latest
 
 
-def one_pass() -> int:
+# ── webhook alerting (Discord/Slack, payload shape per WebhookService) ──
+
+def build_alert_payload(save: dict, chain: dict) -> tuple[str, dict]:
+    """The alert body for one verified save. Discord detection matches the
+    metrics-digest convention ('discord' in the URL). Returns (kind, body).
+    """
+    p = save["payload"]
+    peak = p.get("MfeR", 0)
+    cur = p.get("ProfitR", 0)
+    saved = max(peak - max(cur, 0), 0)
+    floor = p.get("FloorR", 0) or 0
+    title = f"\U0001f6e1\ufe0f Profit-floor save — ticket {save['ticket']}"
+    text = (
+        f"Gave back a {peak:.1f}R peak to {cur:+.2f}R — the profit floor "
+        f"protected what was earned (~{saved:.1f}R saved vs the round-trip). "
+        f"Floor at fire time: {floor:.1f}R.\n"
+        f"Chain verified: FX_EXIT {save['kind']}, FX_RISK request "
+        f"{'yes' if chain['risk'] else 'NO'}, close confirmation "
+        f"{'yes' if chain['close'] else 'NO'}.\n"
+        f"{save['ts'][:19]} UTC"
+    )
+    return "discord", {
+        "embeds": [{"title": title, "description": text, "color": 0x2E7D32}]}
+
+
+def build_alert_payload_slack(save: dict, chain: dict) -> dict:
+    _, discord = build_alert_payload(save, chain)
+    embed = discord["embeds"][0]
+    return {"attachments": [{"color": f"#{embed['color']:06x}",
+                             "title": embed["title"],
+                             "text": embed["description"]}]}
+
+
+def post_webhook(url: str, body: dict) -> int:
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status
+    except urllib.error.HTTPError as ex:
+        raise RuntimeError(f"webhook POST failed: HTTP {ex.code}") from ex
+    except Exception as ex:
+        raise RuntimeError(f"webhook POST failed: {ex.__class__.__name__}") from ex
+
+
+# ── dedup state: one alert per event, across restarts ──────────────
+
+def load_alerted(state_path: str) -> set[str]:
+    try:
+        with open(state_path, encoding="utf-8") as fh:
+            return set(json.load(fh))
+    except (OSError, ValueError):
+        return set()
+
+
+def save_alerted(state_path: str, keys: set[str]) -> None:
+    try:
+        os.makedirs(os.path.dirname(state_path), exist_ok=True)
+        with open(state_path, "w", encoding="utf-8") as fh:
+            json.dump(sorted(keys), fh)
+    except OSError:
+        pass   # dedup is best-effort; a lost state file means one re-alert
+
+
+def event_key(save: dict) -> str:
+    return f"{save['ts']}|{save['ticket']}|{save['kind']}"
+
+
+def alert(save: dict, chain: dict, webhook_url: str, state_path: str,
+          dry_run: bool = False) -> bool:
+    """Post the alert for one verified save unless already alerted. Returns
+    True when an alert was sent (or would have been, under --dry-run)."""
+    key = event_key(save)
+    seen = load_alerted(state_path)
+    if key in seen:
+        return False
+
+    is_discord = "discord" in webhook_url
+    body = (build_alert_payload(save, chain)[1] if is_discord
+            else build_alert_payload_slack(save, chain))
+    if dry_run:
+        print(f"dry-run: would alert ({'discord' if is_discord else 'slack'}): "
+              f"{body['embeds'][0]['title'] if is_discord else body['attachments'][0]['title']}")
+        return True
+
+    status = post_webhook(webhook_url, body)
+    print(f"alert: HTTP {status} for {key}")
+    seen.add(key)
+    save_alerted(state_path, seen)
+    return True
+
+
+# ── the pass ────────────────────────────────────────────────────────
+
+def one_pass(alert_webhook: bool = True, webhook_url: str = "",
+             state_path: str = "", dry_run: bool = False) -> int:
     rs = rows()
     saves = find_saves(rs)
     verified = 0
@@ -145,6 +270,11 @@ def one_pass() -> int:
                   f"peak {p.get('MfeR', 0):.1f}R -> {p.get('ProfitR', 0):.2f}R "
                   f"| FX_RISK request: {chain['risk']} | close: {chain['close']}"
                   f"{'  <== VERIFIED' if ok else ''}")
+            if ok and alert_webhook and webhook_url:
+                try:
+                    alert(s, chain, webhook_url, state_path, dry_run)
+                except RuntimeError as exc:
+                    print(f"alert FAILED (will retry next pass, state untouched): {exc}")
 
     posture = book_posture(rs)
     print(f"=== open book posture ({len(posture)} tracked) ===")
@@ -167,14 +297,27 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--loop", type=int, default=0, metavar="SEC",
                     help="poll every SEC seconds instead of one pass")
+    ap.add_argument("--no-alert", action="store_true",
+                    help="observe only: never post to the webhook")
+    ap.add_argument("--webhook-url", default=None,
+                    help="webhook URL override (default: settings.json)")
+    ap.add_argument("--state", default=None,
+                    help="dedup state file override (default: data/watcher/)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="build and show the alert, never POST, never remember")
     args = ap.parse_args()
 
+    url = args.webhook_url
+    if url is None and not args.no_alert:
+        url = load_settings().get("WebhookUrl") or ""
+    state = args.state or default_state_path()
+
     if args.loop <= 0:
-        sys.exit(one_pass())
+        sys.exit(one_pass(not args.no_alert, url or "", state, args.dry_run))
 
     while True:
         try:
-            one_pass()
+            one_pass(not args.no_alert, url or "", state, args.dry_run)
         except Exception as exc:  # a watcher never crashes the watch
             print(f"watch error (continuing): {exc}")
         print("-" * 60)
