@@ -330,6 +330,18 @@ def one_pass(alert_webhook: bool = True, webhook_url: str = "",
             bar = "█" * round(ratio * 20)
             print(f"  {day}  {ratio * 100:5.1f}%  {cap_r:7.2f}R / {avail_r:7.2f}R  "
                   f"{trades} trade(s)  |{bar:<20}|")
+
+    # TP1 prototype telemetry: the armed rungs and the banked execs.
+    # Silent until the FxExecuteTp1Partials prototype produces rows — the
+    # watcher surfaces them so the first ARM/EXEC is seen autonomously.
+    tp1 = [r for r in rs if "TP1-ARM" in r.get("Details", "")
+           or "TP1-EXEC" in r.get("Details", "")]
+    if tp1:
+        arms = sum(1 for r in tp1 if "TP1-ARM" in r["Details"])
+        execs = [r for r in tp1 if "TP1-EXEC" in r["Details"]]
+        print(f"=== TP1 prototype ({arms} arm row(s), {len(execs)} exec row(s)) ===")
+        for r in (tp1 if len(tp1) <= 6 else tp1[-6:]):
+            print(f"  {r.get('Timestamp', '?')[:19]}  {r['Details'][:100]}")
     return 2 if verified else 0
 
 
