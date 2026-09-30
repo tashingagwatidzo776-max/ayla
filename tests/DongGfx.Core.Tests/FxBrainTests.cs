@@ -558,4 +558,53 @@ public class FxEngineTests
         public FxSignal? Evaluate(IReadOnlyList<FxBar> bars, FxRegimeVerdict regime) =>
             new(Name, FxDirection.Buy, 0.9, 0.5, "stub speaks a sub-noise hint", regime.TimeUtc);
     }
+
+    // ── profit-floor saves (the evidence class the shadow ledger credits) ──
+
+    private static FxExitVote V(string engine, double exit, string reason) =>
+        new(engine, exit, engine == "drawdown" ? 2.0 : 1.0, reason);
+
+    [Fact]
+    public void ProfitFloorSave_Detected_On_Override_And_Deep_Vote_Not_On_Watch()
+    {
+        var overridden = new FxExitDecision(1, "full", 100,
+            [V("drawdown", 0.9, "MAE 0.10R within budget")], 0, 0, 8.0, 0, 1.5,
+            "profit-floor", "gave back a peak");
+        Assert.True(FxExitBrain.IsProfitFloorSave(overridden));
+
+        var deepVote = new FxExitDecision(1, "full", 64,
+            [V("drawdown", 0.85, "give-back 81% of a 8.0R peak — protect what remains")],
+            0, 0, 8.0, 0, 1.5, null, "ensemble full");
+        Assert.True(FxExitBrain.IsProfitFloorSave(deepVote));
+
+        var roundTrip = new FxExitDecision(1, "full", 71,
+            [V("drawdown", 0.95, "round-trip: peaked 8.0R, now +0.10R — the move was given back")],
+            0, 0, 8.0, 0, 0.1, null, "ensemble full");
+        Assert.True(FxExitBrain.IsProfitFloorSave(roundTrip));
+
+        var watchOnly = new FxExitDecision(1, "hold", 20,
+            [V("drawdown", 0.65, "give-back 62% of a 3.0R peak — giveback building")],
+            0, 0, 3.0, 0, 1.1, null, "hold band");
+        Assert.False(FxExitBrain.IsProfitFloorSave(watchOnly));
+    }
+
+    [Fact]
+    public void Shadow_Helped_Credits_The_Giveback_Evidence_On_A_Save()
+    {
+        var save = new FxExitDecision(1, "full", 100,
+            [V("structure", 0.2, "holding"),
+             V("drawdown", 0.9, "round-trip: peaked 8.0R, now +0.10R — the move was given back")],
+            0, 0, 8.0, 0, 0.1, "profit-floor", "gave back a peak");
+
+        // The drawdown engine that carried the save and the giveback shadow
+        // voice are credited; unrelated engines are not.
+        Assert.True(FxExitShadow.Helped(V("giveback", 0.6, "shadow"), "full", won: true, save));
+        Assert.True(FxExitShadow.Helped(save.Votes[1], "full", won: true, save));
+        Assert.False(FxExitShadow.Helped(V("structure", 0.2, "holding"), "full", won: true, save));
+
+        // Without the decision (legacy callers) the classic rule stands:
+        // conviction on a held winner helps; a save needs the evidence.
+        Assert.True(FxExitShadow.Helped(V("giveback", 0.6, "shadow"), "hold", won: true));
+        Assert.False(FxExitShadow.Helped(V("giveback", 0.6, "shadow"), "full", won: true));
+    }
 }

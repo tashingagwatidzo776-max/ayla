@@ -55,13 +55,21 @@ public static class FxExitShadow
     /// <summary>Hit rate a shadow engine must sustain to earn weight.</summary>
     public const double PromotionHitRate = 0.6;
 
-    /// <summary>A shadow vote "helped" when, at the trade's final evaluation,
-    /// it showed real exit conviction (≥ half pressure) on a trade that went
-    /// on to win while the ensemble held or merely watched — the exact
-    /// "would have saved a winner's give-back" evidence promotion wants.
-    /// (Losing trades need no rescue: the drawdown/override tier owns them.)</summary>
-    public static bool Helped(FxExitVote shadowVote, string resolvedAction, bool won) =>
-        won && shadowVote.Exit >= 0.5 && resolvedAction is "hold" or "monitor";
+    /// <summary>A shadow vote "helped" in exactly two ways: (1) the classic
+    /// rule — at the trade's final evaluation it showed real exit conviction
+    /// (≥ half pressure) on a trade that went on to win while the ensemble
+    /// held or merely watched; or (2) the trade was a PROFIT-FLOOR SAVE the
+    /// giveback evidence itself drove home (override or deep giveback vote
+    /// per <see cref="FxExitBrain.IsProfitFloorSave"/>) — then the giveback
+    /// shadow voice and the drawdown engine that carried it are credited
+    /// with the save. (Losing trades need no rescue: the drawdown/override
+    /// tier owns them.)</summary>
+    public static bool Helped(FxExitVote shadowVote, string resolvedAction, bool won,
+        FxExitDecision? decision = null) =>
+        won && shadowVote.Exit >= 0.5 && resolvedAction is "hold" or "monitor"
+        || (decision is not null
+            && FxExitBrain.IsProfitFloorSave(decision)
+            && shadowVote is { Engine: "giveback" or "drawdown", Exit: >= 0.5 });
 
     /// <summary>The weight an engine's measured accuracy has earned: zero
     /// until BOTH bars are met, then proportional to the hit rate and capped
@@ -100,10 +108,15 @@ public sealed class FxShadowLedger
 
     /// <summary>Records one settled trade's shadow votes. The trade's
     /// winning/losing outcome and the ensemble's final action come from the
-    /// caller (the exit pass knows both at close time).</summary>
+    /// caller (the exit pass knows both at close time). When the caller
+    /// passes the settled <see cref="FxExitDecision"/>, profit-floor saves
+    /// credit the giveback evidence that drove them (see
+    /// <see cref="FxExitShadow.Helped"/>) — without it the promotion
+    /// substrate only ever counts exits the ensemble declined.</summary>
     public void Append(
         long ticket, string symbol, IReadOnlyList<FxExitVote> shadowVotes,
-        string resolvedAction, bool won, DateTimeOffset at)
+        string resolvedAction, bool won, DateTimeOffset at,
+        FxExitDecision? decision = null)
     {
         try
         {
@@ -117,7 +130,7 @@ public sealed class FxShadowLedger
                 ExitAtClose = Math.Round(v.Exit, 4),
                 ResolvedAction = resolvedAction,
                 Won = won,
-                Helped = FxExitShadow.Helped(v, resolvedAction, won),
+                Helped = FxExitShadow.Helped(v, resolvedAction, won, decision),
             }));
             File.AppendAllLines(_path, lines);
         }

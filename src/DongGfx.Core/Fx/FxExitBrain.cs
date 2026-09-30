@@ -493,6 +493,19 @@ public static class FxExitBrain
             : new FxExitVote("drawdown", 0, 2.0, $"MAE {maeR:0.00}R within budget");
     }
 
+    /// <summary>True when a settled exit was a PROFIT-FLOOR SAVE: the
+    /// giveback tier itself fired (the profit-floor override, or a deep
+    /// giveback drawdown vote the resolver acted on). This is the evidence
+    /// class the shadow ledger credits — without it, "the engine saved a
+    /// winner's give-back" never lands in the promotion substrate because
+    /// the classic Helped() rule only credits exits the ensemble DECLINED.
+    /// Marker strings mirror DrawdownVote's reasons exactly.</summary>
+    public static bool IsProfitFloorSave(FxExitDecision decision) =>
+        decision.OverrideEngine == "profit-floor"
+        || decision.Votes.Any(v => v.Engine == "drawdown"
+            && v.Exit >= GivebackVoteRatio   // 0.85 — the deep-giveback vote
+            && (v.Reason.Contains("given back") || v.Reason.Contains("give-back")));
+
     /// <summary>Snapshot a position's tracking state (MFE/MAE monotone up).</summary>
     public static FxPositionState UpdateState(FxPositionState state, double currentPrice, int barsHeld)
     {
