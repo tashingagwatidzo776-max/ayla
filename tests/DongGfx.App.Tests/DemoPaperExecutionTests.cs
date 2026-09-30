@@ -762,9 +762,13 @@ public class DemoPaperExecutionTests
             // Crossed (cycle 2): the rung banks once — AND the hard floor
             // (armed by this trade's own FX_PROFIT row: peak ≈ +22R → a
             // high never-down floor) fires its full close the SAME cycle.
-            // Priority in action: the prototype banks its rung; the hard
-            // risk constraint still takes the whole position. Two closes,
-            // one per layer, exactly once each.
+            // COEXISTENCE CONTRACT (guard × TP1 on one ticket): two closes,
+            // one per layer, exactly once each, hard protection FIRST —
+            // the guard runs ahead of the ensemble/TP1 block in the pass.
+            // Live-venue caveat: because the guard's full close precedes,
+            // the TP1 partial may be refused by a real venue (position
+            // already flat); the fake bridge accepts both. Either way the
+            // position ends flat exactly once and the rung never re-banks.
             script.Positions = At(1.1700, 220.0);
             await host.RunCycleAsync();
             Assert.Equal(2, script.CloseCalls);
@@ -778,6 +782,15 @@ public class DemoPaperExecutionTests
             // The hard floor's close is on the trail too.
             Assert.Contains(journal.GetRecent(null, 200), e =>
                 e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
+            // Layer order is assertable in the journal: the guard's breach
+            // row precedes the prototype's EXEC row — hard risk first.
+            // GetRecent returns newest-first; re-order chronologically.
+            var chrono = journal.GetRecent(null, 200).Reverse().ToList();
+            var breachIdx = chrono.FindIndex(e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
+            var execIdx = chrono.FindIndex(e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC"));
+            Assert.True(breachIdx >= 0 && execIdx > breachIdx, "the guard commands before the prototype banks");
 
             // Once per ticket per layer: the next cycle must not re-bank
             // the rung nor re-fire the floor (the position is gone; the
