@@ -118,8 +118,13 @@ public sealed class FxExitWeeklyDigest : IDisposable
             if (SoakDocPath is { } path
                 && Path.GetDirectoryName(path) is { } dir && Directory.Exists(dir))
             {
+                // The standalone chart lives next to the soak doc and is
+                // referenced relatively — the pair travels together.
+                var svgWritten = WriteCaptureTrendSvg(entries, dir) is not null
+                    ? "\n![profit-capture trend](fx-capture-trend.svg)\n"
+                    : string.Empty;
                 await File.AppendAllTextAsync(
-                    path, markdown, Encoding.UTF8).ConfigureAwait(false);
+                    path, markdown + svgWritten, Encoding.UTF8).ConfigureAwait(false);
             }
 
             return message;
@@ -287,6 +292,7 @@ public sealed class FxExitWeeklyDigest : IDisposable
             $"- MAE at exit: {string.Join(", ", maeCurve)}\n" +
             $"- round-trips (MFE ≥1R, closed ≤0.2R): {roundTrips}/{decisive.Count} ({roundTripPct:P0})\n" +
             $"- profit capture (realized/MFE, decisive ≥0.5R MFE): {profitCapture:P0}\n" +
+            CaptureTrendMarkdown(entries) +
             (profitStates.Count > 0
                 ? $"\n### Profit brain (FX_PROFIT telemetry)\n\n" +
                   $"- reports: {profitStates.Count}; floor breaches: {profitStates.Count(p => p.Breach)}; " +
@@ -296,6 +302,24 @@ public sealed class FxExitWeeklyDigest : IDisposable
                 : string.Empty);
 
         return (message, markdown);
+    }
+
+    /// <summary>The all-weeks capture trend as markdown: one line per ISO
+    /// week plus a sparkline — the at-a-glance version of the SVG chart.
+    /// Gaps dropped (a zero-trade week is absence of evidence, not 0%).
+    /// </summary>
+    internal static string CaptureTrendMarkdown(IReadOnlyList<JournalEntry> entries)
+    {
+        var series = WeeklyCaptureSeries(entries);
+        if (series.Count == 0)
+        {
+            return "\n### Profit-capture trend\n\n- no decisive exits with meaningful MFE yet\n";
+        }
+
+        return "\n### Profit-capture trend\n\n" +
+            "- weekly capture: " + string.Join(", ", series.Select(w =>
+                $"{w.Label} {w.CaptureRatio * 100:0}% ({w.CapturedR:0.##}R of {w.AvailableR:0.##}R, {w.Trades} trade(s))")) + "\n" +
+            "- spark: " + Sparkline(series.Select(w => w.CaptureRatio).ToList()) + "\n";
     }
 
     /// <summary>Decodes one FX_PROFIT Details line ("{summary}: {json}").
@@ -325,6 +349,154 @@ public sealed class FxExitWeeklyDigest : IDisposable
         {
             return null;
         }
+    }
+
+    /// <summary>One ISO week of profit-capture history: how much of the
+    /// favorable excursion the brain banked that week (the HWARANG headline
+    /// metric, spec §33) — the series the profit-floor tier must bend up
+    /// over time.</summary>
+    internal sealed record CaptureWeek(
+        string Label, int Trades, double CapturedR, double AvailableR, double CaptureRatio);
+
+    /// <summary>The profit-capture series over the WHOLE journal (not just
+    /// the digest's 7-day window): one row per ISO week that saw at least
+    /// one decisive exit with meaningful MFE. Ascending by week, gaps
+    /// dropped — a zero-trade week is absence of evidence, not a 0% week.</summary>
+    internal static IReadOnlyList<CaptureWeek> WeeklyCaptureSeries(IReadOnlyList<JournalEntry> entries)
+    {
+        var grouped = new SortedDictionary<(int Year, int Week), (int Trades, double Captured, double Available)>();
+        foreach (var e in entries)
+        {
+            if (e.Category != "FX_EXIT" || Decode(e.Details) is not { } p)
+            {
+                continue;
+            }
+
+            // Same population as the digest's capture metric: decisive
+            // exits (full/partial or hard override) with MFE ≥ 0.5R —
+            // order-confirmation rows and sub-noise MFE never count.
+            var decisive = p.Action is "full" or "partial" || p.Override is not null;
+            if (!decisive || p.MfeR < 0.5)
+            {
+                continue;
+            }
+
+            var (year, week) = IsoWeek(e.Timestamp);
+            var (t, c, a) = grouped.TryGetValue((year, week), out var g) ? g : (0, 0.0, 0.0);
+            grouped[(year, week)] = (t + 1, c + Math.Max(p.ProfitR, 0), a + p.MfeR);
+        }
+
+        return grouped.Select(kv =>
+        {
+            var ((year, week), (trades, captured, available)) = kv;
+            return new CaptureWeek(
+                $"ISO {year}-W{week:00}", trades, captured, available,
+                available > 0 ? captured / available : 0);
+        }).ToList();
+    }
+
+    /// <summary>ISO-8601 week number (weeks start Monday, W01 holds the
+    /// first Thursday) with the year the WEEK belongs to. Implemented via
+    /// the week's Thursday — GetWeekOfYear(FirstFourDayWeek) does NOT
+    /// implement ISO (it answers 53 where ISO says 1 around year ends),
+    /// and the Thursday's own year resolves the Dec/Jan boundaries.</summary>
+    internal static (int Year, int Week) IsoWeek(DateTimeOffset t)
+    {
+        var d = t.UtcDateTime.Date;
+        var isoDay = d.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)d.DayOfWeek;
+        var thursday = d.AddDays(4 - isoDay);   // the ISO week's Thursday
+        var year = thursday.Year;
+        var week = (thursday.DayOfYear - 1) / 7 + 1;
+        return (year, week);
+    }
+
+    /// <summary>Unicode block sparkline of a value series (▁ lowest … █
+    /// highest). Flat series render full-height; empty renders empty.</summary>
+    internal static string Sparkline(IReadOnlyList<double> values)
+    {
+        const string blocks = "▁▂▃▄▅▆▇█";
+        if (values.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var min = values.Min();
+        var max = values.Max();
+        return string.Concat(values.Select(v =>
+            max - min < 1e-9
+                ? blocks[^1]
+                : blocks[Math.Clamp((int)Math.Round((v - min) / (max - min) * (blocks.Length - 1)), 0, blocks.Length - 1)]));
+    }
+
+    /// <summary>Writes the standalone capture-trend chart (self-contained
+    /// SVG) into <paramref name="directory"/> as <c>fx-capture-trend.svg</c>.
+    /// Returns the path, or null when there is no series or the write
+    /// failed — an observability nicety is never a crash surface.</summary>
+    internal static string? WriteCaptureTrendSvg(IReadOnlyList<JournalEntry> entries, string directory)
+    {
+        try
+        {
+            var weeks = WeeklyCaptureSeries(entries);
+            if (weeks.Count == 0)
+            {
+                return null;
+            }
+
+            var path = Path.Combine(directory, "fx-capture-trend.svg");
+            File.WriteAllText(path, CaptureTrendSvg(weeks), Encoding.UTF8);
+            return path;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The weekly profit-capture chart: one bar per ISO week,
+    /// labeled with the capture ratio, the R banked of R available, and the
+    /// trade count. Self-contained inline styles — renders in any viewer
+    /// the soak doc travels with.</summary>
+    internal static string CaptureTrendSvg(IReadOnlyList<CaptureWeek> weeks)
+    {
+        if (weeks.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        const double W = 640, H = 260, Left = 46, Right = 16, Top = 36, Bottom = 46;
+        var plotW = W - Left - Right;
+        var plotH = H - Top - Bottom;
+        var slot = Math.Min(64, plotW / weeks.Count);
+        var barW = slot * 0.55;
+        var inv = CultureInfo.InvariantCulture;
+
+        var sb = new StringBuilder();
+        sb.Append($"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{W.ToString(inv)}\" height=\"{H.ToString(inv)}\" viewBox=\"0 0 {W.ToString(inv)} {H.ToString(inv)}\">");
+        sb.Append($"<rect width=\"{W.ToString(inv)}\" height=\"{H.ToString(inv)}\" fill=\"#fafafa\"/>");
+        sb.Append($"<text x=\"{Left.ToString(inv)}\" y=\"20\" font-family=\"monospace\" font-size=\"13\" fill=\"#333\">profit capture — realized/MFE per ISO week</text>");
+
+        // Grid: 0/25/50/75/100%.
+        foreach (var pct in new[] { 0, 25, 50, 75, 100 })
+        {
+            var y = Top + plotH * (1 - pct / 100.0);
+            sb.Append($"<line x1=\"{Left.ToString(inv)}\" y1=\"{y.ToString(inv)}\" x2=\"{(W - Right).ToString(inv)}\" y2=\"{y.ToString(inv)}\" stroke=\"#dddddd\"/>");
+            sb.Append($"<text x=\"4\" y=\"{(y + 3).ToString(inv)}\" font-family=\"monospace\" font-size=\"9\" fill=\"#999\">{pct.ToString(inv)}%</text>");
+        }
+
+        for (var i = 0; i < weeks.Count; i++)
+        {
+            var wk = weeks[i];
+            var x = Left + plotW * (i + 0.5) / weeks.Count - barW / 2;
+            var barH = plotH * Math.Clamp(wk.CaptureRatio, 0, 1);
+            var y = Top + plotH - barH;
+            sb.Append($"<rect x=\"{x.ToString(inv)}\" y=\"{y.ToString(inv)}\" width=\"{barW.ToString(inv)}\" height=\"{barH.ToString(inv)}\" fill=\"#2e7d32\"/>");
+            sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(y - 5).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"10\" fill=\"#333\">{(wk.CaptureRatio * 100).ToString("0", inv)}%</text>");
+            sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(Top + plotH + 16).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"9\" fill=\"#555\">{wk.Label}</text>");
+            sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(Top + plotH + 29).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"8\" fill=\"#999\">{wk.CapturedR.ToString("0.##", inv)}R/{wk.AvailableR.ToString("0.##", inv)}R · {wk.Trades} trade(s)</text>");
+        }
+
+        sb.Append("</svg>");
+        return sb.ToString();
     }
 
     /// <summary>Decodes one FX_EXIT Details line ("{summary}: {json}").

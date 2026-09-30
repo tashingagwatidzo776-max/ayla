@@ -31,7 +31,11 @@ public sealed record FxPositionState(
     double RiskPerLot,      // |entry - initial SL| price distance; R-unit = this distance
     double MfeR,
     double MaeR,
-    int BarsHeld);
+    int BarsHeld,
+    // The stop distance the trade was SIZED with (the engine's structural
+    // R unit) when known — the honest ruler even when the venue normalized
+    // the placed SL. 0 when unknown.
+    double InitialStopDistance = 0);
 
 /// <summary>
 /// The Exit Brain v1 — independent evidence engines, a weighted conflict

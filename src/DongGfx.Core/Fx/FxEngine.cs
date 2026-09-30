@@ -32,7 +32,13 @@ public sealed record FxDecision(
     FxSignal? Signal,
     FxDecisionAction Action,
     double SuggestedLots,
-    string Detail);
+    string Detail,
+    // The stop distance the suggested lots were actually sized with —
+    // the alpha's hint raised to the structural floor (ATR-scaled, venue
+    // band). The host anchors the SL here so sizing, the placed stop and
+    // the exit brain's R ruler all measure one distance. 0 when no
+    // sizing happened.
+    double EffectiveStopDistance = 0);
 
 /// <summary>
 /// The DON G FX forex brain. Fully pure: the caller (App timer) fetches
@@ -183,11 +189,11 @@ public sealed class FxEngine
                 $"{winner.Alpha} → {winner.Direction} conf {winner.Confidence:0.00} — {winner.Reason}",
                 ToJson(new { Symbol, winner.Alpha, winner.Direction, winner.Confidence, winner.Reason }));
 
-            var lots = Size(winner, mid);
+            var (lots, effectiveStop) = SizeWithStop(winner, mid, bars);
             if (lots <= 0 || lots > _lotsCap)
             {
                 return new FxDecision(verdict.TimeUtc, verdict, winner, FxDecisionAction.SkippedSizing, lots,
-                    $"sized {lots:0.##} lots outside cap {_lotsCap:0.##}");
+                    $"sized {lots:0.##} lots outside cap {_lotsCap:0.##}", effectiveStop);
             }
 
             if (!IsLive)
@@ -199,16 +205,18 @@ public sealed class FxEngine
                 // risk-gated; only the venue's real-money path is closed.
                 _journal("FX_DECISION",
                     $"PAPER-EXEC: {winner.Direction} {lots:0.##} lots {Symbol} (demo execution)",
-                    ToJson(new { Action = "paper-exec", winner.Direction, Lots = lots }));
+                    ToJson(new { Action = "paper-exec", winner.Direction, Lots = lots,
+                        StopDistance = FxJson.Sanitize(effectiveStop) }));
                 return new FxDecision(verdict.TimeUtc, verdict, winner, FxDecisionAction.PaperExecuted, lots,
-                    "paper mode — order routes to the connected demo account");
+                    "paper mode — order routes to the connected demo account", effectiveStop);
             }
 
             _journal("FX_DECISION",
                 $"ORDER: {winner.Direction} {lots:0.##} lots {Symbol} @ market",
-                ToJson(new { Action = "order", winner.Direction, Lots = lots }));
+                ToJson(new { Action = "order", winner.Direction, Lots = lots,
+                    StopDistance = FxJson.Sanitize(effectiveStop) }));
             return new FxDecision(verdict.TimeUtc, verdict, winner, FxDecisionAction.Ordered, lots,
-                "live order handed to the bridge ticket path (rails apply there)");
+                "live order handed to the bridge ticket path (rails apply there)", effectiveStop);
         }
         catch (Exception ex)
         {
@@ -226,11 +234,39 @@ public sealed class FxEngine
     /// volume_max and the engine cap, and fail closed (0 = don't trade)
     /// below the venue's volume_min — an untradable size is refused, never
     /// forced up to the minimum.</summary>
-    public double Size(FxSignal signal, double midPrice)
+    public double Size(FxSignal signal, double midPrice) =>
+        SizeWithStop(signal, midPrice, bars: null).Lots;
+
+    /// <summary>Size against a bar series: the alpha's stop hint is raised
+    /// to the structural floor (see <see cref="SizeWithStop"/>) before the
+    /// budget math. Null bars = no structural floor (legacy behavior).
+    /// </summary>
+    public double Size(FxSignal signal, double midPrice, IReadOnlyList<FxBar>? bars) =>
+        SizeWithStop(signal, midPrice, bars).Lots;
+
+    /// <summary>Risk-based sizing plus the stop distance the size was
+    /// computed with. Budget = account equity x risk fraction, risk per lot
+    /// = stop distance x contract size. The venue's own lot geometry
+    /// (SetVenueSpec) is the source of truth; without it the historic price
+    /// heuristic stands in until the first /symbols snapshot. Lots are
+    /// snapped DOWN to the venue's volume step, clamped to its volume_max
+    /// and the engine cap, and fail closed (0 = don't trade) below the
+    /// venue's volume_min — an untradable size is refused, never forced up
+    /// to the minimum.
+    ///
+    /// The alpha's stop hint is an opinion about distance, but quiet M1
+    /// tape makes ATR(14) collapse onto the venue's minimum-stop band
+    /// (EURUSD: 2.7-pip hints against a 2-pip forbidden band) — an R unit
+    /// that measures spread noise, not structure. The hint is therefore
+    /// raised to max(hint, atrStopMult x ATR(14), venue stops_level band),
+    /// capped at half the mid price so a garbage series can never mint a
+    /// stop wider than the market itself.</summary>
+    public (double Lots, double EffectiveStopDistance) SizeWithStop(
+        FxSignal signal, double midPrice, IReadOnlyList<FxBar>? bars)
     {
         if (double.IsNaN(signal.StopDistanceHint) || signal.StopDistanceHint <= 0 || midPrice <= 0)
         {
-            return 0;
+            return (0, 0);
         }
 
         // Risk budget in account currency: equity x risk fraction. Fails
@@ -239,21 +275,28 @@ public sealed class FxEngine
         var equity = _equityProvider?.Invoke() ?? 0;
         if (double.IsNaN(equity) || equity <= 0)
         {
-            return 0;
+            return (0, 0);
         }
 
         var spec = _venueSpec ?? FxVenueSymbolSpec.Heuristic(midPrice);
         if (spec.ContractSize <= 0 || spec.VolumeStep <= 0)
         {
-            return 0;   // malformed spec — size nothing rather than guess
+            return (0, 0);   // malformed spec — size nothing rather than guess
+        }
+
+        var stopDistance = StructuralStopFloor(bars, midPrice, spec);
+        if (signal.StopDistanceHint > stopDistance)
+        {
+            stopDistance = signal.StopDistanceHint;
         }
 
         // Stop hints are in price units, so risk per lot is priced per the
         // venue's own contract size.
-        var riskPerLot = signal.StopDistanceHint * spec.ContractSize;
-        if (riskPerLot <= 0) return 0;
+        var riskPerLot = stopDistance * spec.ContractSize;
+        if (riskPerLot <= 0) return (0, 0);
 
         var raw = equity * _riskFraction / riskPerLot;
+
 
         // Clamp to venue max and the engine cap FIRST, then snap DOWN to
         // the venue's volume step (a cap like 0.15 on a 0.1-step symbol
@@ -264,7 +307,31 @@ public sealed class FxEngine
 
         // Below the venue minimum (or dust) = don't trade. Never force the
         // size up to volume_min — that would exceed the risk budget.
-        return lots >= spec.VolumeMin && lots >= 0.01 ? lots : 0;
+        return (lots >= spec.VolumeMin && lots >= 0.01 ? lots : 0, stopDistance);
+    }
+
+    /// <summary>The structural stop floor: a stop inside the day's noise is
+    /// not a stop. ATR(14) over the engine's own bars times the configured
+    /// multiple (the constructor's atrStopMult, 1.5 by design), floored at
+    /// the venue's own stops_level band and capped at half the mid price.
+    /// Returns the venue band alone when the series is too short or the
+    /// ATR is degenerate — the alpha's hint then stands as before.</summary>
+    private double StructuralStopFloor(IReadOnlyList<FxBar>? bars, double midPrice, FxVenueSymbolSpec spec)
+    {
+        var floor = Math.Max(spec.StopsLevel, 0) * Math.Max(spec.Point, 0);
+        if (bars is null || bars.Count < FxFeatures.AtrMinBars || midPrice <= 0)
+        {
+            return floor;   // no series — nothing structural to say
+        }
+
+        var atr = FxFeatures.Atr(bars, 14);
+        if (!double.IsFinite(atr) || atr <= 0)
+        {
+            return floor;
+        }
+
+        var structural = Math.Min(_atrStopMult * atr, 0.5 * midPrice);
+        return structural > floor ? structural : floor;
     }
 
     private static double PipSizeOf(double price) => price switch
