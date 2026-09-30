@@ -18,6 +18,7 @@ namespace DongGfx.App.Tests;
 /// load-bearing rules — verified-demo-only execution, the full order path
 /// still applies, and soak counting unchanged.
 /// </summary>
+[Collection("Shared-DataDir-Directory")]
 public class DemoPaperExecutionTests
 {
     private static TradeJournal NewJournal()

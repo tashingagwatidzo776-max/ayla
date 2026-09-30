@@ -76,6 +76,37 @@ ensemble's close branch) — the promotion ledger now appends a `floor-exit`
 row when a guard save reconciles (PR following #142), so every future
 hard-floor save counts.
 
+## Drawdown vs giveback — keeping the two cases separable
+
+Every save credits TWO engines, and they must not be read as independent
+confirmation of each other:
+
+- **drawdown (weighted 2.0)** — the ensemble's own loss-side engine whose
+  deep-giveback vote (≥0.85) and override drive the exits. Its ledger
+  rows come from two sources: ensemble full closes (settled votes graded
+  at close) and, since PR #143, guard-executed `floor-exit` saves. Before
+  the hard floor shipped it had ZERO ledger rows — its evidence lived in
+  FX_EXIT payloads, not the promotion substrate.
+- **giveback (shadow, weight 0)** — its settled row is a deliberate
+  **mirror**: `FxEngineHost.GivebackShadowVote` copies the drawdown
+  engine's final Exit/Reason onto a weight-0 giveback voice so the same
+  evidence can be graded for the ratio-shaped hypothesis at weight 0.
+
+**Consequence for promotion:** giveback's save-credits are NOT independent
+evidence — they are the same signal family re-graded. Giving giveback
+weight 1.0 means the giveback evidence family effectively votes twice
+(drawdown 2.0 + giveback 1.0) on the same tick. That is acceptable ONLY
+because (a) the two voices diverge in behavior — drawdown is a binary
+threshold, giveback is the continuous ratio — and (b) the McDrill gate
+runs with the proposed weights, so any double-counting instability shows
+up as non-STABLE flips. Reviewers of the weight-1.0 PR should weigh the
+case as "the ratio shape earns its own voice", not "two engines agree".
+
+If the ledger ever shows giveback helped-rate diverging sharply from
+drawdown's on identical settlements, investigate the mirror first — the
+mirror is the coupling, and divergence means the copy is stale, not that
+one engine got smarter.
+
 ## Honest caveats
 
 - **20% ≠ trajectory.** The two helps came from the classic rule; zero

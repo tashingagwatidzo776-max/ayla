@@ -39,6 +39,13 @@ commit (EngineWeights roster test) — that is the reviewed change.
 
 ## Reviewer notes
 
+- **The double-count caveat (see the case doc's "Drawdown vs giveback"
+  section)**: giveback's settled rows mirror the drawdown engine's final
+  evidence, so at weight 1.0 the giveback family votes twice (2.0 + 1.0)
+  on the same tick. The McDrill gate runs WITH this PR's weights — a
+  non-STABLE verdict here is exactly where that coupling would surface.
+  Judge the case on "the ratio shape earns its own voice", not on
+  agreement between the two engines.
 - The giveback vote's Exit is the giveback ratio itself (1 − P/L ÷ MFE,
   capped 0.9) — at weight 1.0 it can tip a 55-band (tighten) decision but
   CANNOT reach the full-exit band alone, and it can never override the

@@ -15,6 +15,7 @@ namespace DongGfx.App.Tests;
 /// states, kill-switch toggle, and push APIs (ReportFxStatus, SetSymbol,
 /// SetBalance, AddHistory) — all without WPF dialogs or a webhook endpoint.
 /// </summary>
+[Collection("Shared-DataDir-Directory")]
 public class DashboardAndSettingsCoverageTests : IDisposable
 {
     // SaveSettingsQuietAsync writes SettingsService.DataDir\settings.json -
