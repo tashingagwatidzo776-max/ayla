@@ -479,6 +479,59 @@ public class FxExitDigestTests
         Assert.DoesNotContain("fill=\"#ef6c00\"", bare);
     }
 
+    [Fact]
+    public void Tp1Capture_Grades_Banked_Tickets_Beside_The_Fleet_Ratio()
+    {
+        // Ticket 601 banked a rung (TP1-EXEC ok) and settled with decisive
+        // evidence; ticket 602 settled decisively without ever arming — the
+        // comparison the section exists to show. A malformed EXEC row is
+        // skipped, never crashes.
+        var t = new DateTimeOffset(2026, 9, 30, 12, 0, 0, TimeSpan.Zero);
+        var entries = new List<JournalEntry>
+        {
+            new()
+            {
+                Timestamp = t, Category = "FX_PROFIT",
+                Details = "XAUUSDmicro #601: TP1-EXEC: banked 0.25 lots (25% plan) of #601 at the armed rung 1.1622 — "
+                    + JsonSerializer.Serialize(new { Ticket = 601L, Executed = true, Lots = 0.25, PlanPct = 25, ArmedPrice = 1.1622 }),
+            },
+            new()
+            {
+                Timestamp = t.AddMinutes(5), Category = "FX_PROFIT",
+                Details = "XAUUSDmicro #602: TP1-EXEC: garbage — not json",
+            },
+            ExitAt(t.AddMinutes(9), "full", null, 0.2, 8.0, 5.0),   // #42, no rung — fleet
+        };
+        // Ticket 601's own decisive settlement row (payload ticket 601).
+        entries.Add(new JournalEntry
+        {
+            Timestamp = t.AddMinutes(10),
+            Category = "FX_EXIT",
+            Details = "XAUUSDmicro #601: full score 61 — "
+                + JsonSerializer.Serialize(new
+                {
+                    Ticket = 601L,
+                    Action = "full",
+                    Override = (string?)null,
+                    MfeR = 4.0,
+                    MaeR = 0.3,
+                    ProfitR = 3.0,
+                }),
+        });
+
+        var md = FxExitWeeklyDigest.Tp1CaptureMarkdown(entries);
+
+        Assert.Contains("TP1 banked-run capture", md);
+        Assert.Contains("#601: banked a rung, captured 3R of its 4R peak (75% capture)", md);
+        Assert.Contains("fleet capture WITHOUT a TP1 rung", md);
+        Assert.DoesNotContain("garbage", md);
+
+        // Silent until rows exist — the fleet-only window renders nothing.
+        var bare = FxExitWeeklyDigest.Tp1CaptureMarkdown(
+            new List<JournalEntry> { ExitAt(t, "full", null, 0.1, 2.0, 1.0) });
+        Assert.Equal(string.Empty, bare);
+    }
+
     // ── The promotion ledger ─────────────────────────────────────────
 
     [Fact]
