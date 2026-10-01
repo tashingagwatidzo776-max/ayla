@@ -76,6 +76,26 @@ Invoke-Step 'script-hygiene' {
 Invoke-Step 'mt5-copy integrity' {
     & "$PSScriptRoot/mt5_copy_integrity.ps1"
 }
+# Watch-the-watcher: the profit-floor watcher's scheduled task must be
+# alive and completing cleanly. Skips cleanly on machines without the
+# task (e.g. CI runners); a task-health rc of 2 (indeterminate — broken
+# probe) is a skip, not a failure: the check itself must never false-green
+# and never false-alarm the gate. rc 1 (stale task / persistent failure
+# exit) fails the gate.
+$taskHealth = python "$PSScriptRoot/check_watcher_task_health.py"
+$taskHealth | ForEach-Object { Write-Host $_ }
+$taskHealthCode = $LASTEXITCODE
+Invoke-Step 'watcher-task-health' {
+    # Invoke-Step keys off $LASTEXITCODE; a PS-only body must set it
+    # explicitly (rc 2 = probe indeterminate → skip, never false-alarm).
+    if ($taskHealthCode -eq 2) {
+        Write-Host 'SKIP: watcher task not present or probe indeterminate'
+        $global:LASTEXITCODE = 0
+    }
+    else {
+        $global:LASTEXITCODE = $taskHealthCode
+    }
+}
 
 # Merge preview: only meaningful when the branch has (or will have) a PR and
 # gh is authenticated. Missing gh or no PR is a skip, not a failure; a BLOCKED
