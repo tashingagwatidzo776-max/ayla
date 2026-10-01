@@ -107,6 +107,17 @@ public class FxExitDigestTests
         Assert.Contains("profit capture", md);   // the capture line always shows
     }
 
+    [Fact]
+    public void Build_Every_Digest_Points_At_The_Soak_Index()
+    {
+        var (msg, md) = FxExitWeeklyDigest.Build(
+            new[] { ExitEntry("hold", null, 0.1, 0.2, 0.1) }, DateTimeOffset.UtcNow);
+
+        Assert.Contains("### Evidence index", md);
+        Assert.Contains("docs/soak/README.md", md);
+        Assert.DoesNotContain("Evidence index", msg); // webhook message stays lean
+    }
+
     // ── the giveback engine's promotion review ───────────────────────
 
     private static JournalEntry CloseEntry(long ticket, int daysAgo = 0) => new()
