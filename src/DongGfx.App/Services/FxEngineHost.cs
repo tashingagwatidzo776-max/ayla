@@ -513,9 +513,28 @@ public sealed class FxEngineHost : IDisposable
                     paperExec: decision.Action == FxDecisionAction.PaperExecuted).ConfigureAwait(true);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // a failed cycle is a skipped cycle — the next timer tick retries
+            // A failed cycle is a skipped cycle — the next timer tick
+            // retries. But it must leave a TRACE: an invisible skipped
+            // cycle is indistinguishable from a dead bridge, and nothing
+            // else in the pass says "the cycle itself blew up".
+            try
+            {
+                Journal("FX_MODE",
+                    $"cycle skipped — {ex.GetType().Name}: {ex.Message}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Symbol,
+                        Error = ex.GetType().Name,
+                        Message = ex.Message,
+                        Stack = ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim(),
+                    }));
+            }
+            catch
+            {
+                // journaling must never be the thing that crashes the cycle
+            }
         }
         finally
         {
@@ -789,6 +808,16 @@ public sealed class FxEngineHost : IDisposable
     /// <summary>Tickets whose TP1 rung has already been banked (or
     /// attempted) — one execution per ticket, per process lifetime.</summary>
     private readonly HashSet<long> _tp1ExecutedTickets = new();
+
+    /// <summary>Tickets whose TP1 arming was suppressed by the
+    /// trailing-mode gate (docs/soak/TP1-FLOOR-INTERACTION.md): on
+    /// STRUCTURE_TRAIL tickets the profit-floor schedule ratchets with the
+    /// peak and dominates any static rung — the backtest on the five
+    /// 2026-09-30 saves measured −1.90R/−1.65R for arming there versus
+    /// +1.78R on a hybrid-floor ticket. One skip row per ticket, per
+    /// process lifetime; a skipped ticket may still EXEC if the rung was
+    /// armed before the gate fired (restart ordering).</summary>
+    private readonly HashSet<long> _tp1GateSkippedTickets = new();
 
     /// <summary>TP1 partial prototype master switch (AppSettings, default
     /// OFF). When armed, the Profit Brain's TP1 rung is EXECUTED once per
@@ -1209,11 +1238,35 @@ public sealed class FxEngineHost : IDisposable
             // uses. Every step is journaled (TP1-ARM / TP1-EXEC under
             // FX_PROFIT) so the graded-vs-advisory split stays auditable.
             // Defaults OFF — an explicit human act turns it on.
-            if (ExecuteTp1Partials
-                && _venueSpec is { } tp1Spec
+            //
+            // TRAILING-MODE GATE (docs/soak/TP1-FLOOR-INTERACTION.md): on
+            // STRUCTURE_TRAIL tickets the never-down floor ratchets with
+            // the peak and out-executes any static rung — bank the rung
+            // there and you sell the floor's better exit at 25% of the
+            // book. Skip arming; let the floor own the partial.
+            var tp1ArmEligible = ExecuteTp1Partials
+                && _venueSpec is not null
                 && decision.Action is not ("full" or "partial")
                 && profit.Allocation.Tp1 >= 10
-                && st.MfeR >= 1.0)
+                && st.MfeR >= 1.0;
+            var tp1GateBlocked = tp1ArmEligible
+                && profit.TrailingMode == "STRUCTURE_TRAIL";
+            if (tp1GateBlocked && _tp1GateSkippedTickets.Add(p.Ticket))
+            {
+                // Journaled once per ticket: the design doc's audit trail —
+                // the rung question was reached and the gate answered it.
+                Journal("FX_PROFIT",
+                    $"TP1-SKIP: {profit.TrailingMode} floor owns the partial on #{p.Ticket} — rung not armed",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = p.Ticket,
+                        TrailingMode = profit.TrailingMode,
+                        PlanPct = profit.Allocation.Tp1,
+                    }));
+            }
+            if (tp1ArmEligible
+                && !tp1GateBlocked
+                && _venueSpec is { } tp1Spec)
             {
                 var tp1 = profit.Tp1;
                 var armed = _tp1ArmedTickets.TryGetValue(p.Ticket, out var armedPrice)

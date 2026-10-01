@@ -334,18 +334,34 @@ def one_pass(alert_webhook: bool = True, webhook_url: str = "",
     # TP1 prototype telemetry: the armed rungs and the banked execs.
     # Silent until the FxExecuteTp1Partials prototype produces rows — the
     # watcher surfaces them so the first ARM/EXEC is seen autonomously.
-    tp1 = [r for r in rs if "TP1-ARM" in r.get("Details", "")
-           or "TP1-EXEC" in r.get("Details", "")]
+    # (rows() keys the raw text "details" — lowercase; an earlier version
+    # read "Details" here and the section could never fire.)
+    tp1 = [r for r in rs if "TP1-ARM" in r.get("details", "")
+           or "TP1-EXEC" in r.get("details", "")]
     if tp1:
-        arms = sum(1 for r in tp1 if "TP1-ARM" in r["Details"])
-        execs = [r for r in tp1 if "TP1-EXEC" in r["Details"]]
+        arms = sum(1 for r in tp1 if "TP1-ARM" in r["details"])
+        execs = [r for r in tp1 if "TP1-EXEC" in r["details"]]
         print(f"=== TP1 prototype ({arms} arm row(s), {len(execs)} exec row(s)) ===")
         for r in (tp1 if len(tp1) <= 6 else tp1[-6:]):
-            print(f"  {r.get('Timestamp', '?')[:19]}  {r['Details'][:100]}")
+            print(f"  {r.get('ts', '?')[:19]}  {r['details'][:100]}")
     return 2 if verified else 0
 
 
 def main() -> None:
+    # The scheduled task runs this with output captured to a file and no
+    # PYTHONIOENCODING set, so Windows defaults stdout to the ANSI code
+    # page (cp1252) — and the capture-trend bar (U+2588 █) plus assorted
+    # journal text crash the pass with UnicodeEncodeError right after the
+    # posture print. A scheduler never sees the traceback, so every pass
+    # since the first non-zero capture day (2026-09-30) has silently died
+    # before the TP1 section. Force UTF-8 on both streams regardless of
+    # console or pipe (Python 3.7+).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--loop", type=int, default=0, metavar="SEC",
                     help="poll every SEC seconds instead of one pass")

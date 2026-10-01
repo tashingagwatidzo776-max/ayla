@@ -38,9 +38,14 @@ python scripts/trade_lifecycle.py --ticket <n> --json    # full timeline
 
 ## Graded tickets
 
-| Ticket | Symbol | Armed (UTC) | Exec (UTC) | Rung banked | Live peak | Settled | Capture | vs giveback baseline |
-|---|---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — | — |
+| Ticket | Symbol | TrailingMode | Armed (UTC) | Exec (UTC) | Rung banked | Live peak | Settled | Capture | vs giveback baseline |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+Gate note (TP1-FLOOR-INTERACTION.md, now implemented): STRUCTURE_TRAIL
+tickets never arm (TP1-SKIP row instead — the floor owns the partial);
+graded rows should therefore only ever appear for hybrid/ATR tickets.
+If a STRUCTURE_TRAIL ticket ever shows an ARM row, the gate regressed.
 
 ## Backtest: TP1 rung on top of the five 2026-09-30 saves
 
