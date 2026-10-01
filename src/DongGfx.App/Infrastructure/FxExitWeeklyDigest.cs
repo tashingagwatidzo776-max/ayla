@@ -316,7 +316,11 @@ public sealed class FxExitWeeklyDigest : IDisposable
                   $"avg score: {profitStates.Average(p => p.Score):0}\n" +
                   $"- states: {string.Join(", ", profitStates.GroupBy(p => p.State)
                       .OrderByDescending(g => g.Count()).Select(g => $"{g.Key} ×{g.Count()}"))}\n"
-                : string.Empty);
+                : string.Empty) +
+            // Every digest points newcomers at the full evidence arc:
+            // one stable path, one line, indexed once in the soak README.
+            "\n### Evidence index\n\n" +
+            "- promotion cases, incidents, and week summaries: docs/soak/README.md\n";
 
         return (message, markdown);
     }
