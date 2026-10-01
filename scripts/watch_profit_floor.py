@@ -16,7 +16,9 @@ a verified save exists (0 otherwise) so any scheduler can react too.
 Exit code 3 when a TP1 gate regression is detected: a TP1-ARM row on a
 ticket whose trailing mode was STRUCTURE_TRAIL at arm time — the floor
 owns those partials (docs/soak/TP1-FLOOR-INTERACTION.md), so an armed
-rung there is the gate failing open.
+rung there is the gate failing open. A regression also PAGES the
+webhook (once per arm row, deduped across restarts like the save
+alerts), so the drill pages instead of only failing.
 
 Each pass also prints the open book's giveback posture (newest FX_PROFIT
 row per ticket) so the approach to the 60% watch bar and the 75% override
@@ -265,6 +267,60 @@ def build_alert_payload_slack(save: dict, chain: dict) -> dict:
                              "text": embed["description"]}]}
 
 
+def build_gate_alert_payload(regressions: list[dict]) -> tuple[str, dict]:
+    """The page for the drill: a rung armed on a STRUCTURE_TRAIL ticket
+    means the trailing-mode gate failed open. One embed per regression
+    row (the caller dedups rows, so one row per call is the shape)."""
+    r = regressions[0]
+    ticket = r["payload"].get("Ticket", "?")
+    ts = r.get("ts", "?")
+    title = "\U0001f6a8 TP1 gate regression — rung armed on STRUCTURE_TRAIL"
+    text = (
+        f"TP1-ARM on ticket #{ticket} whose trailing mode was "
+        f"STRUCTURE_TRAIL at arm time — the gate failed open; the floor "
+        f"owns that partial (docs/soak/TP1-FLOOR-INTERACTION.md).\n"
+        f"{ts[:19]} UTC — {len(regressions)} regression row(s) in this pass"
+    )
+    return "discord", {
+        "embeds": [{"title": title, "description": text, "color": 0xB71C1C}]}
+
+
+def alert_gate(regressions: list[dict], webhook_url: str, state_path: str,
+               dry_run: bool = False) -> int:
+    """Page the webhook once per regression row — deduped across restarts
+    in the same state file as the save alerts (a lost entry means one
+    re-page). Returns the number of pages sent (or would have been,
+    under --dry-run). A failed POST raises so the pass can retry next
+    time with the state untouched."""
+    is_discord = "discord" in webhook_url
+    seen = load_alerted(state_path)
+    new_keys: list[str] = []
+    sent = 0
+    try:
+        for r in regressions:
+            key = f"gate|{r.get('ts', '')}|{r['payload'].get('Ticket', '?')}"
+            if key in seen:
+                continue
+            _, discord = build_gate_alert_payload([r])
+            body = discord if is_discord else {
+                "attachments": [{
+                    "color": f"#{discord['embeds'][0]['color']:06x}",
+                    "title": discord["embeds"][0]["title"],
+                    "text": discord["embeds"][0]["description"],
+                }]}
+            if dry_run:
+                print("dry-run: would alert (gate regression)")
+            else:
+                status = post_webhook(webhook_url, body)
+                print(f"alert: HTTP {status} for {key}")
+            new_keys.append(key)
+            sent += 1
+    finally:
+        if new_keys and not dry_run:
+            save_alerted(state_path, seen | set(new_keys))
+    return sent
+
+
 def post_webhook(url: str, body: dict) -> int:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"),
@@ -398,6 +454,11 @@ def one_pass(alert_webhook: bool = True, webhook_url: str = "",
               f"(docs/soak/TP1-FLOOR-INTERACTION.md)")
         for r in (regressions if len(regressions) <= 10 else regressions[-10:]):
             print(f"  {r.get('ts', '?')[:19]}  {r['details'][:100]}")
+        if alert_webhook and webhook_url:
+            try:
+                alert_gate(regressions, webhook_url, state_path, dry_run)
+            except RuntimeError as exc:
+                print(f"gate alert FAILED (will retry next pass, state untouched): {exc}")
     return 3 if regressions else (2 if verified else 0)
 
 

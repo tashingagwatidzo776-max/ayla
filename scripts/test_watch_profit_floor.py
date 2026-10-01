@@ -303,6 +303,70 @@ def test_tp1_mode_unknown_before_arm_stays_silent():
     assert "GATE REGRESSION" not in r.stdout, r.stdout
 
 
+def gate_journal(d):
+    """The regression fixture: STRUCTURE_TRAIL telemetry, then an arm."""
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20,
+                   mode="STRUCTURE_TRAIL"),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+    ])
+
+
+def test_gate_regression_pages_webhook_once_and_dedups():
+    """Exit 3 now PAGES: one POST for the regression row, the state file
+    remembers, and the next pass re-fails (exit 3) without re-paging."""
+    server, url = serve_once()
+    d = TmpData(webhook_url=url)
+    gate_journal(d)
+    try:
+        r1 = d.run()
+        assert r1.returncode == 3, r1.stdout + r1.stderr
+        assert len(FakeWebhook.hits) == 1, r1.stdout
+        embed = FakeWebhook.hits[0]["embeds"][0]
+        assert embed["title"].startswith("\U0001f6a8")
+        assert "STRUCTURE_TRAIL" in embed["title"]
+        assert "555" in embed["description"]
+        assert any(k.startswith("gate|") for k in d.state()), d.state()
+
+        r2 = d.run()
+        assert r2.returncode == 3          # still failing, still loud
+        assert len(FakeWebhook.hits) == 1  # but not re-paged
+    finally:
+        server.shutdown()
+
+
+def test_gate_alert_failure_leaves_state_untouched():
+    """HTTP 500 -> 'gate alert FAILED', no gate key saved, so the next
+    pass retries the page (a page is not 'sent' until accepted)."""
+    server, url = serve_once()
+    FakeWebhook.status = 500
+    d = TmpData(webhook_url=url)
+    gate_journal(d)
+    try:
+        r = d.run()
+        assert r.returncode == 3, r.stdout + r.stderr
+        assert "gate alert FAILED" in r.stdout
+        assert not any(k.startswith("gate|") for k in d.state())
+    finally:
+        FakeWebhook.status = 204
+        server.shutdown()
+
+
+def test_gate_alert_dry_run_never_posts_or_remembers():
+    server, url = serve_once()
+    d = TmpData(webhook_url=url)
+    gate_journal(d)
+    try:
+        r = d.run("--dry-run")
+        assert r.returncode == 3, r.stdout + r.stderr
+        assert "dry-run: would alert (gate regression)" in r.stdout
+        time.sleep(0.1)
+        assert len(FakeWebhook.hits) == 0
+        assert not any(k.startswith("gate|") for k in d.state())
+    finally:
+        server.shutdown()
+
+
 def test_utf8_output_survives_cp1252_scheduled_env():
     """REGRESSION (2026-09-30): the scheduled task runs this script with
     output captured to a file and NO PYTHONIOENCODING, so Windows defaulted

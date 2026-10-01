@@ -62,10 +62,14 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   partials watch, the grading runbook for the first armed ticket, the
   graded-ticket table (empty until the first live TP1-ARM), and the rung
   backtest on the five saves.
-- [TP1-FLOOR-INTERACTION.md](TP1-FLOOR-INTERACTION.md) — DESIGN: skip the
+- [TP1-FLOOR-INTERACTION.md](TP1-FLOOR-INTERACTION.md) — DESIGN → IMPLEMENTED:
+  skip the
   rung on STRUCTURE_TRAIL tickets (the floor ratchets past any static
   rung), keep it on hybrid floors — the trailing mode is the one signal
-  that separates the backtest's winners from losers.
+  that separates the backtest's winners from losers. The watcher pages
+  on a gate regression (ARM under STRUCTURE_TRAIL) and
+  `scripts/check_watcher_task_health.py` watches the watcher's own
+  scheduled task for staleness or persistent failure exits.
 
 **Promotion cases (evidence bars for engine weights)**
 
