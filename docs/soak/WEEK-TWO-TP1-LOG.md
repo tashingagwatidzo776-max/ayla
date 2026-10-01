@@ -13,8 +13,15 @@ never reach the venue book, so the first sighting comes from real traffic.
 - **Gate-regression drill**: the watcher flags any TP1-ARM row on a ticket
   whose trailing mode was STRUCTURE_TRAIL at arm time (`!!! TP1 GATE
   REGRESSION` banner) and exits 3 — persistent, every pass, because the
-  journal keeps the evidence. Exit codes: 0 clean, 2 verified save, 3 gate
-  regression (docs/soak/TP1-FLOOR-INTERACTION.md).
+  journal keeps the evidence, and PAGES the webhook once per regression
+  row (deduped across restarts; a failed POST retries next pass).
+  Exit codes: 0 clean, 2 verified save, 3 gate regression
+  (docs/soak/TP1-FLOOR-INTERACTION.md).
+- **Watch-the-watcher**: `scripts/check_watcher_task_health.py` fails (rc 1)
+  when the scheduled task is stale (last run > 10 min despite the 4-min
+  trigger) or the last two DISTINCT completions share a failure-class exit
+  code (persistent exit 3 = the gate regression firing; exit 2 twice is two
+  verified saves — never a failure). rc 2 = broken probe (never green).
 - The weekly digest auto-posts ~3 min after app start and carries
   `Tp1CaptureMarkdown`: the graded ticket's captured R beside the
   fleet-without-TP1 capture.

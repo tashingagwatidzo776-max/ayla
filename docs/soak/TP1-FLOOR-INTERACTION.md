@@ -100,7 +100,10 @@ Rebalance guard rails (same policy as every weight/threshold change):
   `test_tp1_arm_on_structure_trail_is_gate_regression_exit_3`): any
   TP1-ARM on a ticket whose trailing mode was STRUCTURE_TRAIL at arm
   time prints a `!!! TP1 GATE REGRESSION` banner and exits 3, every
-  pass, until a human looks. The arm row carries no TrailingMode, so
-  the watcher reconstructs the mode from the ticket's FX_PROFIT
-  telemetry (newest stamp at-or-before the arm; mode unknown → silent,
-  not flagged).
+  pass, until a human looks — and PAGES the webhook once per regression
+  row (deduped across restarts in the same state file as the save
+  alerts; a failed POST retries next pass, pinned by
+  `test_gate_regression_pages_webhook_once_and_dedups`). The arm row
+  carries no TrailingMode, so the watcher reconstructs the mode from
+  the ticket's FX_PROFIT telemetry (newest stamp at-or-before the arm;
+  mode unknown → silent, not flagged).
