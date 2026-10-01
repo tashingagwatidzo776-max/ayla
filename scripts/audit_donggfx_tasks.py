@@ -14,6 +14,12 @@ One pass over the task fleet answers three questions per task:
 Cross-task duplicates of the same script are reported as notes (the
 evening drill is registered twice by design/history), not findings.
 
+Every run appends one summary line to the task-health history file
+(data/watcher/task-audit-history.json, TF_DATA_DIR-aware): findings
+count + the finding strings. Scheduled weekly, that history is how
+drift is CAUGHT without a session — a subsequent run (or a session) can
+read when each finding first appeared and whether it persisted.
+
 Exit 0 clean, 1 findings. Read-only: never edits the tasks — findings
 are printed with the exact fix command for human approval.
 
@@ -33,6 +39,48 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WRAPPER = "set PYTHONIOENCODING=utf-8&&"
+HISTORY_MAX = 60
+
+
+def data_dir() -> str:
+    """TF_DATA_DIR override, else %APPDATA%\\tf\\data — the same
+    convention check_watcher_task_health.py's history file honors."""
+    override = os.environ.get("TF_DATA_DIR")
+    return override if override else os.path.expandvars(r"%APPDATA%\tf\data")
+
+
+def record_history(findings: list[str], task_count: int) -> None:
+    """Append one deduped summary line to the audit history file. The
+    LAST line is repeated on every clean pass (a clean pass re-records
+    0 findings so staleness of the file itself is readable); identical
+    consecutive finding-lists collapse to one line, so a finding that
+    appears, persists, and disappears reads as three lines."""
+    path = os.path.join(data_dir(), "watcher", "task-audit-history.json")
+    try:
+        import datetime
+        ts = datetime.datetime.now(
+            datetime.timezone.utc).isoformat(timespec="seconds")
+    except Exception:
+        ts = None   # a missing clock is no reason to lose the verdict
+    entry = {"ts": ts, "tasks": task_count, "findings": findings}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            hist = json.load(fh)
+        if not isinstance(hist, list):
+            hist = []
+    except (OSError, ValueError):
+        hist = []
+    if hist and isinstance(hist[-1], dict) \
+            and hist[-1].get("findings") == findings:
+        hist[-1] = entry          # same verdict: refresh ts, no new line
+    else:
+        hist.append(entry)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(hist[-HISTORY_MAX:], fh, indent=1)
+    except OSError:
+        pass   # best-effort substrate: a lost history means one blind week
 # Whitespace-excluded (not quote-excluded): "pythonw.exe C:\...py" blobs
 # must split into two paths, or the pythonw prefix glues onto the script
 # and produces a phantom 'missing on disk' finding (found on first run).
@@ -155,20 +203,21 @@ def main() -> None:
                 if v.get("script") == script:
                     v["notes"].append(f"script shared with: {names}")
 
-    findings = 0
+    finding_list = []
     for v in verdicts:
         print(f"{v['name']}")
         for f in v["findings"]:
-            findings += 1
+            finding_list.append(f"{v['name']}: {f}")
             print(f"  FINDING: {f}")
             if args.fix_dry and v.get("script"):
                 print(f"    fix: cmd /c set PYTHONIOENCODING=utf-8&& "
                       f"\"C:\\Python314\\python.exe\" \"{v['script']}\"")
         for n in v["notes"]:
             print(f"  note: {n}")
-    print(f"task-audit: {'FAIL' if findings else 'OK'} — "
-          f"{len(verdicts)} task(s), {findings} finding(s)")
-    sys.exit(1 if findings else 0)
+    print(f"task-audit: {'FAIL' if finding_list else 'OK'} — "
+          f"{len(verdicts)} task(s), {len(finding_list)} finding(s)")
+    record_history(finding_list, len(verdicts))
+    sys.exit(1 if finding_list else 0)
 
 
 if __name__ == "__main__":

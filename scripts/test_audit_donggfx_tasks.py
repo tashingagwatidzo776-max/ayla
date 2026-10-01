@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import sys
 import tempfile
@@ -129,7 +130,21 @@ def test_non_python_task_is_skipped():
 
 
 def test_main_exit_codes():
-    """0 on a clean fleet, 1 on findings, 2 when the probe itself dies."""
+    """0 on a clean fleet, 1 on findings, 2 when the probe itself dies.
+
+    TF_DATA_DIR is pointed at a scratch dir for the whole test: main()
+    records its verdict to the audit history, and a run without the env
+    override would append to the REAL %APPDATA% history (live finding,
+    2026-10-01)."""
+    with tempfile.TemporaryDirectory() as scratch:
+        os.environ["TF_DATA_DIR"] = scratch
+        try:
+            _test_main_exit_codes_inner()
+        finally:
+            del os.environ["TF_DATA_DIR"]
+
+
+def _test_main_exit_codes_inner():
     try:
         with tempfile.TemporaryDirectory() as tmp:
             script = make_script(tmp)
@@ -155,6 +170,60 @@ def test_main_exit_codes():
     finally:
         mod.list_tasks = _REAL_LIST_TASKS
         mod.head_hash = _REAL_HEAD_HASH
+
+
+def test_record_history_appends_and_dedups():
+    """The weekly cadence's memory: each distinct verdict appends a line,
+    an identical consecutive verdict refreshes in place (dedup), and the
+    file caps at HISTORY_MAX entries."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["TF_DATA_DIR"] = tmp
+        try:
+            mod.record_history(["t: drifted from git HEAD"], 8)
+            mod.record_history(["t: drifted from git HEAD"], 8)  # same verdict
+            mod.record_history([], 8)                            # clean pass
+            p = Path(tmp) / "watcher" / "task-audit-history.json"
+            hist = json.loads(p.read_text(encoding="utf-8"))
+            assert len(hist) == 2, hist
+            assert hist[0]["findings"] == ["t: drifted from git HEAD"]
+            assert hist[0]["tasks"] == 8 and hist[0]["ts"]
+            assert hist[1]["findings"] == []
+            # Identical clean verdicts keep collapsing in place.
+            mod.record_history([], 8)
+            assert len(json.loads(p.read_text(encoding="utf-8"))) == 2
+        finally:
+            if "TF_DATA_DIR" in os.environ:
+                del os.environ["TF_DATA_DIR"]
+
+
+def test_record_history_survives_corrupt_file():
+    """A corrupt/unreadable history is not a crash — the audit verdict
+    stands and the file is rebuilt from this run."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["TF_DATA_DIR"] = tmp
+        try:
+            d = Path(tmp) / "watcher"
+            d.mkdir(parents=True)
+            (d / "task-audit-history.json").write_text("{not json", encoding="utf-8")
+            mod.record_history([], 5)
+            hist = json.loads((d / "task-audit-history.json").read_text(encoding="utf-8"))
+            assert len(hist) == 1 and hist[0]["tasks"] == 5
+        finally:
+            if "TF_DATA_DIR" in os.environ:
+                del os.environ["TF_DATA_DIR"]
+
+
+def test_record_history_honors_tmpdata_not_real_appdata():
+    """The history lands under TF_DATA_DIR, never %APPDATA%\tf (the live
+    app's dir) when the env override is set — the TmpData harness rule."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["TF_DATA_DIR"] = tmp
+        try:
+            mod.record_history([], 3)
+            assert (Path(tmp) / "watcher" / "task-audit-history.json").exists()
+        finally:
+            if "TF_DATA_DIR" in os.environ:
+                del os.environ["TF_DATA_DIR"]
 
 
 def _run_main(buf) -> int:

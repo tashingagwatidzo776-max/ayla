@@ -16,6 +16,11 @@ TP1-ARM row (deduped across restarts via data/watcher/) it
      ARM row: the graded number in the message where the operator
      reads it. Refusals (Executed=false) page too — a refused rung is
      exactly what grading needs to see.
+  4. refreshes the TP1-EXEC digest block in
+     docs/soak/WEEK-TWO-TP1-LOG.md so EVERY banked rung — not just the
+     first — lands in the log automatically (one row per EXEC,
+     mechanical columns only; the capture/vs-giveback verdict stays the
+     manual runbook step).
 
 TP1-SKIP rows are evidence-dumped too (the gate answering IS the
 finding) but never page — ARM and EXEC are the paging events.
@@ -38,6 +43,11 @@ import urllib.request
 
 TICKET_RE = re.compile(r"#(\d+)")
 
+# The digest block is replaced in place on every pass — never appended —
+# so the log stays hand-editable and the table never accumulates stale rows.
+DIGEST_START = "<!-- TP1-EXEC-DIGEST:START -->"
+DIGEST_END = "<!-- TP1-EXEC-DIGEST:END -->"
+
 
 def data_dir() -> str:
     override = os.environ.get("TF_DATA_DIR")
@@ -54,6 +64,17 @@ def state_path() -> str:
 
 def evidence_path() -> str:
     return os.path.join(data_dir(), "watcher", "tp1-first-arm-evidence.jsonl")
+
+
+def digest_log_path() -> str:
+    """Where the digest block lands: TF_TP1_DIGEST_LOG override (tests),
+    else the repo's docs/soak/WEEK-TWO-TP1-LOG.md (the script lives in
+    <repo>/scripts, the log in <repo>/docs/soak)."""
+    override = os.environ.get("TF_TP1_DIGEST_LOG")
+    if override:
+        return override
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo, "docs", "soak", "WEEK-TWO-TP1-LOG.md")
 
 
 def load_state() -> dict:
@@ -82,6 +103,27 @@ def load_settings() -> dict:
         return {}
 
 
+def parse_envelope(line: str) -> dict | None:
+    """One raw journal line -> the row shape every consumer here uses
+    ({ts, cat, details, payload}), or None for unparseable lines. The
+    payload is the JSON embedded in Details after its first '{'."""
+    try:
+        env = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    details = str(env.get("Details", ""))
+    brace = details.find("{")
+    payload = {}
+    if brace >= 0:
+        try:
+            payload = json.loads(details[brace:])
+        except json.JSONDecodeError:
+            payload = {}
+    return {"ts": str(env.get("Timestamp", "")),
+            "cat": str(env.get("Category", "")),
+            "details": details, "payload": payload}
+
+
 def parse_rows() -> list[dict]:
     """Every journal row whose details mention TP1-, with the payload
     parsed out of the first '{' (the watcher's rows() convention)."""
@@ -91,22 +133,32 @@ def parse_rows() -> list[dict]:
             for line in fh:
                 if "TP1-" not in line or '"FX_' not in line:
                     continue
-                try:
-                    env = json.loads(line)
-                except json.JSONDecodeError:
+                row = parse_envelope(line)
+                if row is not None:
+                    row["file"] = os.path.basename(path)
+                    out.append(row)
+    out.sort(key=lambda r: r["ts"])
+    return out
+
+
+def digest_rows() -> list[dict]:
+    """The digest's substrate: every FX_PROFIT / FX_EXIT row plus every
+    TP1-marked row, ts-ordered. Read straight from the journals — NOT
+    from the evidence file, whose dump is once-per-journal-file and so
+    misses rows landing after the first dump (a second banked rung on
+    the same day must still reach the log)."""
+    out = []
+    for path in journal_files():
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"FX_' not in line:
                     continue
-                details = str(env.get("Details", ""))
-                brace = details.find("{")
-                payload = {}
-                if brace >= 0:
-                    try:
-                        payload = json.loads(details[brace:])
-                    except json.JSONDecodeError:
-                        payload = {}
-                out.append({"file": os.path.basename(path),
-                            "ts": str(env.get("Timestamp", "")),
-                            "cat": env.get("Category", ""),
-                            "details": details, "payload": payload})
+                if "TP1-" not in line and '"FX_PROFIT"' not in line \
+                        and '"FX_EXIT"' not in line:
+                    continue
+                row = parse_envelope(line)
+                if row is not None:
+                    out.append(row)
     out.sort(key=lambda r: r["ts"])
     return out
 
@@ -251,7 +303,156 @@ def one_pass() -> int:
         state["paged"] = sorted(set(state.get("paged", [])) | {key})
         save_state(state)
         paged += 1
+
+    # Every banked rung, not just the first, lands in the log's digest
+    # block. Best-effort by construction: a failure here must never
+    # break the watch — the journals keep the raw rows either way.
+    try:
+        build_exec_digest(digest_log_path())
+    except Exception:
+        pass
+
     return 2 if paged else 0
+
+
+def _num(value) -> float | None:
+    return value if isinstance(value, (int, float)) else None
+
+
+def _trailing_mode(rows: list[dict], ticket, at_ts: str) -> str:
+    """The gate-drill reconstruction rule: the newest TrailingMode stamp
+    at-or-before at_ts; '—' when the mode was never journaled there."""
+    stamps = []
+    for r in rows:
+        if r["cat"] != "FX_PROFIT":
+            continue
+        p = r["payload"]
+        try:
+            if int(p.get("Ticket", -1)) != int(ticket):
+                continue
+        except (TypeError, ValueError):
+            continue
+        mode = p.get("TrailingMode")
+        if isinstance(mode, str) and mode and r["ts"] <= at_ts:
+            stamps.append((r["ts"], mode))
+    return sorted(stamps)[-1][1] if stamps else "—"
+
+
+def _symbol_of(details: str) -> str:
+    head = details.split(" #", 1)[0].strip()
+    return head if head and len(head) <= 12 and " " not in head else "—"
+
+
+def build_exec_digest(log_path: str) -> int:
+    """Refresh the TP1-EXEC digest block in the week-two log: one row
+    per banked (or refused) rung, mechanically derived from the
+    journals — rung/plan/banked R from the ARM+EXEC payloads, live peak
+    from the newest FX_PROFIT report at-or-before the exec, closed R
+    from the newest decisive FX_EXIT after it, TrailingMode
+    reconstructed with the gate-drill rule. Capture and the
+    vs-giveback verdict stay the manual runbook step.
+
+    Returns 0 written · 2 nothing to do (no EXEC rows, unreadable
+    journal, or no anchor heading in the log). Idempotent: the block
+    between the markers is REPLACED, never appended, so re-runs and
+    re-pages leave exactly one current table.
+    """
+    rows = digest_rows()
+    execs = [r for r in rows if "TP1-EXEC" in r["details"]]
+    if not execs:
+        return 2
+
+    block = [
+        "### Live TP1-EXEC digest (auto)",
+        "",
+        "Regenerated every pass by `scripts/watch_tp1_first_arm.py` —",
+        "mechanical columns only; Capture and the vs-giveback verdict",
+        "remain the manual runbook step below. Banked R = plan % × rung R",
+        "(position-weighted R locked at the cross). Closed R = newest",
+        "decisive FX_EXIT ProfitR after the exec ('—' while open).",
+        "TrailingMode is reconstructed from the ticket's FX_PROFIT",
+        "telemetry at-or-before the arm (unknown → '—'; the same rule",
+        "the gate-regression drill uses).",
+        "",
+        "| Ticket | Symbol | Mode | Armed (UTC) | Exec (UTC) | Rung | Plan | Banked R | Live peak | Closed R | Executed |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    arms = arm_by_key(rows)
+    for r in execs:
+        p = r["payload"]
+        ticket = p.get("Ticket", "?")
+        arm = arm_for(r, arms)
+        rung_r = _num((arm or {}).get("payload", {}).get("TargetR"))
+        plan = _num(p.get("PlanPct")) or _num((arm or {}).get("payload", {}).get("PlanPct"))
+        banked = f"{plan / 100 * rung_r:+.2f}R" \
+            if plan is not None and rung_r is not None else "—"
+        rung = f"{rung_r:g}R" if rung_r is not None else "—"
+
+        peak = "—"
+        for pr in rows:
+            if pr["cat"] != "FX_PROFIT" or pr["ts"] > r["ts"]:
+                continue
+            pp = pr["payload"]
+            try:
+                if int(pp.get("Ticket", -1)) != int(ticket):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            v = _num(pp.get("PeakR"))
+            if v is not None:
+                peak = f"{v:.1f}R"
+
+        closed = "—"
+        for xr in rows:
+            if xr["cat"] != "FX_EXIT" or xr["ts"] <= r["ts"]:
+                continue
+            xp = xr["payload"]
+            try:
+                if int(xp.get("Ticket", -1)) != int(ticket):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if xp.get("Action") not in ("full", "partial") \
+                    and xp.get("Override") is None:
+                continue
+            v = _num(xp.get("ProfitR"))
+            if v is not None:
+                closed = f"{v:+.2f}R"
+
+        executed = "yes" if p.get("Executed") is not False \
+            else f"no (rc {p.get('Retcode', '?')})"
+        block.append(
+            f"| #{ticket} | {_symbol_of(r['details'])} "
+            f"| {_trailing_mode(rows, ticket, (arm or r)['ts'])} "
+            f"| {(arm or r)['ts'][:19]} | {r['ts'][:19]} "
+            f"| {rung} | {plan if plan is not None else '—'} "
+            f"| {banked} | {peak} | {closed} | {executed} |"
+        )
+    block.append("")
+
+    try:
+        with open(log_path, encoding="utf-8") as fh:
+            log = fh.read()
+    except OSError:
+        return 2
+
+    new_block = f"{DIGEST_START}\n" + "\n".join(block) + f"\n{DIGEST_END}"
+    if DIGEST_START in log and DIGEST_END in log:
+        pre, rest = log.split(DIGEST_START, 1)
+        _, post = rest.split(DIGEST_END, 1)
+        new_log = pre + new_block + post
+    else:
+        # First insertion: directly above the manual grading table the
+        # digest feeds — the anchor the runbook grades from.
+        anchor = "## Graded tickets"
+        idx = log.find(anchor)
+        if idx < 0:
+            return 2
+        new_log = log[:idx] + new_block + "\n\n" + log[idx:]
+
+    with open(log_path, "w", encoding="utf-8") as fh:
+        fh.write(new_log)
+    return 0
 
 
 def main() -> None:

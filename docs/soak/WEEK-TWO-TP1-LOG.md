@@ -36,13 +36,28 @@ never reach the venue book, so the first sighting comes from real traffic.
   `data/watcher/tp1-first-arm-evidence.jsonl`. TP1-SKIP rows are dumped
   as evidence but never page. Replaces session babysitting: the table
   below gets filled from the evidence file, no operator watching.
-- **Task-fleet audit**: `scripts/audit_donggfx_tasks.py` (tests 9/9)
+- **TP1-EXEC digest (auto)**: every pass of the pager regenerates the
+  `### Live TP1-EXEC digest (auto)` block above the graded table — one
+  row per banked (or refused) rung, mechanically derived from the
+  journals: rung R and plan % from the ARM/EXEC payloads, Banked R =
+  plan × rung R, live peak from the newest FX_PROFIT report at-or-before
+  the exec, closed R from the newest decisive FX_EXIT after it,
+  TrailingMode reconstructed with the gate drill's rule (unknown → —).
+  The block is REPLACED in place each pass (markers
+  `TP1-EXEC-DIGEST:START/END`), so the log stays hand-editable and
+  never accumulates stale rows. Capture and the vs-giveback verdict
+  remain the manual runbook step — the mechanical columns land
+  automatically, the judgment is still human.
+- **Task-fleet audit**: `scripts/audit_donggfx_tasks.py` (tests 12/12)
   checks every DongGfx/tf scheduled task for the PYTHONIOENCODING cmd
   wrapper (pythonw is N/A — no stdout), repo-script drift vs git HEAD,
   and missing files; duplicates are notes, not findings. Read-only —
-  findings print with the exact fix command. First run caught its own
-  regex bug (pythonw blob glued into the path → phantom finding) and
-  the pager's in-flight edit, both fixed/pinned.
+  findings print with the exact fix command. Every run appends a deduped
+  summary line to `data/watcher/task-audit-history.json` (TF_DATA_DIR-
+  aware), and task **"DongGfx task-fleet audit"** (register:
+  `scripts/register-audit-task.ps1`, tests 17/17) runs it WEEKLY — so
+  drift is caught without a session: when a finding first appeared and
+  whether it persisted is readable from the history file.
 - The weekly digest auto-posts ~3 min after app start and carries
   `Tp1CaptureMarkdown`: the graded ticket's captured R beside the
   fleet-without-TP1 capture.
@@ -71,6 +86,24 @@ python scripts/watch_profit_floor.py; echo "exit=$?"     # 2 save, 3 gate regres
 curl -s 127.0.0.1:53190/positions                        # open book
 python scripts/trade_lifecycle.py --ticket <n> --json    # full timeline
 ```
+
+<!-- TP1-EXEC-DIGEST:START -->
+### Live TP1-EXEC digest (auto)
+
+Regenerated every pass by `scripts/watch_tp1_first_arm.py` —
+mechanical columns only; Capture and the vs-giveback verdict
+remain the manual runbook step below. Banked R = plan % × rung R
+(position-weighted R locked at the cross). Closed R = newest
+decisive FX_EXIT ProfitR after the exec ('—' while open).
+TrailingMode is reconstructed from the ticket's FX_PROFIT
+telemetry at-or-before the arm (unknown → '—'; the same rule
+the gate-regression drill uses).
+
+| Ticket | Symbol | Mode | Armed (UTC) | Exec (UTC) | Rung | Plan | Banked R | Live peak | Closed R | Executed |
+|---|---|---|---|---|---|---|---|---|---|---|
+| #555 | EURUSD | HYBRID_STRUCTURE_ATR | 2026-10-01T10:20:00 | 2026-10-01T10:20:00 | — | 25 | — | 4.0R | — | yes |
+
+<!-- TP1-EXEC-DIGEST:END -->
 
 ## Graded tickets
 
