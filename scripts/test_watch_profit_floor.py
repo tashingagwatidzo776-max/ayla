@@ -231,6 +231,43 @@ def test_daily_capture_silent_when_no_decisive_exits():
     assert "daily profit capture" not in r.stdout
 
 
+def test_utf8_output_survives_cp1252_scheduled_env():
+    """REGRESSION (2026-09-30): the scheduled task runs this script with
+    output captured to a file and NO PYTHONIOENCODING, so Windows defaulted
+    stdout to cp1252 — and the first non-zero capture day made the █ bar
+    (U+2588) crash every pass with UnicodeEncodeError AFTER the posture
+    print, silently killing the TP1 section a scheduler would never see.
+    Reproduce the broken env exactly: piped stdout, ANSI code page, no
+    encoding overrides — the watcher must reconfigure its own streams and
+    print the full pass including the TP1 section."""
+    if os.name != "nt":
+        return
+    d = TmpData()
+    d.journal([
+        # A non-zero capture day: the bar must survive cp1252 stdout.
+        exit_row("2026-10-01T10:00:00.0+00:00", 42, 5.0, 2.0, action="full"),
+        # A TP1 arm row: the section must print after the capture section.
+        {"cat": "FX_PROFIT",
+         "details": "EURUSD #42: TP1-ARM: rung prev-day-high 1.1025 (+2.1R) "
+                    "armed for #42 (25% plan) — executes when price crosses: "
+                    + json.dumps({"Ticket": 42, "Target": "prev-day-high", "PlanPct": 25}),
+         "ts": "2026-10-01T10:05:00.0+00:00"},
+    ])
+    env = dict(os.environ, TF_DATA_DIR=str(d.root))
+    env.pop("PYTHONIOENCODING", None)   # the scheduled task has none
+    env["PYTHONLEGACYWINDOWSSTDIO"] = "1"  # force the legacy cp1252 path
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT)], env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # piped = not a console
+        timeout=60)
+    out = r.stdout.decode("utf-8", errors="replace")
+    assert r.returncode == 0, out + r.stderr.decode("utf-8", errors="replace")
+    assert "daily profit capture" in out, out
+    assert "█" in out, out                  # the bar itself, not mojibake
+    assert "TP1 prototype" in out and "TP1-ARM" in out, out
+    assert "UnicodeEncodeError" not in r.stderr.decode("utf-8", errors="replace")
+
+
 def test_posture_flags_watch_and_override_bands():
     """40% on a 3R peak is sub-watch; 62% on a 2R peak hits the watch band;
     76% on a 5R peak hits the override bar."""

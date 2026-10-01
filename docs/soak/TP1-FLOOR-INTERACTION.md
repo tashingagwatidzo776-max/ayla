@@ -1,10 +1,13 @@
 # TP1-floor interaction design — skip the rung when the floor owns the exit
 
-Status: **DESIGN — not implemented.** Evidence: the rung backtest on the
-five 2026-09-30 saves (`scripts/tp1_save_backtest.py`,
-[WEEK-TWO-TP1-LOG.md](WEEK-TWO-TP1-LOG.md)) plus a signal probe across
-every arm row. Companion to the arm-then-cross block in `FxEngineHost`
-(TP1 partial prototype).
+Status: **IMPLEMENTED** (the trailing-mode gate in `FxEngineHost`'s TP1
+block, behind `FxExecuteTp1Partials`; journaled TP1-SKIP rows; pinned by
+`Tp1_Partial_Never_Arms_On_Structure_Trail_The_Floor_Owns_The_Exit` and
+`Tp1_Partial_Arms_And_Banks_On_A_Hybrid_Floor_Ticket`). Evidence: the
+rung backtest on the five 2026-09-30 saves
+(`scripts/tp1_save_backtest.py`, [WEEK-TWO-TP1-LOG.md](WEEK-TWO-TP1-LOG.md))
+plus a signal probe across every arm row. Companion to the arm-then-cross
+block in `FxEngineHost` (TP1 partial prototype).
 
 ## The question
 
@@ -80,16 +83,16 @@ Rebalance guard rails (same policy as every weight/threshold change):
   (floor was 4.00R for both classes); distance at arm is not predictive,
   the SCHEDULE is.
 
-## Open items for the implementation PR
+## Open items for the live grading
 
-- Where: `FxEngineHost` TP1 arm gate — add the TrailingMode check beside
-  `profit.Allocation.Tp1 >= 10 && st.MfeR >= 1.0`.
-- Journal: the skip should be visible (one FX_MODE or FX_PROFIT row when
-  the gate suppresses a would-be arm) so the graded-vs-advisory split
-  stays auditable.
-- Week-two log: add a graded-ticket column for TrailingMode so the live
-  grading can test the gate's prediction (rung helps hybrid, never
-  arms on STRUCTURE_TRAIL).
-- The currently running app (PID 8084, pre-#151 build) is unaffected;
-  the gate ships behind the existing `FxExecuteTp1Partials` toggle either
-  way, so arming behavior cannot change without an explicit operator act.
+- Where it landed: `FxEngineHost` TP1 block — `tp1ArmEligible` minus
+  `tp1GateBlocked` (`profit.TrailingMode == "STRUCTURE_TRAIL"`), with a
+  once-per-ticket FX_PROFIT TP1-SKIP row (TrailingMode + PlanPct) so the
+  graded-vs-advisory split stays auditable.
+- Week-two log: the graded-ticket table should record TrailingMode per
+  ticket so live grading can test the gate's prediction (rung helps
+  hybrid, never arms on STRUCTURE_TRAIL).
+- The gate ships behind the existing `FxExecuteTp1Partials` toggle: it
+  only narrows WHO arms; arming behavior cannot change without an
+  explicit operator act, and demotion (arm everywhere) is a one-line
+  revert if 20 graded tickets underperform the fleet-without-TP1 capture.

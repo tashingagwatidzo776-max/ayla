@@ -42,6 +42,34 @@ public class DemoPaperExecutionTests
         public int ModifyCalls;
         public string? LastClosePath;
 
+        /// <summary>The candle tape the regime detector reads. Default: a
+        /// rising walk (closes 1.10 → 1.15) that classifies Trend — the
+        /// STRUCTURE_TRAIL path. Tests needing the HYBRID path set a flat
+        /// tape via FlatTape().</summary>
+        public object[] Bars = Enumerable.Range(0, 120).Select(i => (object)new
+        {
+            time = 1_700_000_000L + i * 60,
+            open = 1.10 + i * 0.0004,
+            high = 1.10 + i * 0.0004 + 0.0004,
+            low = 1.10 + i * 0.0004 - 0.0004,
+            close = 1.10 + i * 0.0004 + 0.0002,
+        }).ToArray();
+
+        /// <summary>Replace the default rising (Trend) tape with a flat,
+        /// low-volatility tape: no donchian breakout, sub-threshold ADX —
+        /// the regime falls through to hybrid trailing.</summary>
+        public void FlatTape(double mid = 1.15, double amp = 0.0004)
+        {
+            Bars = Enumerable.Range(0, 120).Select(i => (object)new
+            {
+                time = 1_700_000_000L + i * 60,
+                open = mid + Math.Sin(i * 0.5) * amp,
+                high = mid + Math.Sin(i * 0.5) * amp + amp / 2,
+                low = mid + Math.Sin(i * 0.5) * amp - amp / 2,
+                close = mid + Math.Sin(i * 0.5) * amp + amp / 4,
+            }).ToArray();
+        }
+
         /// <summary>When false, /close refuses (the retry-ladder test).</summary>
         public bool CloseOk = true;
 
@@ -79,14 +107,7 @@ public class DemoPaperExecutionTests
             {
                 // Rising tape: 120 bars, closes 1.10 → 1.15 — a clean
                 // donchian-breakout walk so the brain has a signal to speak.
-                r = Json(new { candles = Enumerable.Range(0, 120).Select(i => new
-                {
-                    time = 1_700_000_000L + i * 60,
-                    open = 1.10 + i * 0.0004,
-                    high = 1.10 + i * 0.0004 + 0.0004,
-                    low = 1.10 + i * 0.0004 - 0.0004,
-                    close = 1.10 + i * 0.0004 + 0.0002,
-                }).ToArray() });
+                r = Json(new { candles = Bars });
             }
             else if (path.Contains("/ticks/"))
             {
@@ -722,17 +743,15 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
-    public async Task Tp1_Partial_Arms_At_First_Sighting_And_Banks_On_The_Cross()
+    public async Task Tp1_Partial_Never_Arms_On_Structure_Trail_The_Floor_Owns_The_Exit()
     {
+        // TRAILING-MODE GATE (docs/soak/TP1-FLOOR-INTERACTION.md). The
+        // default rising tape classifies Trend → STRUCTURE_TRAIL trailing:
+        // the never-down floor ratchets with the peak and out-executes any
+        // static rung (the five-save backtest measured −1.90R/−1.65R for
+        // arming on such tickets). The rung must never arm; the hard
+        // floor's full close is untouched.
         var journal = NewJournal();
-        // Entry 1.1480, venue SL 1.1450 → risk ≈ 0.003. Cycle 1: price
-        // 1.1550 (~2.3R) — MFE gate passes, the rung ARMS at the first
-        // ladder target ahead of the price (the tape's swing high ≈ 1.1504,
-        // which is BELOW the current price? No — ahead-only keeps targets
-        // above 1.1550, so the rung sits above the current price).
-        // Cycle 2: price walks to 1.1700 — past every rung the ladder can
-        // name → the armed rung is crossed and the 25% plan banks once.
-        // Volume 1.0 so the 25% rung clears the venue's 0.1 lot step.
         object[] At(double price, double profit) => new object[]
         {
             new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 1.0,
@@ -741,66 +760,115 @@ public class DemoPaperExecutionTests
         };
         var script = new BridgeScript { Positions = At(1.1550, 70.0) };
         var host = NewHost(script, journal);
+        // The engine re-speaks on the same pinned bars every cycle, so an
+        // unchanged 5-minute cooldown throttles the dispatch AND (pre-fix)
+        // returned before position management — a swallowed cycle. Zero it:
+        // these tests pin the TP1/floor layers, not the dispatch throttle.
+        host.OrderCooldown = TimeSpan.Zero;
         try
         {
-            // Default OFF: the plan is advisory only — no arming, no close.
-            FxEngineHost.ExecuteTp1Partials = false;
-            await host.RunCycleAsync();
-            Assert.Equal(0, script.CloseCalls);
-            journal.Flush();
-            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
-                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
-
-            // Armed (cycle 1): the rung is recorded, nothing executes yet.
             FxEngineHost.ExecuteTp1Partials = true;
             await host.RunCycleAsync();
             Assert.Equal(0, script.CloseCalls);
             journal.Flush();
-            Assert.Contains(journal.GetRecent(null, 200), e =>
+            var recent = journal.GetRecent(null, 200).ToList();
+            // The gate answered, audibly, exactly once.
+            Assert.Contains(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-SKIP"));
+            Assert.Contains(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("STRUCTURE_TRAIL"));
+            Assert.Equal(1, recent.Count(e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-SKIP")));
+            Assert.DoesNotContain(recent, e =>
                 e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
 
-            // Crossed (cycle 2): the rung banks once — AND the hard floor
-            // (armed by this trade's own FX_PROFIT row: peak ≈ +22R → a
-            // high never-down floor) fires its full close the SAME cycle.
-            // COEXISTENCE CONTRACT (guard × TP1 on one ticket): two closes,
-            // one per layer, exactly once each, hard protection FIRST —
-            // the guard runs ahead of the ensemble/TP1 block in the pass.
-            // Live-venue caveat: because the guard's full close precedes,
-            // the TP1 partial may be refused by a real venue (position
-            // already flat); the fake bridge accepts both. Either way the
-            // position ends flat exactly once and the rung never re-banks.
+            // Crossed price, deep peak: the never-down floor ratchets to a
+            // high floor — the guard transitions Armed→Protected this cycle
+            // (no breach check on the transition), still no close, and
+            // still no rung.
             script.Positions = At(1.1700, 220.0);
             await host.RunCycleAsync();
-            Assert.Equal(2, script.CloseCalls);
+            Assert.Equal(0, script.CloseCalls);
             journal.Flush();
-            // At +22R the plan is the strong-continuation variant (15/20/25/40)
-            // and 0.15 lots snaps DOWN to the venue's 0.1 step.
             Assert.Contains(journal.GetRecent(null, 200), e =>
-                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC: banked 0.1 lots (15% plan)"));
-            Assert.Contains(journal.GetRecent(null, 200), e =>
-                e.Category == "FX_PROFIT" && e.Details.Contains("\"PlanPct\":15"));
-            // The hard floor's close is on the trail too.
-            Assert.Contains(journal.GetRecent(null, 200), e =>
-                e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
-            // Layer order is assertable in the journal: the guard's breach
-            // row precedes the prototype's EXEC row — hard risk first.
-            // GetRecent returns newest-first; re-order chronologically.
-            var chrono = journal.GetRecent(null, 200).Reverse().ToList();
-            var breachIdx = chrono.FindIndex(e =>
-                e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
-            var execIdx = chrono.FindIndex(e =>
-                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC"));
-            Assert.True(breachIdx >= 0 && execIdx > breachIdx, "the guard commands before the prototype banks");
+                e.Category == "FX_FLOOR" && e.Details.Contains("PROFIT FLOOR ARMED"));
+            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
 
-            // Once per ticket per layer: the next cycle must not re-bank
-            // the rung nor re-fire the floor (the position is gone; the
-            // guard reconciles to EXIT_CONFIRMED on the agreeing reads).
+            // Next cycle: the guard BREACHES (the executable bid is far
+            // through the ratcheted floor) and its full close is the ONLY
+            // close. No rung ever armed, so there is no partial to bank:
+            // the floor owns the exit entire.
+            await host.RunCycleAsync();
+            journal.Flush();
+            Assert.True(script.CloseCalls == 1, $"closes={script.CloseCalls}\n" +
+                string.Join("\n", journal.GetRecent(null, 60).Select(e => $"{e.Timestamp:HH:mm:ss} {e.Category}: {e.Details}")));
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
+            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC"));
+            // The skip row never repeats.
+            Assert.Equal(1, journal.GetRecent(null, 200).Count(e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-SKIP")));
+
+            // Position gone: the guard reconciles to EXIT_CONFIRMED exactly
+            // once, and nothing re-arms or re-banks.
             script.Positions = Array.Empty<object>();
             await host.RunCycleAsync();
-            Assert.Equal(2, script.CloseCalls);
+            Assert.Equal(1, script.CloseCalls);
             journal.Flush();
             Assert.Contains(journal.GetRecent(null, 200), e =>
                 e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+        }
+        finally
+        {
+            FxEngineHost.ExecuteTp1Partials = false;   // never leak into other tests
+        }
+    }
+
+    [Fact]
+    public async Task Tp1_Partial_Arms_And_Banks_On_A_Hybrid_Floor_Ticket()
+    {
+        var journal = NewJournal();
+        // Same walk as the STRUCTURE_TRAIL test but on a FLAT tape: the
+        // regime falls through to HYBRID_STRUCTURE_ATR, the gate does not
+        // fire, and the rung arms at first sighting and banks on the cross
+        // exactly as before the gate existed.
+        object[] At(double price, double profit) => new object[]
+        {
+            new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 1.0,
+                  price_open = 1.1480, price_current = price, profit = profit,
+                  sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+        };
+        var script = new BridgeScript { Positions = At(1.1550, 70.0) };
+        script.FlatTape();
+        var host = NewHost(script, journal);
+        host.OrderCooldown = TimeSpan.Zero;   // see the gate test — determinism
+        try
+        {
+            FxEngineHost.ExecuteTp1Partials = true;
+            await host.RunCycleAsync();
+            Assert.Equal(0, script.CloseCalls);
+            journal.Flush();
+            var recent = journal.GetRecent(null, 200).ToList();
+            Assert.Contains(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
+            Assert.DoesNotContain(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-SKIP"));
+
+            // Crossed (cycle 2): the rung banks once. On a hybrid ticket
+            // the floor does NOT ratchet with the peak, so there is no
+            // guard breach here — the rung is the only partial.
+            script.Positions = At(1.1700, 220.0);
+            await host.RunCycleAsync();
+            Assert.Equal(1, script.CloseCalls);
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC: banked"));
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("\"PlanPct\":15"));
+            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_FLOOR" && e.Details.Contains("HARD PROFIT FLOOR BREACH"));
         }
         finally
         {
