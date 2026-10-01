@@ -13,6 +13,10 @@ webhook (Settings -> notifications in the app, same Discord/Slack channel
 the settlements use) exactly once per event — dedup state in
 data/watcher/profit-floor-alerts.json survives restarts. Exit code 2 when
 a verified save exists (0 otherwise) so any scheduler can react too.
+Exit code 3 when a TP1 gate regression is detected: a TP1-ARM row on a
+ticket whose trailing mode was STRUCTURE_TRAIL at arm time — the floor
+owns those partials (docs/soak/TP1-FLOOR-INTERACTION.md), so an armed
+rung there is the gate failing open.
 
 Each pass also prints the open book's giveback posture (newest FX_PROFIT
 row per ticket) so the approach to the 60% watch bar and the 75% override
@@ -160,6 +164,44 @@ def book_posture(rs: list[dict]) -> dict[int, dict]:
         if ticket > 0:
             latest[ticket] = p
     return latest
+
+
+def gate_regressions(rs: list[dict]) -> list[dict]:
+    """TP1-ARM rows on tickets whose trailing mode — as of the arm row —
+    was STRUCTURE_TRAIL. TP1-FLOOR-INTERACTION.md: the never-down floor
+    owns the partial there, so an armed rung is the gate failing open.
+
+    The arm row's payload carries no TrailingMode (Ticket/Target/
+    TargetPrice/TargetR/PlanPct), so the mode is reconstructed from the
+    ticket's FX_PROFIT telemetry rows that do carry the field (plain
+    profit telemetry and TP1-SKIP rows). Conservative by construction:
+    only the newest mode stamped AT OR BEFORE the arm counts, and a
+    ticket with no mode journaled before the arm stays silent — absence
+    of evidence is not a regression."""
+    modes: dict[int, list[tuple[str, str]]] = {}
+    for r in rs:
+        if r["cat"] != "FX_PROFIT":
+            continue
+        p = r["payload"]
+        mode = p.get("TrailingMode")
+        try:
+            ticket = int(p.get("Ticket", -1))
+        except (TypeError, ValueError):
+            continue
+        if isinstance(mode, str) and mode and ticket > 0:
+            modes.setdefault(ticket, []).append((r["ts"], mode))
+    out = []
+    for r in rs:
+        if "TP1-ARM" not in r.get("details", ""):
+            continue
+        try:
+            ticket = int(r["payload"].get("Ticket", -1))
+        except (TypeError, ValueError):
+            continue
+        known = [m for ts, m in modes.get(ticket, []) if ts <= r["ts"]]
+        if known and known[-1] == "STRUCTURE_TRAIL":
+            out.append(r)
+    return out
 
 
 def daily_capture(rs: list[dict], days: int = 7) -> list[tuple[str, int, float, float, float]]:
@@ -344,7 +386,19 @@ def one_pass(alert_webhook: bool = True, webhook_url: str = "",
         print(f"=== TP1 prototype ({arms} arm row(s), {len(execs)} exec row(s)) ===")
         for r in (tp1 if len(tp1) <= 6 else tp1[-6:]):
             print(f"  {r.get('ts', '?')[:19]}  {r['details'][:100]}")
-    return 2 if verified else 0
+
+    # The gate-regression drill (TP1-FLOOR-INTERACTION.md): an ARM on a
+    # STRUCTURE_TRAIL ticket means the trailing-mode gate failed open.
+    # Persistent, not deduped — the pass fails (exit 3) every minute until
+    # a human looks, because the journal keeps the evidence.
+    regressions = gate_regressions(rs)
+    if regressions:
+        print(f"!!! TP1 GATE REGRESSION — {len(regressions)} arm row(s) on "
+              f"STRUCTURE_TRAIL ticket(s); the floor owns those partials "
+              f"(docs/soak/TP1-FLOOR-INTERACTION.md)")
+        for r in (regressions if len(regressions) <= 10 else regressions[-10:]):
+            print(f"  {r.get('ts', '?')[:19]}  {r['details'][:100]}")
+    return 3 if regressions else (2 if verified else 0)
 
 
 def main() -> None:

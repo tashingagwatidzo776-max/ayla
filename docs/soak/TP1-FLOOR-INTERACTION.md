@@ -96,3 +96,11 @@ Rebalance guard rails (same policy as every weight/threshold change):
   only narrows WHO arms; arming behavior cannot change without an
   explicit operator act, and demotion (arm everywhere) is a one-line
   revert if 20 graded tickets underperform the fleet-without-TP1 capture.
+- **Regression drill automated** (watcher, pinned by
+  `test_tp1_arm_on_structure_trail_is_gate_regression_exit_3`): any
+  TP1-ARM on a ticket whose trailing mode was STRUCTURE_TRAIL at arm
+  time prints a `!!! TP1 GATE REGRESSION` banner and exits 3, every
+  pass, until a human looks. The arm row carries no TrailingMode, so
+  the watcher reconstructs the mode from the ticket's FX_PROFIT
+  telemetry (newest stamp at-or-before the arm; mode unknown → silent,
+  not flagged).
