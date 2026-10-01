@@ -86,11 +86,17 @@ def main() -> int:
                 dst.write(line + "\n")
                 kept += 1
 
-    digest = hashlib.sha256(open(out, "rb").read()).hexdigest()
+    raw = open(out, "rb").read()
+    digest = hashlib.sha256(raw).hexdigest()
+    # The snapshot test pins the NEWLINE-NORMALIZED sha256 (git autocrlf
+    # may rewrite LF -> CRLF on checkout; an end-line-sensitive pin
+    # would then reject its own fixture — caught in PR #151's follow-up).
+    norm = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
     print(f"source: {src}")
     print(f"FX_EXIT rows seen: {fx_exit_seen}; rows frozen: {kept}")
     print(f"fixture: {out}")
-    print(f"sha256: {digest}")
+    print(f"sha256 (raw): {digest}")
+    print(f"sha256 (newline-normalized — pin THIS): {norm}")
     return 0
 
 

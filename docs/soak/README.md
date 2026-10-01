@@ -59,8 +59,13 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   score-0 ensemble diagnosis, the +20.25R round-trip backtest, and the
   gate that became the profit-floor override tier.
 - [WEEK-TWO-TP1-LOG.md](WEEK-TWO-TP1-LOG.md) — week two opens: the TP1
-  partials watch, the grading runbook for the first armed ticket, and the
-  graded-ticket table (empty until the first live TP1-ARM).
+  partials watch, the grading runbook for the first armed ticket, the
+  graded-ticket table (empty until the first live TP1-ARM), and the rung
+  backtest on the five saves.
+- [TP1-FLOOR-INTERACTION.md](TP1-FLOOR-INTERACTION.md) — DESIGN: skip the
+  rung on STRUCTURE_TRAIL tickets (the floor ratchets past any static
+  rung), keep it on hybrid floors — the trailing mode is the one signal
+  that separates the backtest's winners from losers.
 
 **Promotion cases (evidence bars for engine weights)**
 
