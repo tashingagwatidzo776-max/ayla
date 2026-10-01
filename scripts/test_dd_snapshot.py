@@ -1,28 +1,36 @@
 #!/usr/bin/env python3
-"""Snapshot test: dd_weight_backtest.py against a FROZEN real journal day.
+"""Snapshot tests: dd_weight_backtest.py against FROZEN real journal days.
 
-The fixture scripts/fixtures/journal-frozen-20260930.jsonl is a
-byte-faithful sample of the live 2026-09-30 journal (override rows,
-nonzero-drawdown rows, a 1-in-50 background sample, guard-save floor
-rows — 131 rows; regenerate with scripts/freeze_journal_sample.py and
-NEVER casually: its whole value is being frozen).
+The fixtures are byte-faithful samples of the live journals, frozen by
+scripts/freeze_journal_sample.py (regenerate with care: the guard below
+pins the exact bytes, so a re-freeze must move the pins in the same
+reviewed commit):
+
+  - journal-frozen-20260929.jsonl — 176 rows (the 4,169-FX_EXIT day:
+    all override rows, all nonzero-drawdown rows, 1-in-50 background,
+    both guard-save floor rows)
+  - journal-frozen-20260930.jsonl — 131 rows (same selection on the
+    save day: 4 profit-floor overrides, 120 resolver evaluations)
 
 The contract: the pinned expectations below reproduce EXACTLY while the
 FX_EXIT row schema holds. When a future schema change in the wild stops
 reproducing them — score fields renamed, weights moved, votes reshaped —
-this test fails loudly instead of letting the flip counts silently
-skew. Two layers:
+these tests fail loudly instead of letting the flip counts silently
+skew. Three layers:
 
-  1. Pinned counts: 120 resolver evaluations, 4 override rows (all
-     profit-floor), 3 advisory flips across 2 guard-save tickets, 0
-     exit-boundary flips, 0 score-reproduction mismatches, both
-     guard-save tickets seen.
-  2. Frozen-byte guard: the fixture's sha256 must stay
-     ba939885643908b3cc11e9e5e8f5d0dc43113d5304ce99eeed6715f98e4b431d —
-     the pins are only meaningful against the exact frozen bytes. If the
-     fixture legitimately needs re-freezing (a deliberately regenerated
-     sample), the hash pin and the expectation pins must move TOGETHER
-     in one reviewed commit.
+  1. Frozen-content guard: each fixture's NEWLINE-NORMALIZED sha256
+     must match the pin. The normalization (CRLF -> LF before hashing)
+     matters: git's autocrlf may rewrite LF fixtures to CRLF on
+     checkout, and an end-line-sensitive hash would then reject the
+     very bytes it pinned (this shipped in PR #151 and was caught the
+     next day — the 09-30 pin value is unchanged from #151's raw-bytes
+     pin because that file's original bytes were pure LF).
+  2. Pinned counts, two-day combined: 286 resolver evaluations, 14
+     advisory flips across 7 tickets, 0 exit-boundary flips, 13
+     override rows (9 drawdown + 4 profit-floor), 0 mismatches, both
+     guard-save tickets seen, the full drawdown Exit distribution.
+  3. Drift drill: a simulated Score-field rename trips the mismatch
+     probe (235 mismatches, 0 fabricated flips) instead of lying.
 
 Run: python scripts/test_dd_snapshot.py   (exit 0 = all pass)
 """
@@ -31,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -38,8 +47,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-FIXTURE = HERE / "fixtures" / "journal-frozen-20260930.jsonl"
-FIXTURE_SHA256 = "ba939885643908b3cc11e9e5e8f5d0dc43113d5304ce99eeed6715f98e4b431d"
+# (day, newline-normalized sha256) — see layer 1 in the docstring.
+FIXTURES = [
+    ("20260929", "ba6d94e6bb9c32424c785e9776fa896286e04a86effeceb1dde19aeff9695847"),
+    ("20260930", "ba939885643908b3cc11e9e5e8f5d0dc43113d5304ce99eeed6715f98e4b431d"),
+]
 
 
 def _load_module():
@@ -53,11 +65,47 @@ def _load_module():
 MOD = _load_module()
 
 
-def run_on_fixture() -> str:
+def normalized_sha256(path: Path) -> str:
+    raw = path.read_bytes()
+    return hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def fixture_path(day: str) -> Path:
+    return HERE / "fixtures" / f"journal-frozen-{day}.jsonl"
+
+
+def run_on_fixtures(days: list[str], drift: bool = False) -> str:
+    """Copy the frozen fixtures into a temp journal dir (optionally
+    drift: rename the Score field via decode/rename/re-serialize — no
+    hand-written escapes) and run the backtest there."""
     with tempfile.TemporaryDirectory() as tmp:
         jdir = Path(tmp) / "tf" / "data" / "journal"
         jdir.mkdir(parents=True)
-        shutil.copy(FIXTURE, jdir / "journal_20260930.jsonl")
+        for day in days:
+            src = fixture_path(day)
+            if not drift:
+                shutil.copy(src, jdir / f"journal_{day}.jsonl")
+                continue
+            lines = []
+            for line in src.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                details = row.get("Details", "")
+                brace = details.find("{")
+                if brace >= 0:
+                    try:
+                        dec = json.loads(details[brace:])
+                        if isinstance(dec, dict) and "Score" in dec:
+                            dec["EnsembleScore"] = dec.pop("Score")
+                            head = details[:brace].rstrip().rstrip(":").strip()
+                            row["Details"] = f"{head}: " + json.dumps(dec)
+                    except json.JSONDecodeError:
+                        pass
+                lines.append(json.dumps(row, separators=(",", ":")))
+            (jdir / f"journal_{day}.jsonl").write_text(
+                "\n".join(lines) + "\n", encoding="utf-8")
+
         old = os.environ.get("APPDATA")
         os.environ["APPDATA"] = tmp
         buf = io.StringIO()
@@ -73,93 +121,60 @@ def run_on_fixture() -> str:
     return buf.getvalue()
 
 
-def test_fixture_is_frozen():
-    digest = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
-    assert digest == FIXTURE_SHA256, (
-        f"fixture bytes changed (sha256 {digest}). The pins in "
-        "test_snapshot_expectations were derived from specific frozen "
-        "bytes — re-freeze and update BOTH together in one reviewed "
-        "commit, or revert the fixture.")
-    print("PASS fixture bytes match the frozen sha256")
+def test_fixtures_are_frozen():
+    for day, sha in FIXTURES:
+        digest = normalized_sha256(fixture_path(day))
+        assert digest == sha, (
+            f"fixture journal-frozen-{day}.jsonl bytes changed (sha256 "
+            f"{digest}). The pins in test_snapshot_expectations were "
+            "derived from specific frozen bytes — re-freeze and update "
+            "BOTH together in one reviewed commit, or revert the fixture.")
+    print(f"PASS {len(FIXTURES)} frozen fixtures match their sha256 pins "
+          "(newline-normalized: autocrlf checkouts stay valid)")
 
 
-def test_snapshot_expectations():
-    text = run_on_fixture()
-    # Pinned from the frozen 2026-09-30 sample (see module docstring).
+def test_snapshot_expectations_two_day():
+    text = run_on_fixtures([day for day, _ in FIXTURES])
+    # Per-file and total rows (pinned from the two frozen days).
+    assert "journal_20260929.jsonl           166      11          9" in text
     assert "journal_20260930.jsonl           120       3          4" in text
-    assert "decision flips 2.0 -> 1.0: 3 of 120 (2.50%)" in text
+    assert "TOTAL                            286      14         13" in text
+    assert "decision flips 2.0 -> 1.0: 14 of 286 (4.90%)" in text
+    # The headline contract: no exit-band decision ever flipped.
     assert "EXIT-boundary flips (touch partial/full): 0 across 0 tickets" in text
-    assert "advisory-only flips (hold/monitor/tighten): 3 across 2 tickets" in text
+    assert "advisory-only flips (hold/monitor/tighten): 14 across 7 tickets" in text
     assert "#9820712902: 2 rows, hold->monitor GUARD-SAVE" in text
-    assert "#9820719898: 1 rows, hold->monitor GUARD-SAVE" in text
-    assert "override-tier rows (replayed unchanged): 4" in text
+    assert "#9820719898: 2 rows, hold->monitor GUARD-SAVE" in text
+    # Overrides replay unchanged; integrity probes clean.
+    assert "override-tier rows (replayed unchanged): 13" in text
+    assert "drawdown: 9" in text
     assert "profit-floor: 4" in text
     assert "score-reproduction mismatches (schema drift probe): 0" in text
+    assert "(skipped 1 unparseable / non-roster / mismatched rows)" in text
     assert "guard-save tickets seen (FX_FLOOR layer): [9820712902, 9820719898]" in text
-    assert "drawdown vote Exit distribution" in text
-    assert "exit=  0.0: 39" in text
+    # The drawdown Exit distribution pins the vote shape itself.
+    assert "exit=  0.0: 112" in text
     assert "exit= 0.65: 81" in text
-    print("PASS snapshot expectations reproduce exactly on frozen bytes")
+    assert "exit=  1.0: 34" in text
+    print("PASS two-day snapshot expectations reproduce exactly on frozen bytes")
 
 
 def test_schema_drift_fails_loudly():
-    """A future FX_EXIT schema change must trip the pins, not pass."""
-    with tempfile.TemporaryDirectory() as tmp:
-        # Simulate the app renaming its Score field (a plausible schema
-        # evolution) WITHOUT hand-writing escapes: decode each row with
-        # json.loads, rename the key inside the decoded Details payload,
-        # re-serialize with json.dumps. Weight drift is caught even
-        # earlier — by the roster guard (rows skip as non-roster) — so
-        # the score rename is the clean mismatch-probe demonstration.
-        import json as _json
-        drifted_lines = []
-        for line in FIXTURE.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = _json.loads(line)
-            details = row.get("Details", "")
-            brace = details.find("{")
-            if brace >= 0:
-                try:
-                    dec = _json.loads(details[brace:])
-                    if isinstance(dec, dict) and "Score" in dec:
-                        dec["EnsembleScore"] = dec.pop("Score")
-                        head = details[:brace].rstrip().rstrip(":").strip()
-                        row["Details"] = f"{head}: " + _json.dumps(dec)
-                except _json.JSONDecodeError:
-                    pass
-            drifted_lines.append(_json.dumps(row, separators=(",", ":")))
-        drifted = Path(tmp) / "drifted.jsonl"
-        drifted.write_text("\n".join(drifted_lines) + "\n", encoding="utf-8")
-        jdir = Path(tmp) / "tf" / "data" / "journal"
-        jdir.mkdir(parents=True)
-        shutil.copy(drifted, jdir / "journal_20260930.jsonl")
-        old = os.environ.get("APPDATA")
-        os.environ["APPDATA"] = tmp
-        buf = io.StringIO()
-        try:
-            with redirect_stdout(buf):
-                MOD.main()
-        finally:
-            if old is None:
-                os.environ.pop("APPDATA", None)
-            else:
-                os.environ["APPDATA"] = old
-        text = buf.getvalue()
-    # The drifted signature, pinned: 96 resolver rows mismatch-skip
+    text = run_on_fixtures([day for day, _ in FIXTURES], drift=True)
+    # The drifted signature, pinned: 222 resolver rows mismatch-skip
     # (logged Score unreadable -> 0.0 default vs the replayed real
-    # score), the 4 override rows add their own mismatches (logged 0.0
-    # != 100), 24 rows whose true logged score was ~0 still pass the
-    # equality probe, and the flip count collapses to 0 of 24 instead
+    # score), the 13 override rows add their own mismatches (logged 0.0
+    # != 100), 64 rows whose true logged score was ~0 still pass the
+    # equality probe, and the flip count collapses to 0 of 64 instead
     # of fabricating flips from garbage.
-    assert "score-reproduction mismatches (schema drift probe): 100" in text
-    assert "decision flips 2.0 -> 1.0: 0 of 24 (0.00%)" in text
-    assert "(skipped 96 unparseable / non-roster / mismatched rows)" in text
-    print("PASS schema drift fails loudly via the mismatch probe")
+    assert "score-reproduction mismatches (schema drift probe): 235" in text
+    assert "decision flips 2.0 -> 1.0: 0 of 64 (0.00%)" in text
+    assert "(skipped 223 unparseable / non-roster / mismatched rows)" in text
+    print("PASS schema drift fails loudly via the mismatch probe (two-day)")
 
 
 if __name__ == "__main__":
-    test_fixture_is_frozen()
-    test_snapshot_expectations()
+    test_fixtures_are_frozen()
+    test_snapshot_expectations_two_day()
     test_schema_drift_fails_loudly()
     print("ALL PASS")
