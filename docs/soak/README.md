@@ -69,7 +69,9 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   that separates the backtest's winners from losers. The watcher pages
   on a gate regression (ARM under STRUCTURE_TRAIL) and
   `scripts/check_watcher_task_health.py` watches the watcher's own
-  scheduled task for staleness or persistent failure exits.
+  scheduled task for staleness or persistent failure exits (hourly task
+  + ci-local gate step); `scripts/watch_tp1_first_arm.py` (5-min task)
+  pages the first TP1-ARM and dumps the grading evidence.
 
 **Promotion cases (evidence bars for engine weights)**
 
