@@ -28,11 +28,21 @@ never reach the venue book, so the first sighting comes from real traffic.
 - **First-ARM pager**: task "DongGfx TP1 first-arm pager" runs
   `scripts/watch_tp1_first_arm.py` every 5 min — on the first TP1-ARM row
   it pages the webhook (🎯 once per arm row, deduped across restarts;
-  exit 2 scheduler-visible) and dumps the grading evidence (every TP1 row
-  plus every FX_* row for the referenced tickets) to
+  exit 2 scheduler-visible), on the ticket's TP1-EXEC it pages again with
+  the graded number in the message (banked lots + rung R resolved from
+  the ARM row; refusals page with the retcode — grading needs to see
+  them), and it dumps the grading evidence (every TP1 row plus every
+  FX_* row for the referenced tickets) to
   `data/watcher/tp1-first-arm-evidence.jsonl`. TP1-SKIP rows are dumped
   as evidence but never page. Replaces session babysitting: the table
   below gets filled from the evidence file, no operator watching.
+- **Task-fleet audit**: `scripts/audit_donggfx_tasks.py` (tests 9/9)
+  checks every DongGfx/tf scheduled task for the PYTHONIOENCODING cmd
+  wrapper (pythonw is N/A — no stdout), repo-script drift vs git HEAD,
+  and missing files; duplicates are notes, not findings. Read-only —
+  findings print with the exact fix command. First run caught its own
+  regex bug (pythonw blob glued into the path → phantom finding) and
+  the pager's in-flight edit, both fixed/pinned.
 - The weekly digest auto-posts ~3 min after app start and carries
   `Tp1CaptureMarkdown`: the graded ticket's captured R beside the
   fleet-without-TP1 capture.

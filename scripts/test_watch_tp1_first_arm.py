@@ -248,6 +248,88 @@ def test_two_arms_on_different_tickets_page_twice():
         server.shutdown()
 
 
+def exec_row(ts, ticket, lots=0.25, executed=True, retcode=None):
+    """The exact shape FxEngineHost journals on the TP1 close attempt:
+    lots and Executed, but NO rung R — that lives only in the ARM row."""
+    payload = {"Ticket": ticket, "Executed": executed, "Lots": lots,
+               "PlanPct": 25, "ArmedPrice": 1.1025}
+    if retcode is not None:
+        payload["Retcode"] = retcode
+    action = "TP1-EXEC: banked" if executed else "TP1-EXEC refused for"
+    return {"cat": "FX_PROFIT",
+            "details": f"EURUSD #{ticket}: {action} "
+                       f"{lots} lots (25% plan) of #{ticket}: "
+                       + json.dumps(payload), "ts": ts}
+
+
+def test_exec_pages_with_banked_r_from_arm():
+    """The EXEC page carries the graded number: banked lots and the rung
+    R resolved from the ARM row (the EXEC payload has no R)."""
+    server, url = serve_once()
+    d = TmpData(webhook_url=url)
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555, lots=0.25),
+    ])
+    try:
+        r = d.run()
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert len(FakeWebhook.hits) == 2   # ARM page + EXEC page
+        titles = [h["embeds"][0]["title"] for h in FakeWebhook.hits]
+        assert any("banked" in t for t in titles)
+        desc = next(h["embeds"][0]["description"] for h in FakeWebhook.hits
+                    if "banked" in h["embeds"][0]["title"])
+        # TargetR round-trips through JSON as a float: the C# "+2.1"
+        # custom format arrives as 2.1.
+        assert "0.25" in desc and "2.1R" in desc and "25% plan" in desc, desc
+    finally:
+        server.shutdown()
+
+
+def test_exec_refusal_pages_with_retcode():
+    """Executed=false pages too — a refused rung is exactly what grading
+    needs to see — with the retcode in the description."""
+    server, url = serve_once()
+    d = TmpData(webhook_url=url)
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555, executed=False,
+                 retcode=10018),
+    ])
+    try:
+        r = d.run()
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert len(FakeWebhook.hits) == 2
+        titles = [h["embeds"][0]["title"] for h in FakeWebhook.hits]
+        assert any("refused" in t for t in titles)
+        desc = next(h["embeds"][0]["description"] for h in FakeWebhook.hits
+                    if "refused" in h["embeds"][0]["title"])
+        assert "10018" in desc
+    finally:
+        server.shutdown()
+
+
+def test_exec_without_matching_arm_still_pages():
+    """Defensive: an EXEC with no ARM row in the journal (hand-trimmed
+    or rotated away) pages with '?' placeholders instead of crashing."""
+    server, url = serve_once()
+    d = TmpData(webhook_url=url)
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555, lots=0.5),
+    ])
+    try:
+        r = d.run()
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert len(FakeWebhook.hits) == 1
+        desc = FakeWebhook.hits[0]["embeds"][0]["description"]
+        assert "?" in desc and "0.5" in desc
+    finally:
+        server.shutdown()
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

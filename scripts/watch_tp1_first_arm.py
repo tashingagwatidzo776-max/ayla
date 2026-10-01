@@ -11,9 +11,14 @@ TP1-ARM row (deduped across restarts via data/watcher/) it
   2. posts the webhook (Settings -> notifications, same channel the
      saves page): "first TP1 arm" with the rung, the plan %, and the
      evidence path.
+  3. on the ticket's TP1-EXEC row (the rung actually BANKED — or was
+     refused), pages again with the banked size and the rung R from the
+     ARM row: the graded number in the message where the operator
+     reads it. Refusals (Executed=false) page too — a refused rung is
+     exactly what grading needs to see.
 
 TP1-SKIP rows are evidence-dumped too (the gate answering IS the
-finding) but never page — only an ARM is the first-sighting event.
+finding) but never page — ARM and EXEC are the paging events.
 
 Exit codes: 0 nothing new · 2 paged (scheduler-visible). Journal-only
 by construction: reads, never trades.
@@ -145,6 +150,24 @@ def post_webhook(url: str, body: dict) -> int:
         raise RuntimeError(f"webhook POST failed: {ex.__class__.__name__}") from ex
 
 
+def arm_by_key(rows: list[dict]) -> dict[object, list[tuple[str, dict]]]:
+    """ARM rows indexed by ticket (ts-ordered) — the EXEC leg resolves
+    the rung R and plan % from the newest ARM at-or-before the execution
+    (an app restart can legitimately re-ARM the same ticket)."""
+    out: dict[object, list[tuple[str, dict]]] = {}
+    for r in rows:
+        if "TP1-ARM" in r["details"]:
+            out.setdefault(r["payload"].get("Ticket", "?"), []).append(
+                (r["ts"], r))
+    return out
+
+
+def arm_for(exec_row: dict, arms: dict) -> dict | None:
+    history = arms.get(exec_row["payload"].get("Ticket", "?"), [])
+    prior = [row for ts, row in history if ts <= exec_row["ts"]]
+    return prior[-1] if prior else None
+
+
 def build_payload(arm: dict, ev_files: list[str]) -> tuple[str, dict]:
     p = arm["payload"]
     ticket = p.get("Ticket", "?")
@@ -162,6 +185,33 @@ def build_payload(arm: dict, ev_files: list[str]) -> tuple[str, dict]:
         "embeds": [{"title": title, "description": text, "color": 0x1565C0}]}
 
 
+def build_exec_payload(exec_row: dict, arm: dict | None,
+                       ev_files: list[str]) -> tuple[str, dict]:
+    """The page for a banked (or refused) rung. The graded number —
+    banked size and the rung's R from the ARM row — goes in the message
+    where the operator reads it; the EXEC payload has lots but no R."""
+    p = exec_row["payload"]
+    ticket = p.get("Ticket", "?")
+    lots = p.get("Lots", "?")
+    if p.get("Executed") is False:
+        title = f"\u26a0\ufe0f TP1 rung refused — ticket {ticket}"
+        text = (f"TP1-EXEC refused ({p.get('Retcode', '?')}) for "
+                f"{lots} lots — grading needs to see this.\n")
+    else:
+        rung = arm["payload"].get("Target") if arm else "?"
+        rung_r = arm["payload"].get("TargetR", "?") if arm else "?"
+        plan = arm["payload"].get("PlanPct", "?") if arm else "?"
+        title = f"\U0001f3af TP1 banked — ticket {ticket}"
+        text = (f"Banked {lots} lots ({plan}% plan) at the armed rung "
+                f"{rung} — {rung_r}R of the move locked. Grading: "
+                f"docs/soak/WEEK-TWO-TP1-LOG.md.\n")
+    text += (f"Evidence: {evidence_path()}"
+             + (f" (+ {len(ev_files)} journal file(s))" if ev_files else "")
+             + f"\n{exec_row['ts'][:19]} UTC")
+    return "discord", {
+        "embeds": [{"title": title, "description": text, "color": 0x2E7D32}]}
+
+
 def one_pass() -> int:
     state = load_state()
     rows = parse_rows()
@@ -173,17 +223,23 @@ def one_pass() -> int:
         state["dumped"] = sorted(set(state.get("dumped", [])) | set(dumped))
         save_state(state)
 
+    arms = arm_by_key(rows)
     paged = 0
     url = load_settings().get("WebhookUrl") or ""
-    for arm in [r for r in rows if "TP1-ARM" in r["details"]]:
-        key = f"{arm['ts']}|{arm['payload'].get('Ticket', '?')}"
+    for r in rows:
+        is_arm = "TP1-ARM" in r["details"]
+        is_exec = "TP1-EXEC" in r["details"]
+        if not (is_arm or is_exec):
+            continue
+        key = f"{r['ts']}|{r['payload'].get('Ticket', '?')}"
         if key in state.get("paged", []):
             continue
         if not url:
-            print(f"TP1-ARM {key} found but no WebhookUrl — retrying next pass")
+            print(f"TP1 row {key} found but no WebhookUrl — retrying next pass")
             continue
         is_discord = "discord" in url
-        _, discord = build_payload(arm, dumped)
+        _, discord = (build_payload(r, dumped) if is_arm
+                      else build_exec_payload(r, arm_for(r, arms), dumped))
         body = discord if is_discord else {
             "attachments": [{
                 "color": f"#{discord['embeds'][0]['color']:06x}",
