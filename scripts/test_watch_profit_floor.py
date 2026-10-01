@@ -89,13 +89,28 @@ def close_row(ts, ticket):
             "ts": ts}
 
 
-def profit_row(ts, ticket, peak, cur, gb):
+def profit_row(ts, ticket, peak, cur, gb, mode=None):
     payload = {"Ticket": ticket, "State": "PROFIT_PROTECTED", "CurrentR": cur,
                "PeakR": peak, "MaeR": 0.0, "GivebackPct": gb,
                "GivebackClass": "NORMAL", "FloorR": 0.9 * peak,
                "FloorBreached": False, "RecommendedAction": "HOLD"}
+    if mode is not None:
+        payload["TrailingMode"] = mode
     return {"cat": "FX_PROFIT",
             "details": f"EURUSD #{ticket}: report — " + json.dumps(payload),
+            "ts": ts}
+
+
+def arm_row(ts, ticket, rung="prev-day-high", price=1.1025, r=2.1):
+    """The exact shape FxEngineHost journals on TP1 arm: the payload has
+    NO TrailingMode — the watcher must reconstruct the mode from the
+    ticket's telemetry rows."""
+    payload = {"Ticket": ticket, "Target": rung, "TargetPrice": price,
+               "TargetR": r, "PlanPct": 25}
+    return {"cat": "FX_PROFIT",
+            "details": f"EURUSD #{ticket}: TP1-ARM: rung {rung} {price} "
+                       f"(+{r}R) armed for #{ticket} (25% plan) — executes "
+                       f"when price crosses: " + json.dumps(payload),
             "ts": ts}
 
 
@@ -229,6 +244,63 @@ def test_daily_capture_silent_when_no_decisive_exits():
     r = d.run()
     assert r.returncode == 0, r.stdout + r.stderr
     assert "daily profit capture" not in r.stdout
+
+
+def test_tp1_arm_on_structure_trail_is_gate_regression_exit_3():
+    """The gate-regression drill (TP1-FLOOR-INTERACTION.md): a TP1-ARM on
+    a ticket whose trailing mode was STRUCTURE_TRAIL at arm time is the
+    gate failing open — loud banner, exit 3, every pass until a human
+    looks (the journal keeps the evidence, so this is not deduped)."""
+    d = TmpData()
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20,
+                   mode="STRUCTURE_TRAIL"),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+    ])
+    r = d.run()
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "TP1 GATE REGRESSION" in r.stdout, r.stdout
+    assert "#555" in r.stdout
+    assert "TP1 prototype" in r.stdout   # the section still prints above it
+
+
+def test_tp1_arm_on_hybrid_floor_ticket_is_not_a_regression():
+    """HYBRID_STRUCTURE_ATR floors lag for hours — the rung is the right
+    partial there, so an ARM on such a ticket is the design case, not a
+    regression: exit 0, no banner."""
+    d = TmpData()
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 556, 4.0, 3.0, 20,
+                   mode="HYBRID_STRUCTURE_ATR"),
+        arm_row("2026-10-01T10:05:00.0+00:00", 556),
+    ])
+    r = d.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "GATE REGRESSION" not in r.stdout, r.stdout
+    assert "TP1 prototype" in r.stdout and "TP1-ARM" in r.stdout, r.stdout
+
+
+def test_tp1_mode_unknown_before_arm_stays_silent():
+    """Conservative reconstruction: the mode counts only as journaled at
+    or before the arm. A STRUCTURE_TRAIL stamp that arrives only AFTER
+    the arm cannot judge it, and a HYBRID-before/STRUCTURE-after flip is
+    the mode changing, not the gate failing — both stay silent."""
+    d = TmpData()
+    d.journal([
+        # Ticket 557: mode only ever stamped after the arm.
+        arm_row("2026-10-01T10:05:00.0+00:00", 557),
+        profit_row("2026-10-01T10:06:00.0+00:00", 557, 4.0, 3.0, 20,
+                   mode="STRUCTURE_TRAIL"),
+        # Ticket 558: HYBRID before the arm, STRUCTURE_TRAIL after it.
+        profit_row("2026-10-01T10:00:00.0+00:00", 558, 4.0, 3.0, 20,
+                   mode="HYBRID_STRUCTURE_ATR"),
+        arm_row("2026-10-01T10:05:30.0+00:00", 558),
+        profit_row("2026-10-01T10:06:30.0+00:00", 558, 4.0, 3.0, 20,
+                   mode="STRUCTURE_TRAIL"),
+    ])
+    r = d.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "GATE REGRESSION" not in r.stdout, r.stdout
 
 
 def test_utf8_output_survives_cp1252_scheduled_env():

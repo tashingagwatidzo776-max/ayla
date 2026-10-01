@@ -6,8 +6,15 @@ never reach the venue book, so the first sighting comes from real traffic.
 
 ## What is already autonomous (no operator needed)
 
-- `scripts/watch_profit_floor.py` (4-min scheduled) prints a TP1 telemetry
-  section the moment ARM/EXEC rows appear in the journal.
+- `scripts/watch_profit_floor.py` (4-min scheduled, task action pinned to
+  `PYTHONIOENCODING=utf-8` so it never depends on the in-process stream
+  reconfigure) prints a TP1 telemetry section the moment ARM/EXEC rows
+  appear in the journal.
+- **Gate-regression drill**: the watcher flags any TP1-ARM row on a ticket
+  whose trailing mode was STRUCTURE_TRAIL at arm time (`!!! TP1 GATE
+  REGRESSION` banner) and exits 3 — persistent, every pass, because the
+  journal keeps the evidence. Exit codes: 0 clean, 2 verified save, 3 gate
+  regression (docs/soak/TP1-FLOOR-INTERACTION.md).
 - The weekly digest auto-posts ~3 min after app start and carries
   `Tp1CaptureMarkdown`: the graded ticket's captured R beside the
   fleet-without-TP1 capture.
@@ -32,6 +39,7 @@ Watch commands:
 
 ```bash
 python scripts/watch_profit_floor.py | grep -A4 TP1     # ARM/EXEC rows
+python scripts/watch_profit_floor.py; echo "exit=$?"     # 2 save, 3 gate regression
 curl -s 127.0.0.1:53190/positions                        # open book
 python scripts/trade_lifecycle.py --ticket <n> --json    # full timeline
 ```
