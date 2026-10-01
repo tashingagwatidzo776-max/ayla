@@ -71,9 +71,12 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   `scripts/check_watcher_task_health.py` watches the watcher's own
   scheduled task for staleness or persistent failure exits (hourly task
   + ci-local gate step); `scripts/watch_tp1_first_arm.py` (5-min task)
-  pages the first TP1-ARM and the banked EXEC (rung R in the message)
-  and dumps the grading evidence; `scripts/audit_donggfx_tasks.py`
-  audits the task fleet for encoding wrappers and script drift.
+  pages the first TP1-ARM and the banked EXEC (rung R in the message),
+  dumps the grading evidence, and regenerates the auto TP1-EXEC digest
+  block in the week-two log every pass (every banked rung, not just the
+  first); `scripts/audit_donggfx_tasks.py` audits the task fleet for
+  encoding wrappers and script drift (weekly task, deduped history file
+  so drift is caught without a session).
 
 **Promotion cases (evidence bars for engine weights)**
 

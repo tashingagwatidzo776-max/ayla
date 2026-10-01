@@ -52,12 +52,24 @@ class TmpData:
             return []
         return p.read_text(encoding="utf-8").splitlines()
 
-    def run(self, *args):
+    def run(self, *args, extra_env=None):
         env = dict(os.environ, TF_DATA_DIR=str(self.root),
                    PYTHONIOENCODING="utf-8")
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args], capture_output=True,
             text=True, encoding="utf-8", env=env, timeout=60)
+
+    def digest_log(self, body: str = "## Graded tickets\n\n| — |\n") -> Path:
+        """Write (or reset) the digest target log; returns its path."""
+        p = self.root / "digest-log.md"
+        p.write_text("# Week two — TP1 partials live\n\n" + body,
+                     encoding="utf-8")
+        return p
+
+    def digest_log_text(self) -> str:
+        return (self.root / "digest-log.md").read_text(encoding="utf-8")
 
 
 def profit_row(ts, ticket, peak, cur, gb, mode="HYBRID_STRUCTURE_ATR"):
@@ -248,18 +260,171 @@ def test_two_arms_on_different_tickets_page_twice():
         server.shutdown()
 
 
-def exec_row(ts, ticket, lots=0.25, executed=True, retcode=None):
+def exec_row(ts, ticket, lots=0.25, executed=True, retcode=None, plan=25):
     """The exact shape FxEngineHost journals on the TP1 close attempt:
     lots and Executed, but NO rung R — that lives only in the ARM row."""
     payload = {"Ticket": ticket, "Executed": executed, "Lots": lots,
-               "PlanPct": 25, "ArmedPrice": 1.1025}
+               "PlanPct": plan, "ArmedPrice": 1.1025}
     if retcode is not None:
         payload["Retcode"] = retcode
     action = "TP1-EXEC: banked" if executed else "TP1-EXEC refused for"
     return {"cat": "FX_PROFIT",
             "details": f"EURUSD #{ticket}: {action} "
-                       f"{lots} lots (25% plan) of #{ticket}: "
+                       f"{lots} lots ({plan}% plan) of #{ticket}: "
                        + json.dumps(payload), "ts": ts}
+
+
+def exit_full_row(ts, ticket, profit_r=2.75):
+    """A decisive full exit carrying the closed R (the digest's
+    'Closed R' column)."""
+    payload = {"Ticket": ticket, "Action": "full", "ProfitR": profit_r,
+               "Override": None}
+    return {"cat": "FX_EXIT",
+            "details": f"EURUSD #{ticket}: full — " + json.dumps(payload),
+            "ts": ts}
+
+
+DIGEST_ENV = lambda root: {"TF_TP1_DIGEST_LOG": str(root / "digest-log.md")}
+
+
+def test_digest_writes_banked_row_from_journal():
+    """One pass with an ARM + banked EXEC lands a digest row in the log:
+    rung/plan from the payloads, Banked R = plan x rung R (+1.00R for a
+    40% plan on a 2.5R rung), live peak from the newest FX_PROFIT report
+    at-or-before the exec, TrailingMode reconstructed from telemetry."""
+    d = TmpData()
+    d.digest_log()
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555, r=2.5),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555, lots=0.4, plan=40),
+    ])
+    r = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r.returncode == 0, r.stdout + r.stderr   # no webhook: quiet pass
+    text = d.digest_log_text()
+    assert "### Live TP1-EXEC digest (auto)" in text, text
+    assert "#555" in text and "EURUSD" in text
+    assert "HYBRID_STRUCTURE_ATR" in text          # mode reconstructed
+    assert "+1.00R" in text                        # 40% of a 2.5R rung
+    assert "2.5R" in text                          # the rung column
+    assert "4.0R" in text                          # live peak column
+    assert "| yes |" in text
+    # The block sits ABOVE the manual grading table it feeds.
+    assert text.index("Live TP1-EXEC digest") < text.index("## Graded tickets")
+
+
+def test_digest_block_is_replaced_never_appended():
+    """Re-runs rewrite the block in place — exactly one table, even after
+    a second pass and a second banked rung on another ticket."""
+    d = TmpData()
+    d.digest_log()
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555),
+    ])
+    r1 = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r1.returncode == 0, r1.stdout + r1.stderr
+
+    d.journal([
+        profit_row("2026-10-01T11:00:00.0+00:00", 556, 3.0, 2.5, 15),
+        arm_row("2026-10-01T11:05:00.0+00:00", 556),
+        exec_row("2026-10-01T11:20:00.0+00:00", 556, lots=0.3),
+    ])
+    r2 = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+
+    text = d.digest_log_text()
+    assert text.count("<!-- TP1-EXEC-DIGEST:START -->") == 1, text
+    assert text.count("<!-- TP1-EXEC-DIGEST:END -->") == 1, text
+    assert "#555" in text and "#556" in text   # every rung, not just the first
+
+
+def test_digest_refused_row_shows_retcode():
+    """Executed=false keeps the refusal visible in the digest (a refused
+    rung is grading evidence too)."""
+    d = TmpData()
+    d.digest_log()
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555, executed=False,
+                 retcode=10018),
+    ])
+    r = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = d.digest_log_text()
+    assert "no (rc 10018)" in text, text
+
+
+def test_digest_updates_closed_r_when_exit_lands():
+    """A rung banked while the position is still open shows Closed R = em-dash;
+    once the decisive FX_EXIT lands, the next pass fills it in."""
+    d = TmpData()
+    d.digest_log()
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555),
+    ])
+    d.run(extra_env=DIGEST_ENV(d.root))
+    assert "| — |" in d.digest_log_text()   # open position, nothing closed
+
+    d.journal([exit_full_row("2026-10-01T12:00:00.0+00:00", 555,
+                             profit_r=2.75)])
+    r = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = d.digest_log_text()
+    assert "+2.75R" in text, text
+
+
+def test_digest_silent_without_exec_rows():
+    """ARM-only traffic (or an empty journal) never touches the log — the
+    digest is an EXEC digest, the ARM leg has its own pager page."""
+    d = TmpData()
+    d.digest_log()
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+    ])
+    r = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Live TP1-EXEC digest" not in d.digest_log_text()
+
+
+def test_digest_survives_log_without_anchor():
+    """No '## Graded tickets' anchor (a renamed log, say): the pass stays
+    green and leaves the log untouched — never corrupt a hand-edited doc."""
+    d = TmpData()
+    (d.root / "digest-log.md").write_text(
+        "# Week two — no anchor here", encoding="utf-8")
+    d.journal([
+        profit_row("2026-10-01T10:00:00.0+00:00", 555, 4.0, 3.0, 20),
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555),
+    ])
+    r = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Live TP1-EXEC digest" not in d.digest_log_text()
+
+
+def test_digest_mode_unknown_before_arm_shows_dash():
+    """No TrailingMode telemetry at-or-before the arm → the mode column
+    stays em-dash (the gate drill's conservative rule, not a blank)."""
+    d = TmpData()
+    d.digest_log()
+    d.journal([
+        arm_row("2026-10-01T10:05:00.0+00:00", 555),
+        exec_row("2026-10-01T10:20:00.0+00:00", 555),
+        # Mode only ever stamped AFTER the arm — cannot judge it.
+        profit_row("2026-10-01T10:30:00.0+00:00", 555, 4.0, 3.0, 20,
+                   mode="STRUCTURE_TRAIL"),
+    ])
+    r = d.run(extra_env=DIGEST_ENV(d.root))
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = d.digest_log_text()
+    row = next(ln for ln in text.splitlines() if ln.startswith("| #555"))
+    assert "| — |" in row, row
 
 
 def test_exec_pages_with_banked_r_from_arm():
