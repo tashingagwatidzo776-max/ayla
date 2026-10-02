@@ -35,6 +35,7 @@ do not edit rows by hand.
 
 | Date | Entries | Settlements | Refusals | Verdict |
 |------|--------:|------------:|---------:|---------|
+| 2026-10-02 | 76 | 75 | 0 | CLEAN |
 | 2026-09-30 | 6429 | 300 | 0 | CLEAN |
 | 2026-09-29 | 6717 | 220 | 0 | CLEAN |
 | 2026-09-27 | 61 | 57 | 0 | CLEAN |
@@ -60,8 +61,9 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   gate that became the profit-floor override tier.
 - [WEEK-TWO-TP1-LOG.md](WEEK-TWO-TP1-LOG.md) — week two opens: the TP1
   partials watch, the grading runbook for the first armed ticket, the
-  graded-ticket table (empty until the first live TP1-ARM), and the rung
-  backtest on the five saves.
+  auto-generated graded-ticket table + machine-readable verdicts
+  (`data/watcher/tp1-graded-verdicts.jsonl`, empty until the first live
+  TP1-ARM), and the rung backtest on the five saves.
 - [TP1-FLOOR-INTERACTION.md](TP1-FLOOR-INTERACTION.md) — DESIGN → IMPLEMENTED:
   skip the
   rung on STRUCTURE_TRAIL tickets (the floor ratchets past any static
@@ -73,8 +75,14 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   + ci-local gate step); `scripts/watch_tp1_first_arm.py` (5-min task)
   pages the first TP1-ARM and the banked EXEC (rung R in the message),
   dumps the grading evidence, and regenerates the auto TP1-EXEC digest
-  block in the week-two log every pass (every banked rung, not just the
-  first); `scripts/audit_donggfx_tasks.py` audits the task fleet for
+  block plus the graded-verdict table in the week-two log every pass
+  (every banked rung, not just the first); the plan-% gate pages a
+  candidate plan % (down when the rungs collectively trail, up when they
+  beat the giveback) and an ⏰ overdue alert once a review is stale — and
+  an overdue review also holds TP1 arming in the app (release it from the
+  Settings hint's Mark acted / Clear buttons); the gate and breaker share
+  their tunables via config/tp1-plan-gate.json;
+  `scripts/audit_donggfx_tasks.py` audits the task fleet for
   encoding wrappers and script drift (weekly task, deduped history file
   so drift is caught without a session).
 
@@ -106,8 +114,10 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   STABLE 6.27% baseline (2026-09-30); reruns before and after every weight
   change.
 - [FX-LAB-WEEKLY.md](FX-LAB-WEEKLY.md) — the rolling weekly digest the app
-  appends itself (fleet capture without TP1, graded-ticket TP1 capture,
-  saves); regenerates the trend chart each post.
+  appends itself (fleet capture without TP1, graded-ticket TP1 capture and
+  its graded verdict + vs-giveback R, saves, the plan-% review
+  open/cleared/acted rollup); regenerates the trend chart each post,
+  outlining the ISO weeks that banked a TP1 rung.
 - [fx-capture-trend.svg](fx-capture-trend.svg) — the capture-trend chart
   with the amber saves-per-week overlay (PR #144).
 - [STRUCTURE-STOPS-2026-09-29.md](STRUCTURE-STOPS-2026-09-29.md) — the
