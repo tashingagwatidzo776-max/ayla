@@ -187,6 +187,95 @@ public class FxTrainingTests : IDisposable
         Assert.Contains(rTrap.Trades, t => t.ExitReason == "stop");
     }
 
+    // ── equity drawdown brake ───────────────────────────────────────────
+
+    /// <summary>TrendBars stamps bars 60s apart from a fixed epoch, so a
+    /// trade's entry time maps back to its bar index exactly.</summary>
+    private static int BarIndex(FxTrainingTrade t) =>
+        (int)((t.EntryTimeUtc - 1_700_000_000) / 60);
+
+    [Fact]
+    public void Simulator_Drawdown_Brake_Is_Off_Unless_Armed()
+    {
+        // Default-off (and off at 100% depth, which no live book can sit at
+        // without already being zero): an unarmed brake replays exactly the
+        // tape it always has.
+        var bars = TrendBars();
+        var plain = FxTrainingSimulator.Run("TEST", bars, new FxTrainingConfig());
+        var overproof = FxTrainingSimulator.Run("TEST", bars,
+            new FxTrainingConfig(DrawdownBrakePct: 1.0));
+
+        Assert.Equal(0.0, new FxTrainingConfig().DrawdownBrakePct);
+        Assert.Equal(plain.TradeCount, overproof.TradeCount);
+        Assert.Equal(plain.EndBalance, overproof.EndBalance);
+    }
+
+    [Fact]
+    public void Simulator_Drawdown_Brake_Skips_Entries_While_Deep()
+    {
+        // Big risk per trade on a $10 book: one losing round-trip drops the
+        // equity meaningfully below its high-water mark, arming the brake.
+        var cfg = new FxTrainingConfig(StartBalance: 10.0, RiskFraction: 0.5,
+            MinLotRiskUsd: 5.0, RewardRisk: 1.0);
+        var armed = cfg with { DrawdownBrakePct = 0.05, DrawdownBrakeBars = 120 };
+        var bars = TrendBars(count: 800);
+
+        var open = FxTrainingSimulator.Run("TEST", bars, cfg);
+        var braked = FxTrainingSimulator.Run("TEST", bars, armed);
+        if (open.TradeCount == 0)
+        {
+            return;   // no signals on this tape — nothing to brake
+        }
+
+        // The brake only ever skips: entry decisions are equity-independent,
+        // so every braked entry sits on a bar the open run also took.
+        Assert.True(braked.TradeCount <= open.TradeCount);
+        var openIdx = open.Trades.Select(BarIndex).ToList();
+        var p = 0;
+        foreach (var g in braked.Trades.Select(BarIndex))
+        {
+            while (p < openIdx.Count && openIdx[p] != g)
+            {
+                p++;
+            }
+
+            Assert.True(p < openIdx.Count,
+                $"braked entry at bar {g} was never taken by the open run");
+            p++;
+        }
+
+        // Walk the braked equity curve the same way the simulator does and
+        // find the first settle that leaves the book ≥5% below its peak.
+        var equity = braked.StartBalance;
+        var peak = equity;
+        var trip = -1;
+        foreach (var t in braked.Trades)
+        {
+            equity = Math.Max(0.0, equity + t.PnlUsd);
+            peak = Math.Max(peak, equity);
+            if (peak > 0 && (peak - equity) / peak >= armed.DrawdownBrakePct)
+            {
+                trip = BarIndex(t);
+                break;
+            }
+        }
+
+        Assert.True(trip >= 0, "armed brake never tripped on this tape");
+
+        // While engaged no entry opens before trip bar + the cooldown …
+        var after = braked.Trades.Where(t => BarIndex(t) > trip).ToList();
+        if (after.Count > 0)
+        {
+            Assert.True(BarIndex(after[0]) >= trip + armed.DrawdownBrakeBars,
+                $"re-entered {BarIndex(after[0]) - trip} bars after the trip " +
+                $"(cooldown {armed.DrawdownBrakeBars})");
+        }
+
+        // … but the brake is a stand-down, not a halt: on a deep tape it
+        // must let go and trade again.
+        Assert.True(braked.TradeCount > 0);
+    }
+
     // ── memory: learn / accumulate ─────────────────────────────────────────
 
     private static FxTrainingReport Report(string symbol, params FxFamilyTrainingStat[] stats) =>

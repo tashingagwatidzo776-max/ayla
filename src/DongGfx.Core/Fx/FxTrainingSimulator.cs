@@ -48,7 +48,22 @@ public sealed record FxTrainingConfig(
     /// ATR stop can price the spread at 1R+ per trade — so the stop can
     /// never be tighter than spread × this multiple (capped at half the
     /// price, as production does).</summary>
-    double MinStopSpreadMult = 0.0);
+    double MinStopSpreadMult = 0.0,
+    /// <summary>Peak-to-equity give-back depth, as a fraction of the
+    /// high-water mark, that trips the equity drawdown brake (0 = off,
+    /// as is any value ≥ 1). When the book is this far below its peak the
+    /// simulator stops opening NEW entries for <see cref="DrawdownBrakeBars"/>
+    /// bars — a stand-down, not a halt: positions settle, the pause ends,
+    /// and the tape keeps counting toward a full training run. This is the
+    /// drawdown gate the UNSTABLE verdict demands: a book that ballooned and
+    /// is bleeding must be allowed to sit out, not keep paying spread on
+    /// every bar of a losing streak.</summary>
+    double DrawdownBrakePct = 0.0,
+    /// <summary>How many bars no new entries open once the brake trips
+    /// (ignored while <see cref="DrawdownBrakePct"/> is off). Each settle
+    /// that is still this deep re-trips the brake, so a persistently bleeding
+    /// book trades at most one round-trip per cooldown window.</summary>
+    int DrawdownBrakeBars = 60);
 
 /// <summary>One simulated round-trip. R is reward divided by the risked
 /// stop distance; PnlUsd is what the small account actually felt.</summary>
@@ -142,6 +157,10 @@ public static class FxTrainingSimulator
         var grossLoss = 0.0;
         var accountBlown = false;
         var window = new List<FxBar>(cfg.WindowBars);
+        // Bar index before which the equity drawdown brake keeps new entries
+        // closed (−1 = not engaged). The window keeps sliding while braked so
+        // the indicators stay warm and the resume is seamless.
+        var brakeUntil = -1;
 
         for (var i = cfg.WarmupBars; i < bars.Count - 1 && trades.Count < cfg.MaxTrades; i++)
         {
@@ -175,6 +194,15 @@ public static class FxTrainingSimulator
 
             if (window.Count < 31)
             {
+                continue;
+            }
+
+            if (i < brakeUntil)
+            {
+                // The equity brake is engaged — sit this bar out. Only
+                // entries are gated; there is never a position in flight
+                // (each trade settles within its hold window), so a flat
+                // pause is all there is to enforce.
                 continue;
             }
 
@@ -253,6 +281,18 @@ public static class FxTrainingSimulator
 
             peak = Math.Max(peak, equity);
             maxDd = Math.Min(maxDd, equity - peak);
+
+            // Trip (or re-trip) the brake when this settle leaves the book
+            // at or below the configured depth from its high-water mark.
+            // Re-tripping on every deep settle means a book that is still
+            // bleeding after the cooldown earns at most one more attempt
+            // per window instead of reopening into the same slide.
+            if (cfg.DrawdownBrakePct > 0 && cfg.DrawdownBrakePct < 1 &&
+                peak > 0 && (peak - equity) / peak >= cfg.DrawdownBrakePct)
+            {
+                brakeUntil = i + cfg.DrawdownBrakeBars;
+            }
+
             if (pnl > 0)
             {
                 grossWin += pnl;

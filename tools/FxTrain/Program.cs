@@ -56,30 +56,42 @@ Console.WriteLine(memory.SummaryLine());
 // longer kills them); the other quiet-FX majors win on sam4/rr2/h120;
 // metals on sam6/rr2→3/h120 with an 8× spread floor; crypto keeps the
 // cheapest verified setting. Everything carries the $25/trade swing guard.
-FxTrainingConfig ConfigFor(string symbol) => symbol.ToUpperInvariant() switch
+FxTrainingConfig ConfigFor(string symbol)
 {
-    "EURUSD" or "AUDUSD" => config with
+    var upper = symbol.ToUpperInvariant();
+    var cfg = upper switch
     {
-        MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 3.0,
-        HoldBars = 120, MinStopSpreadMult = 3.0, WindowBars = 40,
-    },
-    "GBPUSD" or "USDJPY" or "USDCAD" or "USDCHF" or "NZDUSD" => config with
-    {
-        MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 2.0,
-        HoldBars = 120, MinStopSpreadMult = 3.0,
-    },
-    "BCHUSD" or "BNBUSD" or "BTCUSD" or "DSHUSD" => config with
-    {
-        MaxRiskUsd = 25, RewardRisk = 2.0, MinStopSpreadMult = 4.0,
-    },
-    "XAGUSD" or "XAGEUR" or "XAUUSD" or "XAUUSDMICRO" or "XAUEUR"
-        or "XPDUSD" or "XPTUSD" => config with
-    {
-        MaxRiskUsd = 25, StopAtrMult = 6.0, RewardRisk = 3.0,
-        HoldBars = 120, MinStopSpreadMult = 8.0,
-    },
-    _ => config with { MaxRiskUsd = 25 },
-};
+        "EURUSD" or "AUDUSD" => config with
+        {
+            MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 3.0,
+            HoldBars = 120, MinStopSpreadMult = 3.0, WindowBars = 40,
+        },
+        "GBPUSD" or "USDJPY" or "USDCAD" or "USDCHF" or "NZDUSD" => config with
+        {
+            MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 2.0,
+            HoldBars = 120, MinStopSpreadMult = 3.0,
+        },
+        "BCHUSD" or "BNBUSD" or "BTCUSD" or "DSHUSD" => config with
+        {
+            MaxRiskUsd = 25, RewardRisk = 2.0, MinStopSpreadMult = 4.0,
+        },
+        "XAGUSD" or "XAGEUR" or "XAUUSD" or "XAUUSDMICRO" or "XAUEUR"
+            or "XPDUSD" or "XPTUSD" => config with
+        {
+            MaxRiskUsd = 25, StopAtrMult = 6.0, RewardRisk = 3.0,
+            HoldBars = 120, MinStopSpreadMult = 8.0,
+        },
+        _ => config with { MaxRiskUsd = 25 },
+    };
+
+    // The three symbols whose final run GREW but finished ≥50% below peak
+    // (UNSTABLE verdict) get the equity drawdown brake the verdict demands:
+    // a 20% give-back stands the book down for 60 bars instead of letting it
+    // keep compounding into the same slide. Default-off everywhere else.
+    return upper is "GBPUSD" or "USDJPY" or "XAUEUR"
+        ? cfg with { DrawdownBrakePct = 0.20, DrawdownBrakeBars = 60 }
+        : cfg;
+}
 
 // Memory-playbook roster filter (the type-7 surface feeding back into
 // training): mode 0 = full roster (production parity), 1 = families with
