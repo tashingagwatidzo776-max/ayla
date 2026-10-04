@@ -161,6 +161,7 @@ public class FxFeatureTests
     }
 }
 
+[Trait("Category", "Unit")]
 public class FxRegimeTests
 {
     private static List<FxBar> Bars(int n, Func<int, double> close)
@@ -258,6 +259,7 @@ public class FxRegimeTests
     }
 }
 
+[Trait("Category", "Unit")]
 public class FxEngineTests
 {
     private sealed class RecordingJournal

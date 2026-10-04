@@ -1,0 +1,2663 @@
+{
+  "version": 1,
+  "runs": 342,
+  "first_trained_at": "2026-10-03T12:15:14.9368761\u002B00:00",
+  "last_trained_at": "2026-10-04T12:13:42.5463226\u002B00:00",
+  "cells": [
+    {
+      "symbol": "AUDUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 10,
+      "wins": 8,
+      "total_r": 16.235,
+      "total_pnl_usd": 3.2121
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 56,
+      "wins": 7,
+      "total_r": -30.315,
+      "total_pnl_usd": -3.0952
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 153,
+      "wins": 63,
+      "total_r": 9.105,
+      "total_pnl_usd": 5.9375
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 80,
+      "wins": 26,
+      "total_r": -12.101,
+      "total_pnl_usd": -1.8578
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 489,
+      "wins": 254,
+      "total_r": 37.096,
+      "total_pnl_usd": 4.9773
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1325,
+      "wins": 394,
+      "total_r": -373.669,
+      "total_pnl_usd": -26.0333
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 7569,
+      "wins": 2730,
+      "total_r": -1056.735,
+      "total_pnl_usd": -120.67
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 98,
+      "wins": 1,
+      "total_r": -95.526,
+      "total_pnl_usd": -17.6319
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 10,
+      "wins": 0,
+      "total_r": -10,
+      "total_pnl_usd": -3.077
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "macd(12/26)",
+      "regime": "*",
+      "trades": 4,
+      "wins": 0,
+      "total_r": -0.252,
+      "total_pnl_usd": -0.0616
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 59,
+      "wins": 14,
+      "total_r": -18.135,
+      "total_pnl_usd": 2.1528
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 15,
+      "wins": 0,
+      "total_r": -14.345,
+      "total_pnl_usd": -0.68
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 4176,
+      "wins": 1619,
+      "total_r": -273.826,
+      "total_pnl_usd": -11.8464
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "rsi-mom(14)",
+      "regime": "*",
+      "trades": 14,
+      "wins": 13,
+      "total_r": 2.783,
+      "total_pnl_usd": 0.2571
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 119,
+      "wins": 42,
+      "total_r": -39.645,
+      "total_pnl_usd": -1.1138
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 2257,
+      "wins": 986,
+      "total_r": 162.503,
+      "total_pnl_usd": 24.5275
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 798,
+      "wins": 406,
+      "total_r": 169.876,
+      "total_pnl_usd": 36.1607
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 318,
+      "wins": 116,
+      "total_r": -94.82,
+      "total_pnl_usd": -13.7609
+    },
+    {
+      "symbol": "AUDUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 140,
+      "wins": 50,
+      "total_r": -7.966,
+      "total_pnl_usd": -6.6106
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 1,
+      "wins": 0,
+      "total_r": -1,
+      "total_pnl_usd": -0.0396
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 28,
+      "wins": 9,
+      "total_r": 0.455,
+      "total_pnl_usd": -0.5802
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 41,
+      "wins": 24,
+      "total_r": 19.38,
+      "total_pnl_usd": 13.1548
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 29,
+      "wins": 1,
+      "total_r": -22.683,
+      "total_pnl_usd": -4.3323
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 409,
+      "wins": 104,
+      "total_r": -159.263,
+      "total_pnl_usd": -12.4436
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 643,
+      "wins": 211,
+      "total_r": -75.293,
+      "total_pnl_usd": 33.3793
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 2291,
+      "wins": 904,
+      "total_r": 46.623,
+      "total_pnl_usd": 61.4367
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 7556,
+      "wins": 2733,
+      "total_r": -699.826,
+      "total_pnl_usd": -68.0266
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 2328,
+      "wins": 628,
+      "total_r": -682.77,
+      "total_pnl_usd": -48.8732
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 576,
+      "wins": 179,
+      "total_r": -144.599,
+      "total_pnl_usd": 22.7941
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 2084,
+      "wins": 1055,
+      "total_r": 782.894,
+      "total_pnl_usd": 496.443
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 6,
+      "wins": 1,
+      "total_r": -4.143,
+      "total_pnl_usd": -1.4933
+    },
+    {
+      "symbol": "BCHUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 41,
+      "wins": 10,
+      "total_r": -13.305,
+      "total_pnl_usd": 10.671
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 8,
+      "wins": 2,
+      "total_r": -0.354,
+      "total_pnl_usd": -20.6221
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 36,
+      "wins": 16,
+      "total_r": 2.456,
+      "total_pnl_usd": -10.3652
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 26,
+      "wins": 9,
+      "total_r": 0.473,
+      "total_pnl_usd": -5.3665
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 1,
+      "wins": 0,
+      "total_r": -0.041,
+      "total_pnl_usd": -0.0008
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 808,
+      "wins": 226,
+      "total_r": -161.936,
+      "total_pnl_usd": -93.7227
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 896,
+      "wins": 367,
+      "total_r": 74.301,
+      "total_pnl_usd": 131.3514
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 3095,
+      "wins": 973,
+      "total_r": -483.429,
+      "total_pnl_usd": -111.6169
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 7618,
+      "wins": 3026,
+      "total_r": 276.323,
+      "total_pnl_usd": 2094.9257
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 5,
+      "wins": 0,
+      "total_r": -5,
+      "total_pnl_usd": -0.655
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 1,
+      "wins": 1,
+      "total_r": 0.841,
+      "total_pnl_usd": 0.0168
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 1,
+      "wins": 0,
+      "total_r": -1,
+      "total_pnl_usd": -0.02
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 3058,
+      "wins": 1038,
+      "total_r": -458.383,
+      "total_pnl_usd": 53.9736
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 5,
+      "wins": 1,
+      "total_r": -1.125,
+      "total_pnl_usd": -19.8341
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 366,
+      "wins": 140,
+      "total_r": -5.636,
+      "total_pnl_usd": 134.2474
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 3458,
+      "wins": 1424,
+      "total_r": 279.715,
+      "total_pnl_usd": 1593.6747
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 10,
+      "wins": 3,
+      "total_r": -1.524,
+      "total_pnl_usd": -0.052
+    },
+    {
+      "symbol": "BNBUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 95,
+      "wins": 30,
+      "total_r": -28.345,
+      "total_pnl_usd": -99.7717
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 7,
+      "wins": 0,
+      "total_r": -7,
+      "total_pnl_usd": -0.8392
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 47,
+      "wins": 10,
+      "total_r": -15.93,
+      "total_pnl_usd": -1.2114
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 106,
+      "wins": 31,
+      "total_r": -15.116,
+      "total_pnl_usd": -2.22
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 5,
+      "wins": 0,
+      "total_r": -5,
+      "total_pnl_usd": -0.9458
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 740,
+      "wins": 279,
+      "total_r": -16.73,
+      "total_pnl_usd": -14.1821
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1090,
+      "wins": 348,
+      "total_r": -202.282,
+      "total_pnl_usd": -23.6742
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 5701,
+      "wins": 2099,
+      "total_r": -638.841,
+      "total_pnl_usd": -39.4765
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 11521,
+      "wins": 4388,
+      "total_r": -758.846,
+      "total_pnl_usd": -106.7428
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 10,
+      "wins": 10,
+      "total_r": 19.61,
+      "total_pnl_usd": 2.1318
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 14,
+      "wins": 0,
+      "total_r": -14,
+      "total_pnl_usd": -1.6287
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 3746,
+      "wins": 1484,
+      "total_r": -295.7,
+      "total_pnl_usd": -3.5153
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 1072,
+      "wins": 458,
+      "total_r": 55.568,
+      "total_pnl_usd": 4.4966
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 2598,
+      "wins": 1081,
+      "total_r": 256.783,
+      "total_pnl_usd": 37.1935
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 76,
+      "wins": 33,
+      "total_r": 22.932,
+      "total_pnl_usd": 0.5524
+    },
+    {
+      "symbol": "BTCUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 116,
+      "wins": 40,
+      "total_r": -5.821,
+      "total_pnl_usd": -0.8507
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 2,
+      "wins": 1,
+      "total_r": -0.23,
+      "total_pnl_usd": 0.0124
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 8,
+      "wins": 2,
+      "total_r": -5.048,
+      "total_pnl_usd": -0.8385
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 37,
+      "wins": 17,
+      "total_r": 6.25,
+      "total_pnl_usd": 2.5093
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 15,
+      "wins": 1,
+      "total_r": -12.889,
+      "total_pnl_usd": -6.6061
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 2161,
+      "wins": 941,
+      "total_r": 114.742,
+      "total_pnl_usd": 83.1309
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 553,
+      "wins": 195,
+      "total_r": -35.028,
+      "total_pnl_usd": 1.2549
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 5925,
+      "wins": 2333,
+      "total_r": -353.567,
+      "total_pnl_usd": -6.8849
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 6730,
+      "wins": 2499,
+      "total_r": -257.631,
+      "total_pnl_usd": -78.5988
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 1,
+      "wins": 1,
+      "total_r": 1.589,
+      "total_pnl_usd": 0.0505
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 6728,
+      "wins": 2163,
+      "total_r": -1206.997,
+      "total_pnl_usd": -200.366
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 7,
+      "wins": 0,
+      "total_r": -7,
+      "total_pnl_usd": -4.4591
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 684,
+      "wins": 299,
+      "total_r": 100.449,
+      "total_pnl_usd": 53.0232
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 1753,
+      "wins": 774,
+      "total_r": 386.346,
+      "total_pnl_usd": 122.9897
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 28,
+      "wins": 20,
+      "total_r": 14.289,
+      "total_pnl_usd": 5.3388
+    },
+    {
+      "symbol": "DSHUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 38,
+      "wins": 9,
+      "total_r": -11.194,
+      "total_pnl_usd": -0.7648
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 95,
+      "wins": 40,
+      "total_r": -9.329,
+      "total_pnl_usd": -5.8394
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 137,
+      "wins": 80,
+      "total_r": 60.09,
+      "total_pnl_usd": 2.2299
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 128,
+      "wins": 44,
+      "total_r": 18.068,
+      "total_pnl_usd": -0.8208
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 114,
+      "wins": 39,
+      "total_r": -12.262,
+      "total_pnl_usd": -0.4193
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 2365,
+      "wins": 919,
+      "total_r": 30.121,
+      "total_pnl_usd": 11.3321
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 14324,
+      "wins": 5389,
+      "total_r": -1479.698,
+      "total_pnl_usd": -135.9103
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 238,
+      "wins": 43,
+      "total_r": -132.295,
+      "total_pnl_usd": -22.8436
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 14,
+      "wins": 14,
+      "total_r": 21.244,
+      "total_pnl_usd": 1.8962
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 1685,
+      "wins": 833,
+      "total_r": 218.271,
+      "total_pnl_usd": 29.0697
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 165,
+      "wins": 43,
+      "total_r": -40.21,
+      "total_pnl_usd": -4.0725
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 3489,
+      "wins": 1282,
+      "total_r": -318.896,
+      "total_pnl_usd": -37.6092
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 1010,
+      "wins": 479,
+      "total_r": 208.454,
+      "total_pnl_usd": 29.7728
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 266,
+      "wins": 109,
+      "total_r": -36.003,
+      "total_pnl_usd": -0.3956
+    },
+    {
+      "symbol": "EURUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 333,
+      "wins": 82,
+      "total_r": -146.094,
+      "total_pnl_usd": -11.7529
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 408,
+      "wins": 116,
+      "total_r": -97.348,
+      "total_pnl_usd": 25.5925
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 491,
+      "wins": 158,
+      "total_r": -75.197,
+      "total_pnl_usd": 1040.7
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 728,
+      "wins": 270,
+      "total_r": 42.333,
+      "total_pnl_usd": -2490.416
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 257,
+      "wins": 73,
+      "total_r": -18.736,
+      "total_pnl_usd": -3702.0933
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 532,
+      "wins": 216,
+      "total_r": 51.551,
+      "total_pnl_usd": -3236.3232
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 8319,
+      "wins": 3344,
+      "total_r": 159.027,
+      "total_pnl_usd": -37601.2784
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 34161,
+      "wins": 13338,
+      "total_r": -1068.875,
+      "total_pnl_usd": 45796.9681
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 168,
+      "wins": 86,
+      "total_r": 102.863,
+      "total_pnl_usd": 19.2626
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 24,
+      "wins": 14,
+      "total_r": 15.925,
+      "total_pnl_usd": -920.4147
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "macd(12/26)",
+      "regime": "*",
+      "trades": 6,
+      "wins": 0,
+      "total_r": -1.43,
+      "total_pnl_usd": -0.2983
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 211,
+      "wins": 66,
+      "total_r": -45.901,
+      "total_pnl_usd": -1732.9879
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 151,
+      "wins": 50,
+      "total_r": -44.601,
+      "total_pnl_usd": 2246.4718
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 8914,
+      "wins": 3701,
+      "total_r": 136.43,
+      "total_pnl_usd": -33995.8625
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "rsi-mom(14)",
+      "regime": "*",
+      "trades": 16,
+      "wins": 2,
+      "total_r": -9.644,
+      "total_pnl_usd": 565.6007
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 364,
+      "wins": 196,
+      "total_r": 50.536,
+      "total_pnl_usd": -5182.0689
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 11486,
+      "wins": 4289,
+      "total_r": -626.79,
+      "total_pnl_usd": 48925.0379
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 2620,
+      "wins": 1253,
+      "total_r": 598.777,
+      "total_pnl_usd": -1457.7534
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 942,
+      "wins": 314,
+      "total_r": -108.847,
+      "total_pnl_usd": -884.5169
+    },
+    {
+      "symbol": "GBPUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 999,
+      "wins": 407,
+      "total_r": 105.764,
+      "total_pnl_usd": -7551.9508
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 42,
+      "wins": 27,
+      "total_r": 11.618,
+      "total_pnl_usd": 1.0192
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 75,
+      "wins": 13,
+      "total_r": -45.192,
+      "total_pnl_usd": -4.0852
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 78,
+      "wins": 27,
+      "total_r": -33.828,
+      "total_pnl_usd": -1.5238
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 45,
+      "wins": 25,
+      "total_r": 1.75,
+      "total_pnl_usd": -1.1277
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 632,
+      "wins": 259,
+      "total_r": -63.128,
+      "total_pnl_usd": -9.641
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1036,
+      "wins": 244,
+      "total_r": -407.759,
+      "total_pnl_usd": -43.136
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 5540,
+      "wins": 2169,
+      "total_r": -271.07,
+      "total_pnl_usd": -29.6101
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 126,
+      "wins": 1,
+      "total_r": -122.079,
+      "total_pnl_usd": -22.0306
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 15,
+      "wins": 1,
+      "total_r": -11.09,
+      "total_pnl_usd": -0.5649
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 4201,
+      "wins": 1379,
+      "total_r": -817.387,
+      "total_pnl_usd": -51.0341
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 85,
+      "wins": 7,
+      "total_r": -53.439,
+      "total_pnl_usd": -2.0557
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 1264,
+      "wins": 503,
+      "total_r": -35.01,
+      "total_pnl_usd": -5.7637
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 629,
+      "wins": 329,
+      "total_r": 211.115,
+      "total_pnl_usd": 67.1764
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 111,
+      "wins": 42,
+      "total_r": -20.028,
+      "total_pnl_usd": -7.9293
+    },
+    {
+      "symbol": "NZDUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 77,
+      "wins": 50,
+      "total_r": 64.208,
+      "total_pnl_usd": 3.1575
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 110,
+      "wins": 45,
+      "total_r": -8.443,
+      "total_pnl_usd": -5.9138
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 95,
+      "wins": 11,
+      "total_r": -61.837,
+      "total_pnl_usd": 31.2689
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 200,
+      "wins": 136,
+      "total_r": 75.121,
+      "total_pnl_usd": 5.7576
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 51,
+      "wins": 19,
+      "total_r": 18.379,
+      "total_pnl_usd": 2.542
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 71,
+      "wins": 15,
+      "total_r": -43.182,
+      "total_pnl_usd": -9.2633
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 2080,
+      "wins": 759,
+      "total_r": -246.559,
+      "total_pnl_usd": -136.4235
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 7901,
+      "wins": 2796,
+      "total_r": -588.202,
+      "total_pnl_usd": -65.1582
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 350,
+      "wins": 102,
+      "total_r": -135.126,
+      "total_pnl_usd": -24.5087
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 17,
+      "wins": 15,
+      "total_r": 23.981,
+      "total_pnl_usd": 8.4798
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 15,
+      "wins": 8,
+      "total_r": 8.59,
+      "total_pnl_usd": 11.2644
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 63,
+      "wins": 22,
+      "total_r": -0.754,
+      "total_pnl_usd": 2.8374
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 781,
+      "wins": 362,
+      "total_r": 57.656,
+      "total_pnl_usd": 96.0908
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "rsi-mom(14)",
+      "regime": "*",
+      "trades": 16,
+      "wins": 1,
+      "total_r": -12.624,
+      "total_pnl_usd": 0.1665
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 169,
+      "wins": 29,
+      "total_r": -84.261,
+      "total_pnl_usd": -12.44
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 3472,
+      "wins": 1239,
+      "total_r": -419.608,
+      "total_pnl_usd": -84.3138
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 1176,
+      "wins": 411,
+      "total_r": -70.773,
+      "total_pnl_usd": 23.8764
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 343,
+      "wins": 97,
+      "total_r": -60.397,
+      "total_pnl_usd": 29.1845
+    },
+    {
+      "symbol": "USDCAD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 245,
+      "wins": 64,
+      "total_r": -84.967,
+      "total_pnl_usd": -4.0731
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 104,
+      "wins": 10,
+      "total_r": -73.324,
+      "total_pnl_usd": -6.7265
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 37,
+      "wins": 3,
+      "total_r": -25.361,
+      "total_pnl_usd": -2.8845
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 157,
+      "wins": 50,
+      "total_r": -30.494,
+      "total_pnl_usd": -1.5303
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 65,
+      "wins": 26,
+      "total_r": -17.149,
+      "total_pnl_usd": -1.5577
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1418,
+      "wins": 489,
+      "total_r": -257.412,
+      "total_pnl_usd": -16.4935
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 4478,
+      "wins": 1721,
+      "total_r": -376.243,
+      "total_pnl_usd": -30.4631
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 168,
+      "wins": 46,
+      "total_r": -53.426,
+      "total_pnl_usd": -9.7814
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 11,
+      "wins": 5,
+      "total_r": 3.786,
+      "total_pnl_usd": 0.7318
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "macd(12/26)",
+      "regime": "*",
+      "trades": 14,
+      "wins": 14,
+      "total_r": 26.907,
+      "total_pnl_usd": 2.6464
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 73,
+      "wins": 1,
+      "total_r": -56.97,
+      "total_pnl_usd": -4.7937
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 6,
+      "wins": 2,
+      "total_r": -0.982,
+      "total_pnl_usd": -0.1486
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 555,
+      "wins": 163,
+      "total_r": -119.815,
+      "total_pnl_usd": 5.9994
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 115,
+      "wins": 53,
+      "total_r": 4.572,
+      "total_pnl_usd": 2.2324
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 2556,
+      "wins": 799,
+      "total_r": -604.317,
+      "total_pnl_usd": -37.0899
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 867,
+      "wins": 375,
+      "total_r": 72.429,
+      "total_pnl_usd": 14.924
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 232,
+      "wins": 49,
+      "total_r": -85.612,
+      "total_pnl_usd": -3.7388
+    },
+    {
+      "symbol": "USDCHF",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 165,
+      "wins": 93,
+      "total_r": 49.774,
+      "total_pnl_usd": 2.48
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 25,
+      "wins": 19,
+      "total_r": 11.459,
+      "total_pnl_usd": 1.3111
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 14,
+      "wins": 5,
+      "total_r": 1.063,
+      "total_pnl_usd": -0.8034
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 26,
+      "wins": 0,
+      "total_r": -15.743,
+      "total_pnl_usd": -1.9247
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 30,
+      "wins": 4,
+      "total_r": -21.21,
+      "total_pnl_usd": -7.2506
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 396,
+      "wins": 181,
+      "total_r": 48.986,
+      "total_pnl_usd": 15.2169
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 943,
+      "wins": 361,
+      "total_r": -101.201,
+      "total_pnl_usd": 10.9784
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 10289,
+      "wins": 4056,
+      "total_r": -251.425,
+      "total_pnl_usd": -4.0904
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 13842,
+      "wins": 5353,
+      "total_r": -937.668,
+      "total_pnl_usd": -79.0223
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 2,
+      "wins": 0,
+      "total_r": -1.186,
+      "total_pnl_usd": -0.1567
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 45,
+      "wins": 43,
+      "total_r": 9.789,
+      "total_pnl_usd": 3.713
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 2279,
+      "wins": 942,
+      "total_r": 19.417,
+      "total_pnl_usd": 13.5327
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 49,
+      "wins": 15,
+      "total_r": -5.04,
+      "total_pnl_usd": -4.3694
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 1829,
+      "wins": 671,
+      "total_r": -201.419,
+      "total_pnl_usd": -32.0038
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 1356,
+      "wins": 502,
+      "total_r": 29.506,
+      "total_pnl_usd": -6.353
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 83,
+      "wins": 21,
+      "total_r": -9.648,
+      "total_pnl_usd": 0.15
+    },
+    {
+      "symbol": "USDJPY",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 235,
+      "wins": 93,
+      "total_r": -18.121,
+      "total_pnl_usd": -0.3963
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 49,
+      "wins": 25,
+      "total_r": 15.946,
+      "total_pnl_usd": 4.1894
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 182,
+      "wins": 68,
+      "total_r": 2.249,
+      "total_pnl_usd": 2.1983
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 107,
+      "wins": 32,
+      "total_r": -26.91,
+      "total_pnl_usd": -9.0857
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 61,
+      "wins": 25,
+      "total_r": -0.849,
+      "total_pnl_usd": 1.9018
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 251,
+      "wins": 104,
+      "total_r": -49.289,
+      "total_pnl_usd": -2.6892
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1245,
+      "wins": 467,
+      "total_r": -39.997,
+      "total_pnl_usd": -0.2123
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 3110,
+      "wins": 1100,
+      "total_r": -481.442,
+      "total_pnl_usd": -59.1836
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 5701,
+      "wins": 1946,
+      "total_r": -782.463,
+      "total_pnl_usd": -141.5916
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 30,
+      "wins": 10,
+      "total_r": -12.81,
+      "total_pnl_usd": -9.759
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 6,
+      "wins": 1,
+      "total_r": -2.242,
+      "total_pnl_usd": -0.0528
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 7,
+      "wins": 5,
+      "total_r": 7.89,
+      "total_pnl_usd": 5.0652
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 1586,
+      "wins": 490,
+      "total_r": -487.999,
+      "total_pnl_usd": -42.5894
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 31,
+      "wins": 16,
+      "total_r": 15.81,
+      "total_pnl_usd": 13.1462
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 1882,
+      "wins": 684,
+      "total_r": -123.827,
+      "total_pnl_usd": -34.6832
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 2433,
+      "wins": 1090,
+      "total_r": 416.464,
+      "total_pnl_usd": 148.8855
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 44,
+      "wins": 2,
+      "total_r": -36.528,
+      "total_pnl_usd": -6.8349
+    },
+    {
+      "symbol": "XAGEUR",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 106,
+      "wins": 36,
+      "total_r": -35.311,
+      "total_pnl_usd": -7.3669
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 18,
+      "wins": 9,
+      "total_r": 5.735,
+      "total_pnl_usd": -3838.0723
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 40,
+      "wins": 18,
+      "total_r": -13.593,
+      "total_pnl_usd": -45.5874
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 54,
+      "wins": 12,
+      "total_r": -16.917,
+      "total_pnl_usd": -5398.9507
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 7,
+      "wins": 1,
+      "total_r": -1.256,
+      "total_pnl_usd": 112.7937
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 2621,
+      "wins": 980,
+      "total_r": -211.101,
+      "total_pnl_usd": 182315.7908
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 830,
+      "wins": 310,
+      "total_r": 30.106,
+      "total_pnl_usd": 139436.539
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 10002,
+      "wins": 3703,
+      "total_r": -164.109,
+      "total_pnl_usd": 133676.1553
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 8713,
+      "wins": 3250,
+      "total_r": -41.47,
+      "total_pnl_usd": 55827.3836
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 1,
+      "wins": 0,
+      "total_r": -1,
+      "total_pnl_usd": -202.496
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 6,
+      "wins": 5,
+      "total_r": 10.534,
+      "total_pnl_usd": 3090.8473
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 8,
+      "wins": 3,
+      "total_r": -2.563,
+      "total_pnl_usd": 5106.7164
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 8886,
+      "wins": 3391,
+      "total_r": -301.082,
+      "total_pnl_usd": 257311.7128
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "rsi-mom(14)",
+      "regime": "*",
+      "trades": 1,
+      "wins": 0,
+      "total_r": -1,
+      "total_pnl_usd": -4624.6152
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 48,
+      "wins": 26,
+      "total_r": 22.072,
+      "total_pnl_usd": -18.3282
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 1716,
+      "wins": 573,
+      "total_r": -125.227,
+      "total_pnl_usd": -12254.8318
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 460,
+      "wins": 196,
+      "total_r": 42.526,
+      "total_pnl_usd": -92481.4131
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 130,
+      "wins": 73,
+      "total_r": 47.72,
+      "total_pnl_usd": 1669.8709
+    },
+    {
+      "symbol": "XAGUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 88,
+      "wins": 18,
+      "total_r": -40.031,
+      "total_pnl_usd": 7637.1282
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 43,
+      "wins": 17,
+      "total_r": -0.904,
+      "total_pnl_usd": -143.8163
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 41,
+      "wins": 6,
+      "total_r": -17.579,
+      "total_pnl_usd": -160.8034
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 159,
+      "wins": 56,
+      "total_r": -8.196,
+      "total_pnl_usd": 192.7164
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 48,
+      "wins": 10,
+      "total_r": -29.45,
+      "total_pnl_usd": 111.0183
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 415,
+      "wins": 168,
+      "total_r": 6.244,
+      "total_pnl_usd": -958.3192
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1730,
+      "wins": 623,
+      "total_r": -159.94,
+      "total_pnl_usd": 1007.241
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 11794,
+      "wins": 4584,
+      "total_r": -61.169,
+      "total_pnl_usd": 534.8368
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 21215,
+      "wins": 8002,
+      "total_r": -741.915,
+      "total_pnl_usd": -3816.1803
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 15,
+      "wins": 5,
+      "total_r": -0.505,
+      "total_pnl_usd": 0.6971
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "macd(12/26)",
+      "regime": "*",
+      "trades": 2,
+      "wins": 1,
+      "total_r": -0.003,
+      "total_pnl_usd": 0.13
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 23,
+      "wins": 7,
+      "total_r": -5.597,
+      "total_pnl_usd": 168.3545
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 56,
+      "wins": 12,
+      "total_r": -31.293,
+      "total_pnl_usd": -31.6872
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 2848,
+      "wins": 1051,
+      "total_r": -80.3,
+      "total_pnl_usd": 1301.1175
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 56,
+      "wins": 19,
+      "total_r": -8.542,
+      "total_pnl_usd": 76.2423
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 2232,
+      "wins": 826,
+      "total_r": -26.275,
+      "total_pnl_usd": 529.6001
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 3428,
+      "wins": 1238,
+      "total_r": -167.409,
+      "total_pnl_usd": 1142.5177
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 174,
+      "wins": 51,
+      "total_r": -54.949,
+      "total_pnl_usd": 81.9995
+    },
+    {
+      "symbol": "XAUEUR",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 240,
+      "wins": 80,
+      "total_r": -40.574,
+      "total_pnl_usd": -161.5452
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 54,
+      "wins": 32,
+      "total_r": 34.309,
+      "total_pnl_usd": -411.1471
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 74,
+      "wins": 39,
+      "total_r": 30.55,
+      "total_pnl_usd": 62.4746
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 128,
+      "wins": 48,
+      "total_r": -8.753,
+      "total_pnl_usd": 625.4515
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 34,
+      "wins": 17,
+      "total_r": 7.023,
+      "total_pnl_usd": -84.8219
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 519,
+      "wins": 187,
+      "total_r": -21.871,
+      "total_pnl_usd": -1066.827
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1988,
+      "wins": 739,
+      "total_r": -86.102,
+      "total_pnl_usd": 2127.6739
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 12080,
+      "wins": 4639,
+      "total_r": -323.647,
+      "total_pnl_usd": 612.8562
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 20824,
+      "wins": 7907,
+      "total_r": -482.107,
+      "total_pnl_usd": 4834.9498
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 4,
+      "wins": 1,
+      "total_r": -1.006,
+      "total_pnl_usd": -15.2152
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 33,
+      "wins": 21,
+      "total_r": -2.919,
+      "total_pnl_usd": -104.3831
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 3102,
+      "wins": 1278,
+      "total_r": 245.695,
+      "total_pnl_usd": 3742.8743
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "rsi-mom(14)",
+      "regime": "*",
+      "trades": 1,
+      "wins": 0,
+      "total_r": -0.355,
+      "total_pnl_usd": -1.4538
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 61,
+      "wins": 11,
+      "total_r": -33.323,
+      "total_pnl_usd": -151.9031
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 1950,
+      "wins": 763,
+      "total_r": 85.309,
+      "total_pnl_usd": 1054.4814
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 3629,
+      "wins": 1361,
+      "total_r": -133.532,
+      "total_pnl_usd": -4093.5204
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 191,
+      "wins": 107,
+      "total_r": 75.071,
+      "total_pnl_usd": -251.2417
+    },
+    {
+      "symbol": "XAUUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 264,
+      "wins": 83,
+      "total_r": -37.873,
+      "total_pnl_usd": -300.5886
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 54,
+      "wins": 32,
+      "total_r": 34.089,
+      "total_pnl_usd": -284.7501
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 74,
+      "wins": 39,
+      "total_r": 30.222,
+      "total_pnl_usd": 43.8027
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 148,
+      "wins": 53,
+      "total_r": -19.867,
+      "total_pnl_usd": 404.4479
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 34,
+      "wins": 17,
+      "total_r": 6.984,
+      "total_pnl_usd": -49.3081
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 519,
+      "wins": 187,
+      "total_r": -22.513,
+      "total_pnl_usd": -824.2449
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 1988,
+      "wins": 749,
+      "total_r": -85.936,
+      "total_pnl_usd": 1321.4605
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 12035,
+      "wins": 4599,
+      "total_r": -380.153,
+      "total_pnl_usd": 121.3929
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 20967,
+      "wins": 7933,
+      "total_r": -541.123,
+      "total_pnl_usd": 2500.1251
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "open-range(30)",
+      "regime": "*",
+      "trades": 14,
+      "wins": 1,
+      "total_r": -11.01,
+      "total_pnl_usd": -5.2227
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 33,
+      "wins": 21,
+      "total_r": -3.09,
+      "total_pnl_usd": -69.4649
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 3116,
+      "wins": 1281,
+      "total_r": 231.822,
+      "total_pnl_usd": 3217.8236
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "rsi-mom(14)",
+      "regime": "*",
+      "trades": 1,
+      "wins": 0,
+      "total_r": -0.36,
+      "total_pnl_usd": -1.2075
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 61,
+      "wins": 11,
+      "total_r": -33.391,
+      "total_pnl_usd": -83.439
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 1987,
+      "wins": 782,
+      "total_r": 93.635,
+      "total_pnl_usd": 588.0171
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 3600,
+      "wins": 1333,
+      "total_r": -174.725,
+      "total_pnl_usd": -2560.5793
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 196,
+      "wins": 112,
+      "total_r": 80.185,
+      "total_pnl_usd": -179.576
+    },
+    {
+      "symbol": "XAUUSDmicro",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 264,
+      "wins": 70,
+      "total_r": -39.16,
+      "total_pnl_usd": -202.9096
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 15,
+      "wins": 10,
+      "total_r": 6.525,
+      "total_pnl_usd": 1.5094
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 39,
+      "wins": 15,
+      "total_r": 1.84,
+      "total_pnl_usd": 5.2111
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 15,
+      "wins": 0,
+      "total_r": -15,
+      "total_pnl_usd": -2.2688
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 49,
+      "wins": 4,
+      "total_r": -40.211,
+      "total_pnl_usd": -4.1679
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 579,
+      "wins": 171,
+      "total_r": -191.44,
+      "total_pnl_usd": -41.1493
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 539,
+      "wins": 200,
+      "total_r": -18.192,
+      "total_pnl_usd": 13.7272
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 3566,
+      "wins": 885,
+      "total_r": -1336.038,
+      "total_pnl_usd": -142.5793
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 10,
+      "wins": 0,
+      "total_r": -10,
+      "total_pnl_usd": -2.56
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 1165,
+      "wins": 201,
+      "total_r": -742.257,
+      "total_pnl_usd": -50.2314
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 5,
+      "wins": 0,
+      "total_r": -5,
+      "total_pnl_usd": -0.2784
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 260,
+      "wins": 89,
+      "total_r": -28.757,
+      "total_pnl_usd": 3.9528
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 1140,
+      "wins": 452,
+      "total_r": 27.551,
+      "total_pnl_usd": 30.7849
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 41,
+      "wins": 15,
+      "total_r": -3.22,
+      "total_pnl_usd": 0.347
+    },
+    {
+      "symbol": "XPDUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 45,
+      "wins": 20,
+      "total_r": 7.635,
+      "total_pnl_usd": -2.6019
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "bb-rev(20)",
+      "regime": "*",
+      "trades": 18,
+      "wins": 2,
+      "total_r": -10.144,
+      "total_pnl_usd": -34.3021
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "bb-squeeze(20)",
+      "regime": "*",
+      "trades": 37,
+      "wins": 16,
+      "total_r": 7.895,
+      "total_pnl_usd": 17.0817
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "donchian(20)",
+      "regime": "*",
+      "trades": 39,
+      "wins": 11,
+      "total_r": -4.118,
+      "total_pnl_usd": -2.9976
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "donchian-pullback(21)",
+      "regime": "*",
+      "trades": 10,
+      "wins": 10,
+      "total_r": 19.67,
+      "total_pnl_usd": 14.045
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "ema-cross(9/21)",
+      "regime": "*",
+      "trades": 946,
+      "wins": 358,
+      "total_r": -80.258,
+      "total_pnl_usd": 32.194
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "ema-slope(21)",
+      "regime": "*",
+      "trades": 914,
+      "wins": 371,
+      "total_r": 88.219,
+      "total_pnl_usd": -35.7135
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "hurst-trend",
+      "regime": "*",
+      "trades": 2382,
+      "wins": 931,
+      "total_r": -93.282,
+      "total_pnl_usd": -25.4907
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "kalman-trend",
+      "regime": "*",
+      "trades": 6916,
+      "wins": 2361,
+      "total_r": -774.689,
+      "total_pnl_usd": 21.3581
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "keltner(20x2)",
+      "regime": "*",
+      "trades": 5,
+      "wins": 5,
+      "total_r": 0.755,
+      "total_pnl_usd": 0.2935
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "ou-rev",
+      "regime": "*",
+      "trades": 3,
+      "wins": 2,
+      "total_r": 1.353,
+      "total_pnl_usd": 0.1472
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "roc(10)",
+      "regime": "*",
+      "trades": 3361,
+      "wins": 1133,
+      "total_r": -544.861,
+      "total_pnl_usd": 211.7534
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "rsi2-rev(10)",
+      "regime": "*",
+      "trades": 2,
+      "wins": 1,
+      "total_r": -0.361,
+      "total_pnl_usd": 0.1608
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "vol-breakout",
+      "regime": "*",
+      "trades": 319,
+      "wins": 110,
+      "total_r": -38.031,
+      "total_pnl_usd": 35.9498
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "vwap-rev(30)",
+      "regime": "*",
+      "trades": 2784,
+      "wins": 1269,
+      "total_r": 561.64,
+      "total_pnl_usd": 614.0079
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "vwap-trend(30)",
+      "regime": "*",
+      "trades": 34,
+      "wins": 16,
+      "total_r": -11.439,
+      "total_pnl_usd": -8.3511
+    },
+    {
+      "symbol": "XPTUSD",
+      "alpha": "z-rev(20)",
+      "regime": "*",
+      "trades": 75,
+      "wins": 40,
+      "total_r": 30.495,
+      "total_pnl_usd": -2.3823
+    }
+  ]
+}
