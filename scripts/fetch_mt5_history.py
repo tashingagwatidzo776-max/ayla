@@ -50,7 +50,10 @@ PAGE = 4000               # <= HISTORY_PAGE_MAX. Kept deliberately small:
                            # window; the 1s inter-page sleep gives the probe
                            # room to slip in.
 MAX_BARS = 300000       # hard stop per TF; local MaxBars is 100000
-REQUEST_TIMEOUT = 60.0
+REQUEST_TIMEOUT = 120.0  # the sidecar serves one request at a time and a
+                          # cold MT5 IPC call can take tens of seconds; a
+                          # client that gives up at 30-60s while the server is
+                          # still working just stacks another queued request.
 RETRIES = 8
 
 # The external watchdog kills an unresponsive sidecar and respawns it
@@ -89,7 +92,9 @@ def get_json(url: str, timeout: float = REQUEST_TIMEOUT) -> dict:
 
 
 def venue_symbols() -> list[dict]:
-    payload = get_json(f"{SIDECAR}/symbols", timeout=30.0)
+    payload = get_json(f"{SIDECAR}/symbols")   # full REQUEST_TIMEOUT: this
+    # call is the run's first contact with a sidecar that may still be
+    # attaching; a 30s budget here killed two runs while a slow IPC settled.
     rows = payload.get("symbols") or []
     if not rows:
         raise RuntimeError("sidecar /symbols returned nothing — is the bridge up?")
