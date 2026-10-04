@@ -40,9 +40,15 @@ import urllib.parse
 import urllib.request
 
 SIDECAR = "http://127.0.0.1:53190"
-PAGE = 20000            # <= HISTORY_PAGE_MAX; small enough that a cold
-                        # deep-history page finishes inside the watchdog's
-                        # 45 s health-probe timeout (50k pages did not)
+PAGE = 4000               # <= HISTORY_PAGE_MAX. Kept deliberately small:
+                           # the sidecar serves requests one at a time and the
+                           # external watchdog probes /account with a 45s
+                           # timeout — a cold 20k-bar page of deep history can
+                           # block longer than that, so the watchdog kills the
+                           # sidecar mid-fetch and the pair livelocks. Small
+                           # pages keep every request well inside the probe
+                           # window; the 1s inter-page sleep gives the probe
+                           # room to slip in.
 MAX_BARS = 300000       # hard stop per TF; local MaxBars is 100000
 REQUEST_TIMEOUT = 60.0
 RETRIES = 8
