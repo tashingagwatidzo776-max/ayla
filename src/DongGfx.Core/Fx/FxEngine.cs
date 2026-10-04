@@ -84,6 +84,7 @@ public sealed class FxEngine
     private readonly double _riskFraction;
     private readonly double _atrStopMult;
     private readonly Func<double>? _equityProvider;
+    private readonly Func<string, double>? _confidenceWeight;
 
     /// <summary>The venue's lot geometry, refreshed by the host from the
     /// bridge. Null until the first /symbols snapshot names this symbol —
@@ -103,7 +104,13 @@ public sealed class FxEngine
         double riskFraction = 0.02,
         double atrStopMult = 1.5,
         FxRegimeDetector? regimeDetector = null,
-        Func<double>? equityProvider = null)
+        Func<double>? equityProvider = null,
+        // Optional memory nudge (FxBrainMemory): a bounded confidence
+        // multiplier per alpha, applied ONLY when choosing the winning
+        // speaker. Null = every alpha weighs 1.0 and selection is exactly
+        // the raw-confidence comparison as before. This can tilt the vote,
+        // never place, size, or schedule anything.
+        Func<string, double>? confidenceWeight = null)
     {
         Symbol = symbol;
         Timeframe = timeframe;
@@ -113,6 +120,7 @@ public sealed class FxEngine
         _atrStopMult = atrStopMult;
         _regime = regimeDetector ?? new FxRegimeDetector();
         _equityProvider = equityProvider;
+        _confidenceWeight = confidenceWeight;
     }
 
     public void AddAlpha(IFxAlpha alpha) => _alphas.Add(alpha);
@@ -165,6 +173,8 @@ public sealed class FxEngine
             }
 
             FxSignal? winner = null;
+            var winnerScore = 0.0;
+            var winnerWeight = 1.0;
             foreach (var alpha in _alphas)
             {
                 if (!alpha.Regimes.Contains(verdict.Regime))
@@ -173,9 +183,27 @@ public sealed class FxEngine
                 }
 
                 var sig = alpha.Evaluate(bars, verdict);
-                if (sig is not null && (winner is null || sig.Confidence > winner.Confidence))
+                if (sig is null)
+                {
+                    continue;
+                }
+
+                // Selection score = the alpha's own confidence tilted by
+                // the brain's bounded memory weight. The journaled
+                // confidence stays the alpha's raw conviction; the weight
+                // rides alongside so the tilt is never hidden.
+                var weight = _confidenceWeight?.Invoke(sig.Alpha) ?? 1.0;
+                if (double.IsNaN(weight) || weight <= 0)
+                {
+                    weight = 1.0;
+                }
+
+                var score = sig.Confidence * weight;
+                if (winner is null || score > winnerScore)
                 {
                     winner = sig;
+                    winnerScore = score;
+                    winnerWeight = weight;
                 }
             }
 
@@ -187,7 +215,8 @@ public sealed class FxEngine
 
             _journal("FX_SIGNAL",
                 $"{winner.Alpha} → {winner.Direction} conf {winner.Confidence:0.00} — {winner.Reason}",
-                ToJson(new { Symbol, winner.Alpha, winner.Direction, winner.Confidence, winner.Reason }));
+                ToJson(new { Symbol, winner.Alpha, winner.Direction, winner.Confidence, winner.Reason,
+                    MemoryWeight = winnerWeight }));
 
             var (lots, effectiveStop) = SizeWithStop(winner, mid, bars);
             if (lots <= 0 || lots > _lotsCap)
