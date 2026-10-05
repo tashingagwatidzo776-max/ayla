@@ -50,7 +50,11 @@ USER_PROMPT = (
 )
 
 
-def call_llm(base_url: str, model: str, api_key: str | None, timeout: float = 60.0) -> str:
+# 540s: on the 2-core soak box the model cold-loads inside this request
+# (~180s) and then generates (~250s warm) - measured. The old 60s budget
+# could never succeed there and made every alpha run report "propose
+# failed". Must stay under soak_evening.py's 600s subprocess timeout.
+def call_llm(base_url: str, model: str, api_key: str | None, timeout: float = 540.0) -> str:
     body = json.dumps({
         "model": model,
         "messages": [
