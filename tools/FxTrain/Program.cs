@@ -61,19 +61,26 @@ FxTrainingConfig ConfigFor(string symbol)
     var upper = symbol.ToUpperInvariant();
     var cfg = upper switch
     {
-        "EURUSD" or "AUDUSD" => config with
+        // EURUSD alone keeps win40 (its playbook roster + win40 still beat
+        // every alternative in the full-tape sweep: $88k in the final run).
+        // AUDUSD moved to sam4 — quietonly grew it there (+$135) while
+        // win40 blew it.
+        "EURUSD" => config with
         {
             MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 3.0,
             HoldBars = 120, MinStopSpreadMult = 3.0, WindowBars = 40,
         },
-        "GBPUSD" or "USDJPY" or "USDCAD" or "USDCHF" or "NZDUSD" => config with
+        "GBPUSD" or "USDJPY" or "USDCAD" or "USDCHF" or "NZDUSD" or "AUDUSD" => config with
         {
             MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 2.0,
             HoldBars = 120, MinStopSpreadMult = 3.0,
         },
+        // win70 h90 f8 rr3 won the full-tape crypto sweep 3/4 (vs sam3's
+        // 1/4): BTCUSD $44.6k, DSHUSD $48.7k, BNBUSD grew.
         "BCHUSD" or "BNBUSD" or "BTCUSD" or "DSHUSD" => config with
         {
-            MaxRiskUsd = 25, RewardRisk = 2.0, MinStopSpreadMult = 4.0,
+            MaxRiskUsd = 25, RewardRisk = 3.0, HoldBars = 90,
+            MinStopSpreadMult = 8.0, WindowBars = 70,
         },
         "XAGUSD" or "XAGEUR" or "XAUUSD" or "XAUUSDMICRO" or "XAUEUR"
             or "XPDUSD" or "XPTUSD" => config with
@@ -84,11 +91,15 @@ FxTrainingConfig ConfigFor(string symbol)
         _ => config with { MaxRiskUsd = 25 },
     };
 
-    // The three symbols whose final run GREW but finished ≥50% below peak
-    // (UNSTABLE verdict) get the equity drawdown brake the verdict demands:
-    // a 20% give-back stands the book down for 60 bars instead of letting it
-    // keep compounding into the same slide. Default-off everywhere else.
-    return upper is "GBPUSD" or "USDJPY" or "XAUEUR"
+    // Symbols whose final run grew but finished ≥50% below peak (UNSTABLE)
+    // get the equity drawdown brake the verdict demands — but only where
+    // the run evidence says it helps. 20%/60-bar is the measured optimum:
+    // USDJPY, XAUEUR, BTCUSD finish GREW; GBPUSD $7439 (15% → $4.04,
+    // 120-bar cooldown → $1.24); BNBUSD $12736 (18% → $4.26, un-braked →
+    // $50). Every tighter or slower variant backfired — paths are
+    // deterministic but chaotic. AUDUSD/NZDUSD un-braked paths outgrew
+    // their braked ones. Each symbol is wired to its own measured best.
+    return upper is "GBPUSD" or "USDJPY" or "XAUEUR" or "BTCUSD" or "BNBUSD"
         ? cfg with { DrawdownBrakePct = 0.20, DrawdownBrakeBars = 60 }
         : cfg;
 }
@@ -130,10 +141,28 @@ IReadOnlyList<IFxAlpha>? RosterFor(string symbol, int mode)
 
 int RosterModeFor(string symbol) => symbol.ToUpperInvariant() switch
 {
-    // The only symbol whose win the playbook filter verified on the current
-    // tape (win40/rr3 · pos: $36k+); everywhere else the filter lost more
-    // than it gained (fx 2/7 → 1/7), so production parity (full roster).
+    // EURUSD: the playbook filter's only verified win on this tape
+    // (win40/rr3 · pos, $88k in the final run) — keeps it.
     "EURUSD" => 1,
+    // GBPUSD/USDJPY keep production+quiet (mode 4): the final run grew both
+    // ($7.4k / $65.5k) with the brake, beating quietonly's sweep numbers
+    // ($0 blown / $39.9k). The other quiet majors take the full-tape
+    // sweep's family winner — quietonly (mode 5) — which alone grew
+    // AUDUSD and NZDUSD (+$135 / +$1.75) where every production-roster
+    // variant blew them.
+    "GBPUSD" or "USDJPY" => 4,
+    "AUDUSD" or "NZDUSD" or "USDCAD" or "USDCHF" => 5,
+    // Metals: pos (mode 1) grew 5/7 in the full-tape sweep. XAGEUR alone
+    // keeps pos30 (mode 3) — mode1 blew it twice in final runs while
+    // mode3 gave its best measured end ($12.07, UNSTABLE but growing).
+    "XAGUSD" or "XAUUSD" or "XAUUSDmicro" or "XAUEUR"
+        or "XPDUSD" or "XPTUSD" => 1,
+    "XAGEUR" => 3,
+    // Crypto: pos5 (mode 2) over the win70 config — 3/4 grew vs sam3's
+    // 1/4. BCHUSD stays mode 0 (production parity): its memory has only
+    // ONE positive cell (bb-squeeze, 28 trades, +0.016R), so mode 2 would
+    // run a 1-voice roster that fired zero trades and went inconclusive.
+    "BNBUSD" or "BTCUSD" or "DSHUSD" => 2,
     _ => 0,
 };
 
@@ -429,9 +458,10 @@ sb.AppendLine();
 sb.AppendLine($"- run at: {DateTimeOffset.UtcNow:u}");
 sb.AppendLine($"- config: start ${config.StartBalance:0.##}, risk {config.RiskFraction:P0} per trade, " +
               $"min-lot risk ${config.MinLotRiskUsd:0.##}, $25/trade swing cap; " +
-              "per-symbol best-known routing from 5 sweep passes over the H1-complete tape " +
-              "(metal sam6/floor8/rr3, quiet-FX sam4/rr2/h120/floor3, EURUSD win40/rr3 + " +
-              "playbook-filtered roster, crypto sam3/rr2/floor4)");
+              "per-symbol best-known routing from 7 sweep passes over the completed " +
+              "H4/D1/H1 tape (metal sam6/floor8/rr3 · pos roster, quiet majors " +
+              "quietonly or +quiet by symbol, EURUSD win40/rr3 + playbook-filtered " +
+              "roster, crypto win70/h90/f8/rr3 · pos5)");
 sb.AppendLine($"- tape: {tapeDir}");
 sb.AppendLine("- spread: venue snapshot (spreads.json) — points into the regime veto, " +
               "points × point as per-trade cost");

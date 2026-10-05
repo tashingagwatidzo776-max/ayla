@@ -1,10 +1,10 @@
 # FX training simulation — small-account growth
 
-- run at: 2026-10-04 17:59:27Z
-- config: start $10, risk 1% per trade, min-lot risk $0.02, $25/trade swing cap; per-symbol best-known routing from 5 sweep passes over the H1-complete tape (metal sam6/floor8/rr3, quiet-FX sam4/rr2/h120/floor3, EURUSD win40/rr3 + playbook-filtered roster, crypto sam3/rr2/floor4)
+- run at: 2026-10-05 13:32:15Z
+- config: start $10, risk 1% per trade, min-lot risk $0.02, $25/trade swing cap; per-symbol best-known routing from 7 sweep passes over the completed H4/D1/H1 tape (metal sam6/floor8/rr3 · pos roster, quiet majors quietonly or +quiet by symbol, EURUSD win40/rr3 + playbook-filtered roster, crypto win70/h90/f8/rr3 · pos5)
 - tape: C:\Users\DELL\AppData\Roaming\tf\data\train-history
 - spread: venue snapshot (spreads.json) — points into the regime veto, points × point as per-trade cost
-- brain memory: 305 family cell(s) across 396 run(s), 1045631 measured trades, last trained 2026-10-04T17:59:27.2069046+00:00
+- brain memory: 321 family cell(s) across 540 run(s), 3074972 measured trades, last trained 2026-10-05T13:32:15.7545465+00:00
 
 > Evidence only. The simulator replays the production alpha roster and the
 > production regime detector; it never trades. A human ports anything worth
@@ -14,87 +14,87 @@
 
 | symbol | bars | trades | win | $10 → | net | worst DD | PF | verdict |
 |---|---|---|---|---|---|---|---|---|
-| EURUSD | 500000 | 20000 | 38% | $36275.19 | +$36265.19 | $41404.78 | 1.15 | GREW — $10 → $36275.19 (+362652%) over 20000 trades, win 38%, worst drawdown $41404.78. Evidence only: a human ports anything worth keeping. |
-| XAUUSD | 200000 | 20000 | 44% | $18811.24 | +$18801.24 | $12477.99 | 1.09 | GREW — $10 → $18811.24 (+188012%) over 20000 trades, win 44%, worst drawdown $12477.99. Evidence only: a human ports anything worth keeping. |
-| XAUUSDmicro | 190862 | 20000 | 44% | $18026.44 | +$18016.44 | $12619.44 | 1.08 | GREW — $10 → $18026.44 (+180164%) over 20000 trades, win 44%, worst drawdown $12619.44. Evidence only: a human ports anything worth keeping. |
-| XAGUSD | 200000 | 20000 | 43% | $10773.44 | +$10763.44 | $12156.62 | 1.06 | GREW — $10 → $10773.44 (+107634%) over 20000 trades, win 43%, worst drawdown $12156.62. Evidence only: a human ports anything worth keeping. |
-| XAUEUR | 200000 | 20000 | 44% | $1661.85 | +$1651.85 | $11295.81 | 1.01 | UNSTABLE — $10 → $1661.85 (+16519%) over 20000 trades, win 44%, but finished 85% below its $11400.57 peak. Ballooning and not recovering is variance, not growth — a human must not port this without a drawdown gate. Evidence only. |
-| USDJPY | 500000 | 20000 | 39% | $447.05 | +$437.05 | $9282.98 | 1.00 | UNSTABLE — $10 → $447.05 (+4370%) over 20000 trades, win 39%, but finished 95% below its $9730.02 peak. Ballooning and not recovering is variance, not growth — a human must not port this without a drawdown gate. Evidence only. |
-| GBPUSD | 500000 | 20000 | 39% | $45.44 | +$35.44 | $9600.64 | 1.00 | UNSTABLE — $10 → $45.44 (+354%) over 20000 trades, win 39%, but finished 100% below its $9623 peak. Ballooning and not recovering is variance, not growth — a human must not port this without a drawdown gate. Evidence only. |
-| AUDUSD | 500000 | 1063 | 29% | $0.00 | -$10.00 | $41.76 | 0.88 | BLOWN — the $10 account hit zero after 1063 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| BCHUSD | 400000 | 1462 | 35% | $0.00 | -$10.00 | $10.03 | 0.63 | BLOWN — the $10 account hit zero after 1462 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| BNBUSD | 400000 | 4086 | 39% | $0.00 | -$10.00 | $10.20 | 0.86 | BLOWN — the $10 account hit zero after 4086 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| BTCUSD | 300000 | 2162 | 36% | $0.00 | -$10.00 | $10.71 | 0.77 | BLOWN — the $10 account hit zero after 2162 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| DSHUSD | 278775 | 1950 | 37% | $0.00 | -$10.00 | $10.11 | 0.78 | BLOWN — the $10 account hit zero after 1950 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| NZDUSD | 500000 | 807 | 29% | $0.00 | -$10.00 | $11.62 | 0.56 | BLOWN — the $10 account hit zero after 807 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| USDCAD | 500000 | 3737 | 35% | $0.00 | -$10.00 | $80.28 | 0.98 | BLOWN — the $10 account hit zero after 3737 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| USDCHF | 500000 | 14674 | 38% | $0.00 | -$10.00 | $546.17 | 1.00 | BLOWN — the $10 account hit zero after 14674 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| XAGEUR | 300000 | 6669 | 42% | $0.00 | -$10.00 | $166.26 | 0.99 | BLOWN — the $10 account hit zero after 6669 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| XPDUSD | 200000 | 3858 | 46% | $0.00 | -$10.00 | $10.00 | 0.82 | BLOWN — the $10 account hit zero after 3858 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
-| XPTUSD | 200000 | 6356 | 42% | $0.00 | -$10.00 | $102.99 | 0.98 | BLOWN — the $10 account hit zero after 6356 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
+| EURUSD | 567623 | 20000 | 39% | $88047.69 | +$88037.69 | $14336.12 | 1.31 | GREW — $10 → $88047.69 (+880377%) over 20000 trades, win 39%, worst drawdown $14336.12. Evidence only: a human ports anything worth keeping. |
+| USDJPY | 567625 | 20000 | 42% | $65501.78 | +$65491.78 | $6468.81 | 1.25 | GREW — $10 → $65501.78 (+654918%) over 20000 trades, win 42%, worst drawdown $6468.81. Evidence only: a human ports anything worth keeping. |
+| XAUUSDmicro | 245089 | 20000 | 46% | $63361.24 | +$63351.24 | $6709.06 | 1.29 | GREW — $10 → $63361.24 (+633512%) over 20000 trades, win 46%, worst drawdown $6709.06. Evidence only: a human ports anything worth keeping. |
+| XAUUSD | 522170 | 20000 | 45% | $61612.41 | +$61602.41 | $7700.31 | 1.33 | GREW — $10 → $61612.41 (+616024%) over 20000 trades, win 45%, worst drawdown $7700.31. Evidence only: a human ports anything worth keeping. |
+| DSHUSD | 501255 | 20000 | 37% | $48730.76 | +$48720.76 | $10867.76 | 1.22 | GREW — $10 → $48730.76 (+487208%) over 20000 trades, win 37%, worst drawdown $10867.76. Evidence only: a human ports anything worth keeping. |
+| XAUEUR | 431994 | 20000 | 45% | $42589.99 | +$42579.99 | $7523.67 | 1.20 | GREW — $10 → $42589.99 (+425800%) over 20000 trades, win 45%, worst drawdown $7523.67. Evidence only: a human ports anything worth keeping. |
+| XAGEUR | 431983 | 20000 | 43% | $16523.71 | +$16513.71 | $13965.86 | 1.09 | GREW — $10 → $16523.71 (+165137%) over 20000 trades, win 43%, worst drawdown $13965.86. Evidence only: a human ports anything worth keeping. |
+| BNBUSD | 408554 | 12972 | 39% | $12736.41 | +$12726.41 | $13488.73 | 1.08 | UNSTABLE — $10 → $12736.41 (+127264%) over 12972 trades, win 39%, but finished 51% below its $26225.15 peak. Ballooning and not recovering is variance, not growth — a human must not port this without a drawdown gate. Evidence only. |
+| BTCUSD | 429055 | 11507 | 37% | $8455.79 | +$8445.79 | $8685.42 | 1.05 | GREW — $10 → $8455.79 (+84458%) over 11507 trades, win 37%, worst drawdown $8685.42. Evidence only: a human ports anything worth keeping. |
+| XAGUSD | 522626 | 20000 | 43% | $8204.19 | +$8194.19 | $12141.42 | 1.05 | GREW — $10 → $8204.19 (+81942%) over 20000 trades, win 43%, worst drawdown $12141.42. Evidence only: a human ports anything worth keeping. |
+| GBPUSD | 556227 | 13833 | 40% | $7439.52 | +$7429.52 | $9914.17 | 1.06 | UNSTABLE — $10 → $7439.52 (+74295%) over 13833 trades, win 40%, but finished 57% below its $17286.54 peak. Ballooning and not recovering is variance, not growth — a human must not port this without a drawdown gate. Evidence only. |
+| AUDUSD | 556248 | 20000 | 39% | $145.56 | +$135.56 | $953.32 | 1.01 | UNSTABLE — $10 → $145.56 (+1356%) over 20000 trades, win 39%, but finished 85% below its $956.74 peak. Ballooning and not recovering is variance, not growth — a human must not port this without a drawdown gate. Evidence only. |
+| NZDUSD | 554438 | 20000 | 39% | $11.75 | +$1.75 | $4983.47 | 1.00 | UNSTABLE — $10 → $11.75 (+17%) over 20000 trades, win 39%, but finished 100% below its $4987.83 peak. Ballooning and not recovering is variance, not growth — a human must not port this without a drawdown gate. Evidence only. |
+| BCHUSD | 419168 | 3774 | 35% | $0.00 | -$10.00 | $59.08 | 0.97 | BLOWN — the $10 account hit zero after 3774 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
+| USDCAD | 556252 | 10519 | 37% | $0.00 | -$10.00 | $67.90 | 0.98 | BLOWN — the $10 account hit zero after 10519 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
+| USDCHF | 567535 | 1233 | 30% | $0.00 | -$10.00 | $38.20 | 0.82 | BLOWN — the $10 account hit zero after 1233 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
+| XPDUSD | 450913 | 5772 | 43% | $0.00 | -$10.00 | $274.00 | 0.99 | BLOWN — the $10 account hit zero after 5772 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
+| XPTUSD | 450872 | 1395 | 42% | $0.00 | -$10.00 | $10.00 | 0.61 | BLOWN — the $10 account hit zero after 1395 trades; the min-lot floor outran the risk fraction (record more/cleaner tape) |
 
 ## Brain memory (what the brain now remembers)
 
 | symbol | family | trades | win | total R | expectancy R | $ P/L |
 |---|---|---|---|---|---|---|
-| BTCUSD | keltner(20x2) | 10 | 100% | +19.6 | +1.961 | $+2.13 |
 | USDCHF | macd(12/26) | 23 | 100% | +44.5 | +1.933 | $+3.98 |
+| USDJPY | macd(12/26) | 12 | 92% | +21.0 | +1.747 | $+376.39 |
 | DSHUSD | ou-rev | 2 | 100% | +3.5 | +1.728 | $+0.13 |
 | AUDUSD | bb-rev(20) | 10 | 80% | +16.2 | +1.624 | $+3.21 |
+| XAGUSD | open-range(30) | 31 | 77% | +49.8 | +1.605 | $+3864.48 |
 | EURUSD | ou-rev | 14 | 100% | +21.2 | +1.517 | $+1.90 |
-| XAGUSD | open-range(30) | 24 | 71% | +35.1 | +1.462 | $+3497.82 |
-| XPTUSD | donchian-pullback(21) | 13 | 77% | +18.5 | +1.421 | $+14.02 |
-| USDJPY | macd(12/26) | 4 | 75% | +5.1 | +1.278 | $-19.88 |
 | USDCAD | keltner(20x2) | 26 | 81% | +26.7 | +1.028 | $+10.24 |
-| USDJPY | keltner(20x2) | 6 | 67% | +5.9 | +0.976 | $+157.59 |
 | BNBUSD | open-range(30) | 4 | 100% | +3.4 | +0.841 | $+0.07 |
+| XAGUSD | ou-rev | 62 | 60% | +49.4 | +0.796 | $+5368.05 |
 | NZDUSD | z-rev(20) | 84 | 63% | +66.0 | +0.786 | $+3.14 |
-| GBPUSD | kalman-trend | 204 | 54% | +138.3 | +0.678 | $+22.96 |
-| BNBUSD | rsi2-rev(10) | 8 | 50% | +4.5 | +0.563 | $-19.72 |
-| XPTUSD | ou-rev | 12 | 67% | +6.0 | +0.496 | $-0.30 |
-| BNBUSD | bb-rev(20) | 17 | 47% | +7.6 | +0.446 | $-20.41 |
+| XAUUSDmicro | donchian-pullback(21) | 83 | 55% | +38.5 | +0.464 | $+783.09 |
+| USDJPY | ou-rev | 75 | 85% | +33.2 | +0.443 | $+237.39 |
 | EURUSD | bb-squeeze(20) | 137 | 58% | +60.1 | +0.439 | $+2.23 |
-| XAGEUR | open-range(30) | 45 | 49% | +18.7 | +0.416 | $+6.66 |
-| XPDUSD | bb-squeeze(20) | 21 | 62% | +8.7 | +0.413 | $+1.55 |
-| BCHUSD | vwap-rev(30) | 2084 | 51% | +782.9 | +0.376 | $+496.44 |
-| USDJPY | ou-rev | 67 | 84% | +23.6 | +0.352 | $-2.14 |
+| GBPUSD | kalman-trend | 309 | 51% | +130.0 | +0.421 | $+22.01 |
+| GBPUSD | ema-cross(9/21) | 3803 | 53% | +1555.3 | +0.409 | $-549.75 |
+| XAUUSDmicro | vwap-trend(30) | 658 | 58% | +261.9 | +0.398 | $+4199.35 |
 | XAUUSD | donchian-pullback(21) | 67 | 57% | +22.7 | +0.339 | $+356.12 |
 | USDCHF | ou-rev | 102 | 55% | +34.5 | +0.338 | $-21.28 |
-| XAUUSDmicro | donchian-pullback(21) | 67 | 57% | +22.6 | +0.338 | $+385.28 |
-| BTCUSD | vwap-trend(30) | 88 | 44% | +28.8 | +0.327 | $+0.76 |
-| XPTUSD | z-rev(20) | 90 | 51% | +29.0 | +0.323 | $-2.48 |
-| NZDUSD | vwap-rev(30) | 661 | 51% | +208.4 | +0.315 | $+66.65 |
-| XPDUSD | open-range(30) | 9 | 67% | +2.7 | +0.301 | $+0.12 |
-| USDJPY | bb-rev(20) | 130 | 52% | +38.1 | +0.293 | $+174.80 |
-| BCHUSD | donchian(20) | 50 | 48% | +13.2 | +0.263 | $+12.94 |
-| GBPUSD | ema-cross(9/21) | 1192 | 48% | +311.5 | +0.261 | $-3440.55 |
+| USDJPY | ema-cross(9/21) | 26670 | 48% | +8969.8 | +0.336 | $+172056.09 |
+| NZDUSD | vwap-rev(30) | 662 | 51% | +210.3 | +0.318 | $+66.69 |
+| XAUUSDmicro | rsi2-rev(10) | 200 | 52% | +61.3 | +0.307 | $+2380.87 |
+| XAUUSD | vwap-trend(30) | 525 | 52% | +149.3 | +0.284 | $+1440.62 |
+| EURUSD | roc(10) | 98672 | 41% | +26690.7 | +0.270 | $+631848.68 |
 | USDCAD | open-range(30) | 33 | 42% | +8.5 | +0.256 | $+11.84 |
-| XAUUSDmicro | vwap-trend(30) | 466 | 52% | +117.4 | +0.252 | $+588.59 |
-| XAUUSD | vwap-trend(30) | 461 | 52% | +112.8 | +0.245 | $+527.44 |
+| XAGUSD | rsi2-rev(10) | 574 | 48% | +138.3 | +0.241 | $+2409.52 |
 | USDCHF | rsi-mom(14) | 12 | 50% | +2.9 | +0.241 | $-1.06 |
-| USDCAD | donchian(20) | 314 | 59% | +74.6 | +0.238 | $+0.04 |
-| XAGUSD | rsi2-rev(10) | 93 | 47% | +22.1 | +0.237 | $+46.16 |
-| DSHUSD | vwap-trend(30) | 44 | 55% | +10.0 | +0.227 | $+5.10 |
-| XAGUSD | vwap-trend(30) | 253 | 55% | +55.9 | +0.221 | $+1680.14 |
-| DSHUSD | vwap-rev(30) | 1754 | 44% | +387.6 | +0.221 | $+123.32 |
+| XAUUSDmicro | ema-cross(9/21) | 20378 | 49% | +4829.6 | +0.237 | $+84352.73 |
+| USDCAD | donchian(20) | 316 | 58% | +72.6 | +0.230 | $-0.07 |
+| GBPUSD | band-fade(50) | 970 | 43% | +214.6 | +0.221 | $+4606.34 |
+| DSHUSD | donchian(20) | 1574 | 38% | +328.0 | +0.208 | $+3681.21 |
+| XAUUSDmicro | bb-squeeze(20) | 146 | 49% | +29.9 | +0.205 | $+108.06 |
+| XAUEUR | ema-cross(9/21) | 20926 | 47% | +4274.8 | +0.204 | $+61513.54 |
+| AUDUSD | rsi-mom(14) | 14 | 93% | +2.8 | +0.199 | $+0.26 |
+| AUDUSD | vwap-rev(30) | 838 | 50% | +160.8 | +0.192 | $+35.22 |
+| XAUUSD | ema-cross(9/21) | 39826 | 47% | +7560.0 | +0.190 | $+135945.44 |
+| DSHUSD | vwap-trend(30) | 18044 | 39% | +3359.0 | +0.186 | $+77759.52 |
+| XAUUSDmicro | ema-slope(21) | 6638 | 45% | +1228.0 | +0.185 | $+29288.41 |
+| XAUUSD | bb-rev(20) | 203 | 52% | +36.1 | +0.178 | $-420.20 |
+| USDJPY | bb-rev(20) | 218 | 45% | +35.9 | +0.165 | $+119.86 |
+| GBPUSD | rsi2-rev(10) | 1163 | 47% | +187.4 | +0.161 | $-2122.16 |
 
 ## Best per-family record per symbol
 
 - AUDUSD: **bb-rev(20)** — 10 trades, 80% win, expectancy +1.624R, $+3.21
-- BCHUSD: **vwap-rev(30)** — 2084 trades, 51% win, expectancy +0.376R, $+496.44
+- BCHUSD: **bb-squeeze(20)** — 28 trades, 32% win, expectancy +0.016R, $-0.58
 - BNBUSD: **open-range(30)** — 4 trades, 100% win, expectancy +0.841R, $+0.07
-- BTCUSD: **keltner(20x2)** — 10 trades, 100% win, expectancy +1.961R, $+2.13
+- BTCUSD: **ema-cross(9/21)** — 34980 trades, 38% win, expectancy +0.083R, $+26948.88
 - DSHUSD: **ou-rev** — 2 trades, 100% win, expectancy +1.728R, $+0.13
 - EURUSD: **ou-rev** — 14 trades, 100% win, expectancy +1.517R, $+1.90
-- GBPUSD: **kalman-trend** — 204 trades, 54% win, expectancy +0.678R, $+22.96
+- GBPUSD: **kalman-trend** — 309 trades, 51% win, expectancy +0.421R, $+22.01
 - NZDUSD: **z-rev(20)** — 84 trades, 63% win, expectancy +0.786R, $+3.14
 - USDCAD: **keltner(20x2)** — 26 trades, 81% win, expectancy +1.028R, $+10.24
 - USDCHF: **macd(12/26)** — 23 trades, 100% win, expectancy +1.933R, $+3.98
-- USDJPY: **macd(12/26)** — 4 trades, 75% win, expectancy +1.278R, $-19.88
-- XAGEUR: **open-range(30)** — 45 trades, 49% win, expectancy +0.416R, $+6.66
-- XAGUSD: **open-range(30)** — 24 trades, 71% win, expectancy +1.462R, $+3497.82
-- XAUEUR: **ema-cross(9/21)** — 1582 trades, 48% win, expectancy +0.088R, $+1506.16
+- USDJPY: **macd(12/26)** — 12 trades, 92% win, expectancy +1.747R, $+376.39
+- XAGEUR: **open-range(30)** — 111438 trades, 43% win, expectancy +0.056R, $+82840.84
+- XAGUSD: **open-range(30)** — 31 trades, 77% win, expectancy +1.605R, $+3864.48
+- XAUEUR: **ema-cross(9/21)** — 20926 trades, 47% win, expectancy +0.204R, $+61513.54
 - XAUUSD: **donchian-pullback(21)** — 67 trades, 57% win, expectancy +0.339R, $+356.12
-- XAUUSDmicro: **donchian-pullback(21)** — 67 trades, 57% win, expectancy +0.338R, $+385.28
-- XPDUSD: **bb-squeeze(20)** — 21 trades, 62% win, expectancy +0.413R, $+1.55
-- XPTUSD: **donchian-pullback(21)** — 13 trades, 77% win, expectancy +1.421R, $+14.02
+- XAUUSDmicro: **donchian-pullback(21)** — 83 trades, 55% win, expectancy +0.464R, $+783.09
+- XPDUSD: **open-range(30)** — 9472 trades, 43% win, expectancy -0.006R, $+28.44
+- XPTUSD: **vwap-rev(30)** — 20075 trades, 45% win, expectancy -0.008R, $+592.01
