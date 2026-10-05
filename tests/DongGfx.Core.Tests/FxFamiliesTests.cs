@@ -8,6 +8,7 @@ namespace DongGfx.Core.Tests;
 /// draw from it) and the colormap engine's integrity — endpoint colors are
 /// the documented upstream values, so a corrupted LUT cannot ship silently.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxFamiliesTests
 {
     private static List<FxBar> TrendBars(int n = 120)
@@ -152,10 +153,224 @@ public class FxFamiliesTests
         Assert.NotNull(sig);
         Assert.Equal(FxDirection.Buy, sig!.Direction);
     }
+
+    // ── quiet-FX extension roster (FxFamilies.QuietFx) ─────────────────────
+
+    [Fact]
+    public void QuietFx_Roster_Is_Three_Unique_Voices_Outside_Production()
+    {
+        var quiet = FxFamilies.QuietFx();
+        Assert.Equal(3, quiet.Count);
+        Assert.Equal(quiet.Count, quiet.Select(a => a.Name).Distinct().Count());
+
+        // Training-only: no overlap with the pinned production roster, so
+        // mode-4 (All + QuietFx) really adds voices and mode 0 is untouched.
+        var production = FxFamilies.All().Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var alpha in quiet)
+        {
+            Assert.DoesNotContain(alpha.Name, production);
+            Assert.NotEmpty(alpha.Regimes);
+            Assert.DoesNotContain(FxRegime.StandDown, alpha.Regimes);
+            Assert.DoesNotContain(FxRegime.LowLiquidity, alpha.Regimes);
+        }
+    }
+
+    /// <summary>H1 tape on a UTC day: 7 overnight (asia) bars, then 8
+    /// drive bars — enough for ATR(14) and the walk-back.</summary>
+    private static List<FxBar> SessionDay(double asiaHigh, double asiaLow,
+                                           double driveClose, int driveBars = 8)
+    {
+        var midnight = (1790000000L / 86400) * 86400;   // 00:00 UTC
+        var bars = new List<FxBar>();
+        for (var h = 0; h < 7; h++)   // asia 00–06
+        {
+            var mid = (asiaHigh + asiaLow) / 2;
+            bars.Add(new FxBar(midnight + 3600L * h,
+                mid, asiaHigh, asiaLow, mid, 100));
+        }
+        for (var h = 0; h < driveBars; h++)   // london onward
+        {
+            var t = midnight + 3600L * (7 + h);
+            var c = h == driveBars - 1 ? driveClose : asiaHigh;
+            bars.Add(new FxBar(t, asiaHigh, Math.Max(asiaHigh, c) + 0.0002,
+                Math.Min(asiaLow, c) - 0.0002, c, 100));
+        }
+        return bars;
+    }
+
+    [Fact]
+    public void AsiaBreak_Buys_The_Close_Above_The_Overnight_Range()
+    {
+        // Overnight coil at 1.0980–1.0990 (range 10 pips ≪ 4×ATR), the
+        // final drive bar closes 1.1005 — outside the asia high.
+        var bars = SessionDay(asiaHigh: 1.0990, asiaLow: 1.0980, driveClose: 1.1005);
+        var sig = new FxFamilies.AsiaBreak().Evaluate(bars, RangeVerdict);
+        Assert.NotNull(sig);
+        Assert.Equal(FxDirection.Buy, sig!.Direction);
+        Assert.True(sig.Confidence is > 0 and <= 1);
+        Assert.True(double.IsFinite(sig.StopDistanceHint));
+    }
+
+    [Fact]
+    public void AsiaBreak_Sells_The_Close_Below_The_Overnight_Range()
+    {
+        var bars = SessionDay(asiaHigh: 1.0990, asiaLow: 1.0980, driveClose: 1.0965);
+        var sig = new FxFamilies.AsiaBreak().Evaluate(bars, RangeVerdict);
+        Assert.NotNull(sig);
+        Assert.Equal(FxDirection.Sell, sig!.Direction);
+    }
+
+    [Fact]
+    public void AsiaBreak_Passes_While_Still_In_Asia()
+    {
+        // Rewind the last (drive) bar into the overnight window: the
+        // session gate must reject before any walk happens — no drive,
+        // nothing to break. Full 15-bar tape so the ATR path stays live.
+        var bars = SessionDay(asiaHigh: 1.0990, asiaLow: 1.0980, driveClose: 1.1005);
+        var midnight = (1790000000L / 86400) * 86400;
+        var last = bars[^1];
+        bars[^1] = new FxBar(midnight + 3600L * 6, last.Open, last.High,
+            last.Low, last.Close, last.Volume);   // stamped 06:00 UTC = asia
+        var sig = new FxFamilies.AsiaBreak().Evaluate(bars, RangeVerdict);
+        Assert.Null(sig);
+    }
+
+    [Fact]
+    public void AsiaBreak_Passes_When_The_Overnight_Grind_Is_Not_Quiet()
+    {
+        // A 14-bar overnight CLIMB: the asia block spans ~72 pips while
+        // each bar is ~7 — ATR(14) only sees the per-bar noise, so the
+        // block range clears 4×ATR and the containment gate holds. The
+        // drive then closes above the block high, so only the gate stands
+        // between that close and a Buy signal.
+        var midnight = (1790000000L / 86400) * 86400;
+        var bars = new List<FxBar>();
+        var c = 1.0980;
+        for (var i = 0; i < 14; i++)   // 30-min asia stamps: hours 0–6.5
+        {
+            var o = c;
+            c += 0.0005;
+            bars.Add(new FxBar(midnight + 1800L * i, o, c + 0.0001,
+                o - 0.0001, c, 100));
+        }
+        for (var h = 7; h <= 9; h++)   // drive session, small bars
+        {
+            var o = c;
+            c += 0.0004;
+            bars.Add(new FxBar(midnight + 3600L * h, o, c + 0.0001,
+                o - 0.0001, c, 100));
+        }
+
+        var sig = new FxFamilies.AsiaBreak().Evaluate(bars, RangeVerdict);
+        Assert.Null(sig);
+    }
+
+    [Fact]
+    public void BandFade_Fades_A_Close_Pinned_At_The_Band_Top()
+    {
+        var bars = new List<FxBar>();
+        for (var i = 0; i < 54; i++)
+        {
+            // Contained coil 1.0980–1.0990, tiny bars inside it.
+            var mid = 1.0985 + 0.0004 * Math.Sin(i);
+            bars.Add(new FxBar(1790000000L + 60 * i, mid, mid + 0.0002,
+                mid - 0.0002, mid, 100));
+        }
+        bars.Add(new FxBar(1790000000L + 60 * 54, 1.0987, 1.0990,
+            1.0986, 1.0990, 100));   // close pinned at the band high
+
+        var sig = new FxFamilies.BandFade().Evaluate(bars, RangeVerdict);
+        Assert.NotNull(sig);
+        Assert.Equal(FxDirection.Sell, sig!.Direction);
+    }
+
+    [Fact]
+    public void BandFade_Fades_A_Close_Pinned_At_The_Band_Floor()
+    {
+        var bars = new List<FxBar>();
+        for (var i = 0; i < 54; i++)
+        {
+            var mid = 1.0985 + 0.0004 * Math.Sin(i);
+            bars.Add(new FxBar(1790000000L + 60 * i, mid, mid + 0.0002,
+                mid - 0.0002, mid, 100));
+        }
+        bars.Add(new FxBar(1790000000L + 60 * 54, 1.0983, 1.0984,
+            1.0980, 1.0980, 100));   // close pinned at the band low
+
+        var sig = new FxFamilies.BandFade().Evaluate(bars, RangeVerdict);
+        Assert.NotNull(sig);
+        Assert.Equal(FxDirection.Buy, sig!.Direction);
+    }
+
+    [Fact]
+    public void BandFade_Stand_Down_On_A_Trend_Sized_Window()
+    {
+        // Steady climb: 50-bar span dwarfs 10×ATR — that window is a
+        // trend (donchian's job), the containment gate must pass.
+        var bars = new List<FxBar>();
+        for (var i = 0; i < 55; i++)
+        {
+            var c = 1.0000 + i * 0.0006;
+            bars.Add(new FxBar(1790000000L + 60 * i, c - 0.0002, c + 0.0002,
+                c - 0.0002, c, 100));
+        }
+        var sig = new FxFamilies.BandFade().Evaluate(bars, RangeVerdict);
+        Assert.Null(sig);
+    }
+
+    [Fact]
+    public void RangeDrift_Rides_A_Monotone_Glide_Up()
+    {
+        // Steady crawl: EMA21 rises bar over bar, price leads it, and the
+        // 4-bar glide clears 0.4×ATR — the quiet-major's Range-classified
+        // trend the reversion voices would fade against.
+        var bars = new List<FxBar>();
+        for (var i = 0; i < 40; i++)
+        {
+            var c = 1.1000 + i * 0.0006;
+            bars.Add(new FxBar(1790000000L + 60 * i, c - 0.0002, c + 0.0003,
+                c - 0.0003, c, 100));
+        }
+        var sig = new FxFamilies.RangeDrift().Evaluate(bars, RangeVerdict);
+        Assert.NotNull(sig);
+        Assert.Equal(FxDirection.Buy, sig!.Direction);
+        Assert.True(sig.Confidence is > 0 and <= 1);
+    }
+
+    [Fact]
+    public void RangeDrift_Rides_A_Monotone_Glide_Down()
+    {
+        var bars = new List<FxBar>();
+        for (var i = 0; i < 40; i++)
+        {
+            var c = 1.1000 - i * 0.0006;
+            bars.Add(new FxBar(1790000000L + 60 * i, c + 0.0002, c + 0.0003,
+                c - 0.0003, c, 100));
+        }
+        var sig = new FxFamilies.RangeDrift().Evaluate(bars, RangeVerdict);
+        Assert.NotNull(sig);
+        Assert.Equal(FxDirection.Sell, sig!.Direction);
+    }
+
+    [Fact]
+    public void RangeDrift_Passes_On_A_Flat_Coil()
+    {
+        // Dead-flat tape: EMA neither rises nor falls — the glide check
+        // (rising == falling) refuses instead of picking a side.
+        var bars = new List<FxBar>();
+        for (var i = 0; i < 40; i++)
+        {
+            bars.Add(new FxBar(1790000000L + 60 * i, 1.1000, 1.1002,
+                1.0998, 1.1000, 100));
+        }
+        var sig = new FxFamilies.RangeDrift().Evaluate(bars, RangeVerdict);
+        Assert.Null(sig);
+    }
 }
 
 /// <summary>Colormap engine integrity: endpoints are the documented
 /// upstream colors, sampling is monotone in index, clamped in t.</summary>
+[Trait("Category", "Unit")]
 public class FxCmapTests
 {
     [Fact]

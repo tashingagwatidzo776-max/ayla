@@ -98,8 +98,21 @@ FxTrainingConfig ConfigFor(string symbol)
 // any positive measured record on this symbol, 2 = positive with ≥5 trades,
 // 3 = positive with ≥30 (the memory's own trust floor). An empty filter
 // falls back to the full roster — silence is not a strategy.
+// Modes 4/5 are the quiet-FX sweep axis: 4 = production roster PLUS the
+// quiet-FX extension voices, 5 = extension voices alone (how much do they
+// carry by themselves?). Production parity stays mode 0.
 IReadOnlyList<IFxAlpha>? RosterFor(string symbol, int mode)
 {
+    if (mode == 4)
+    {
+        return FxFamilies.All().Concat(FxFamilies.QuietFx()).ToList();
+    }
+
+    if (mode == 5)
+    {
+        return FxFamilies.QuietFx().ToList();
+    }
+
     if (mode <= 0)
     {
         return null;   // null = simulator default (FxFamilies.All())
@@ -188,6 +201,10 @@ if (sweep)
             ("sam4 rr2 h120 f3 · pos30", config with { MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 2.0, HoldBars = 120, MinStopSpreadMult = 3.0 }, 3),
             ("win40 rr3 f3 · pos", config with { MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 3.0, HoldBars = 120, MinStopSpreadMult = 3.0, WindowBars = 40 }, 1),
             ("win40 rr3 f3 · pos5", config with { MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 3.0, HoldBars = 120, MinStopSpreadMult = 3.0, WindowBars = 40 }, 2),
+            // The quiet-FX axis: same anchors, roster + the three extension
+            // voices (mode 4) vs. the extension voices alone (mode 5).
+            ("sam4 rr2 h120 f3 · +quiet", config with { MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 2.0, HoldBars = 120, MinStopSpreadMult = 3.0 }, 4),
+            ("sam4 rr2 h120 f3 · quietonly", config with { MaxRiskUsd = 25, StopAtrMult = 4.0, RewardRisk = 2.0, HoldBars = 120, MinStopSpreadMult = 3.0 }, 5),
         },
         ["crypto"] = new()
         {
@@ -221,7 +238,7 @@ if (sweep)
     var jobSecs = new double[jobs.Count];
     var sweepWatch = Stopwatch.StartNew();
     Console.WriteLine($"\nsweep: {jobs.Count} job(s) — " +
-        $"{grids.Count} families × 6 variants × their symbols");
+        $"{grids.Count} families, variants per family, × their symbols");
 
     Parallel.For(0, jobs.Count, i =>
     {

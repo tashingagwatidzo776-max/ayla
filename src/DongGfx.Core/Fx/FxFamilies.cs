@@ -53,6 +53,20 @@ public static class FxFamilies
         new HurstTrend(),
     };
 
+    /// <summary>The quiet-FX extension roster: three voices tuned for the
+    /// quiet majors (EURUSD/GBPUSD/USDJPY/USDCAD/USDCHF/AUDUSD/NZDUSD) —
+    /// low ATR%, tight spreads, session-shaped tape where overnight
+    /// structure, band extremes and slow drift carry the edge instead of
+    /// explosive momentum. TRAINING-ONLY: these are deliberately NOT in
+    /// <see cref="All"/> — production parity holds until FxTrain's sweep
+    /// says a variant earns them (roster modes 4/5 add them per variant).</summary>
+    public static IReadOnlyList<IFxAlpha> QuietFx() => new IFxAlpha[]
+    {
+        new AsiaBreak(),
+        new BandFade(),
+        new RangeDrift(),
+    };
+
     /// <summary>MACD histogram flip: 12/26 EMA spread crossing zero in the
     /// direction of the latest bar.</summary>
     public sealed class MacdCross(int fast = 12, int slow = 26) : IFxAlpha
@@ -401,6 +415,198 @@ public static class FxFamilies
                     $"RSI({period}) crossed down through 45 ({prev:0} → {now:0})", regime.TimeUtc);
             }
             return null;
+        }
+    }
+
+    /// <summary>Asia-range breakout: the quiet majors' signature session
+    /// shape — a contained overnight (asia 00–07 UTC) range, then London
+    /// (or the NY overlap/drive) closes outside it. Requires a fresh
+    /// drive session, a real asia block in the tape, and a range quiet
+    /// enough (≤ maxRangeAtr × ATR) that the break is structure, not noise.</summary>
+    public sealed class AsiaBreak(int minAsiaBars = 4, double maxRangeAtr = 4.0) : IFxAlpha
+    {
+        public string Name => $"asia-break({minAsiaBars})";
+        public FxRegime[] Regimes { get; } =
+            [FxRegime.Range, FxRegime.Trend, FxRegime.HighVol];
+
+        public FxSignal? Evaluate(IReadOnlyList<FxBar> bars, FxRegimeVerdict regime)
+        {
+            if (bars.Count < minAsiaBars + 5) return null;
+            static (string Session, DateOnly Date) Stamp(FxBar b)
+            {
+                var utc = DateTimeOffset.FromUnixTimeSeconds(b.Time).UtcDateTime;
+                return (FxRegimeDetector.SessionOf(DateTimeOffset.FromUnixTimeSeconds(b.Time)),
+                    DateOnly.FromDateTime(utc));
+            }
+
+            var last = Stamp(bars[^1]);
+            if (last.Session is not ("london" or "ldn-ny" or "new-york"))
+            {
+                return null;   // still asia, or the thin late tape — no drive yet
+            }
+
+            // Walk back over today's drive (everything non-asia since the
+            // overnight block), then over the contiguous same-day asia
+            // block that precedes it. A drive that reaches back past the
+            // day boundary has no overnight range to break — stand down.
+            var i = bars.Count - 1;
+            while (i >= 0)
+            {
+                var s = Stamp(bars[i]);
+                if (s.Date != last.Date || s.Session == "asia") break;
+                i--;
+            }
+
+            var driveStart = i + 1;
+            while (i >= 0)
+            {
+                var s = Stamp(bars[i]);
+                if (s.Date != last.Date || s.Session != "asia") break;
+                i--;
+            }
+
+            var asiaStart = i + 1;
+            var asiaBars = driveStart - asiaStart;
+            if (asiaBars < minAsiaBars)
+            {
+                return null;   // no (or truncated) overnight range to break
+            }
+
+            var hi = double.NegativeInfinity;
+            var lo = double.PositiveInfinity;
+            for (var k = asiaStart; k < driveStart; k++)
+            {
+                hi = Math.Max(hi, bars[k].High);
+                lo = Math.Min(lo, bars[k].Low);
+            }
+
+            var atr = FxFeatures.Atr(bars, 14);
+            if (double.IsNaN(atr) || atr <= 0 || hi <= lo) return null;
+            if (hi - lo > maxRangeAtr * atr)
+            {
+                return null;   // overnight range too wide — that's trend, not structure
+            }
+
+            var close = bars[^1].Close;
+            if (close > hi)
+            {
+                return new FxSignal(Name, FxDirection.Buy, 0.7, atr,
+                    $"close {close:0.#####} broke the {asiaBars}-bar asia range high {hi:0.#####}",
+                    regime.TimeUtc);
+            }
+
+            if (close < lo)
+            {
+                return new FxSignal(Name, FxDirection.Sell, 0.7, atr,
+                    $"close {close:0.#####} broke the {asiaBars}-bar asia range low {lo:0.#####}",
+                    regime.TimeUtc);
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>Band-fade: close pinned at a decade extreme (≥90% / ≤10%)
+    /// of a CONTAINED period-bar range (≤ maxRangeAtr × ATR). The
+    /// containment gate is the quiet-FX half — a close at the top of a
+    /// trend is a breakout (donchian owns that), a close at the top of a
+    /// coil is a fade.</summary>
+    public sealed class BandFade(int period = 50, double maxRangeAtr = 10.0) : IFxAlpha
+    {
+        public string Name => $"band-fade({period})";
+        public FxRegime[] Regimes { get; } = [FxRegime.Range];
+
+        public FxSignal? Evaluate(IReadOnlyList<FxBar> bars, FxRegimeVerdict regime)
+        {
+            if (bars.Count < period + 5) return null;
+            var hi = double.NegativeInfinity;
+            var lo = double.PositiveInfinity;
+            for (var i = bars.Count - period; i < bars.Count; i++)
+            {
+                hi = Math.Max(hi, bars[i].High);
+                lo = Math.Min(lo, bars[i].Low);
+            }
+
+            var range = hi - lo;
+            if (range <= 0) return null;
+            var atr = FxFeatures.Atr(bars, 14);
+            if (double.IsNaN(atr) || atr <= 0) return null;
+            if (range > maxRangeAtr * atr) return null;   // trend — not a band
+
+            var pos = (bars[^1].Close - lo) / range;
+            if (pos >= 0.9)
+            {
+                return new FxSignal(Name, FxDirection.Sell, 0.7, atr,
+                    $"close at {pos:P0} of a contained {period}-bar band — fade the extreme",
+                    regime.TimeUtc);
+            }
+
+            if (pos <= 0.1)
+            {
+                return new FxSignal(Name, FxDirection.Buy, 0.7, atr,
+                    $"close at {pos:P0} of a contained {period}-bar band — fade the extreme",
+                    regime.TimeUtc);
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>Range drift: a monotone EMA glide inside a Range verdict —
+    /// the quiet majors' slow directional crawl that the detector still
+    /// classes as range (ADX &lt; 22), where every reversion voice fades
+    /// against it and bleeds. Rides it instead, gated on a minimum quiet
+    /// slope so flat coils stay with the faders.</summary>
+    public sealed class RangeDrift(int period = 21, int confirm = 5, double minDriftAtr = 0.4)
+        : IFxAlpha
+    {
+        public string Name => $"range-drift({period})";
+        public FxRegime[] Regimes { get; } = [FxRegime.Range];
+
+        public FxSignal? Evaluate(IReadOnlyList<FxBar> bars, FxRegimeVerdict regime)
+        {
+            if (bars.Count < period + confirm + 5) return null;
+            var closes = bars.Select(b => b.Close).ToList();
+            var ema = FxFeatures.EmaSeries(closes, period);
+            if (ema.Length < confirm) return null;
+
+            var rising = true;
+            var falling = true;
+            for (var i = ema.Length - confirm; i < ema.Length; i++)
+            {
+                var now = ema[i];
+                var prev = ema[i - 1];
+                if (double.IsNaN(now) || double.IsNaN(prev) || now == 0 || prev == 0)
+                {
+                    return null;
+                }
+
+                rising &= now > prev;
+                falling &= now < prev;
+            }
+
+            if (rising == falling)
+            {
+                return null;   // flat or mixed — not a glide
+            }
+
+            var delta = ema[^1] - ema[^confirm];
+            var atr = FxFeatures.Atr(bars, 14);
+            if (double.IsNaN(atr) || atr <= 0 || Math.Abs(delta) < minDriftAtr * atr)
+            {
+                return null;   // too quiet even for the drift floor
+            }
+
+            var close = bars[^1].Close;
+            if ((rising && close <= ema[^1]) || (falling && close >= ema[^1]))
+            {
+                return null;   // price not on the glide's side of the mean
+            }
+
+            return new FxSignal(Name, rising ? FxDirection.Buy : FxDirection.Sell,
+                Math.Min(0.8, 0.55 + Math.Abs(delta) / Math.Max(atr, 1e-9) * 0.3),
+                atr, $"EMA{period} gliding {delta:+0.#####;-0.#####} over {confirm - 1} bars inside Range",
+                regime.TimeUtc);
         }
     }
 
