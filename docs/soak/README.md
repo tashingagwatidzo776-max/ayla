@@ -22,6 +22,19 @@ git add docs/soak && git commit -m "soak evidence <date>"
 Exit codes: `0` clean · `1` findings (fix before real mode) · `3` NO DATA
 (an empty soak is not evidence — connect a demo account and let it trade).
 
+Separately from these reports, the app's own **paper-soak bar** (10 signals
+per symbol before GO LIVE is allowed, all-or-nothing across the portfolio)
+is persisted in `data/fx-paper-soak.json`, so it accrues across app and
+brain restarts instead of restarting at zero each launch. It is stamped
+with the build identity: a new commit drops the counters (the bar proves
+*that* engine behaved), and the restore or drop is written to the journal
+as an `FX_MODE` row. The UI makes the provenance visible so a resumed bar
+is not read as a fresh one: the dashboard shows a `paper soak n/m · laggard
+… · X carried over from the last session` line (or `· restarted — build
+changed since <stamp>`), the account-bar pill's tooltip explains what the
+counters mean, and the terminal status line announces a resumed or
+restarted bar once, on the transition.
+
 Each recorded report ends with a machine-readable summary line
 (`SOAK-SUMMARY: entries=… settlements=… refusals=… verdict=…`), and every
 `--record` run regenerates the verdict-trend table below from all committed
@@ -35,6 +48,10 @@ do not edit rows by hand.
 
 | Date | Entries | Settlements | Refusals | Verdict |
 |------|--------:|------------:|---------:|---------|
+| 2026-10-05 | 106 | 0 | 0 | CLEAN |
+| 2026-10-04 | 147 | 0 | 0 | CLEAN |
+| 2026-10-03 | 2 | 0 | 0 | NO DATA |
+| 2026-10-02 | 76 | 75 | 0 | CLEAN |
 | 2026-09-30 | 6429 | 300 | 0 | CLEAN |
 | 2026-09-29 | 6717 | 220 | 0 | CLEAN |
 | 2026-09-27 | 61 | 57 | 0 | CLEAN |
@@ -60,8 +77,9 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   gate that became the profit-floor override tier.
 - [WEEK-TWO-TP1-LOG.md](WEEK-TWO-TP1-LOG.md) — week two opens: the TP1
   partials watch, the grading runbook for the first armed ticket, the
-  graded-ticket table (empty until the first live TP1-ARM), and the rung
-  backtest on the five saves.
+  auto-generated graded-ticket table + machine-readable verdicts
+  (`data/watcher/tp1-graded-verdicts.jsonl`, empty until the first live
+  TP1-ARM), and the rung backtest on the five saves.
 - [TP1-FLOOR-INTERACTION.md](TP1-FLOOR-INTERACTION.md) — DESIGN → IMPLEMENTED:
   skip the
   rung on STRUCTURE_TRAIL tickets (the floor ratchets past any static
@@ -73,8 +91,33 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   + ci-local gate step); `scripts/watch_tp1_first_arm.py` (5-min task)
   pages the first TP1-ARM and the banked EXEC (rung R in the message),
   dumps the grading evidence, and regenerates the auto TP1-EXEC digest
-  block in the week-two log every pass (every banked rung, not just the
-  first); `scripts/audit_donggfx_tasks.py` audits the task fleet for
+  block plus the graded-verdict table in the week-two log every pass
+  (every banked rung, not just the first); the plan-% gate pages a
+  candidate plan % (down when the rungs collectively trail, up when they
+  beat the giveback) and an ⏰ overdue alert once a review is stale — and
+  an overdue review also holds TP1 arming in the app (release it from the
+  Settings hint's Mark acted / Clear buttons), the latest recommendation is
+  rendered on the dashboard straight from the ledger (with the recent
+  recommendation history and how each ended) and can be **armed in one
+  click** — confirming the candidate persists the engine's plan-% override
+  and writes the `acted` event, with a Revert banner to release it — and
+  the watcher then VERIFIES that override actually reached a rung,
+  paging once when it cannot fire (TP1 partials off), when the next rung
+  is sized from the allocation plan instead, or when none has carried it
+  past its grace window — except the preconditions that can never
+  clear themselves (partials off / brain loop off / app not journaling),
+  which page on the first pass with no grace window — showing that same
+  verdict on the dashboard's
+  override banner beside the Arm button, with the unmet precondition
+  named (partials off / brain loop off / app not journaling / review
+  hold / trailing gate / nothing eligible) and, when the app can fix
+  it, a reason-matched banner button (Start brain / Arm TP1 partials /
+  Act on review; Revert releases the override itself) that toasts its
+  outcome, or — when nothing in the app can fix it — a line saying so in
+  the button's place; the gate and breaker share
+  their tunables via config/tp1-plan-gate.json —
+  editable in Settings, validated, hot-reloaded, and shipped with the app;
+  `scripts/audit_donggfx_tasks.py` audits the task fleet for
   encoding wrappers and script drift (weekly task, deduped history file
   so drift is caught without a session).
 
@@ -106,8 +149,10 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   STABLE 6.27% baseline (2026-09-30); reruns before and after every weight
   change.
 - [FX-LAB-WEEKLY.md](FX-LAB-WEEKLY.md) — the rolling weekly digest the app
-  appends itself (fleet capture without TP1, graded-ticket TP1 capture,
-  saves); regenerates the trend chart each post.
+  appends itself (fleet capture without TP1, graded-ticket TP1 capture and
+  its graded verdict + vs-giveback R, saves, the plan-% review
+  open/cleared/acted rollup); regenerates the trend chart each post,
+  outlining the ISO weeks that banked a TP1 rung.
 - [fx-capture-trend.svg](fx-capture-trend.svg) — the capture-trend chart
   with the amber saves-per-week overlay (PR #144).
 - [STRUCTURE-STOPS-2026-09-29.md](STRUCTURE-STOPS-2026-09-29.md) — the
@@ -122,3 +167,40 @@ the daily `SOAK-*.md` reports are indexed by the verdict-trend table above.
   (`soak_report.py --record docs/soak`, one file per UTC day, overwritten
   on re-runs). Not listed individually: the trend table above **is** their
   index, newest first.
+
+**Regenerating screenshots**
+
+[scripts/capture-ui-evidence.ps1](../../scripts/capture-ui-evidence.ps1)
+is the repeatable capture tool for UI evidence: it grabs (or loads) a
+screenshot, crops it to a named surface, stamps a label banner, and writes a
+PNG here. Soak and TP1 shots are regenerated on demand instead of being
+hand-cropped, and the crop geometry lives in one place so runs stay
+comparable.
+
+    # live screen grab of the dashboard soak line
+    powershell -File scripts/capture-ui-evidence.ps1 -Name soak-timeline -Surface dashboard-soak
+
+    # crop an existing full-size capture (no screen needed)
+    powershell -File scripts/capture-ui-evidence.ps1 -Name tp1 -SourceImage full.png -Crop "0,0,1920,200"
+
+    # verify the crop/label path without touching the screen
+    powershell -File scripts/capture-ui-evidence.ps1 -SelfTest
+
+Surfaces (`full`, `dashboard-soak`, `tp1-banner`, `account-soak-pill`,
+`journal-grid`) are fractions of the image size, so they scale across
+resolutions; override with `-Crop "x,y,w,h"` in pixels when a machine's window
+layout differs. Add `-Launch` (with optional `-DataDir`) to start the app on a
+seeded data dir before capturing.
+
+`-JournalCopyFlow` is the journal-copy regression: it seeds a scratch
+`TF_DATA_DIR` with `APP_FAULT` rows, launches its own app instance (refusing
+to touch an already-running one), navigates the dashboard fault notice into
+the journal, right-clicks a row and picks **Copy details**, then selects a
+second row and presses **Ctrl+C** — verifying the clipboard against each
+row's seeded details and writing a labeled PNG per step (`<Name>-selected`,
+`-context-menu`, `-context-copied`, `-ctrlc`):
+
+    powershell -File scripts/capture-ui-evidence.ps1 -JournalCopyFlow -Name journal-copy
+
+`-SelfTest` exercises the crop/label path AND the journal-seed writer without
+touching the screen or the app.
