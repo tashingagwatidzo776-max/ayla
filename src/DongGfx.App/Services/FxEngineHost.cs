@@ -935,6 +935,61 @@ public sealed class FxEngineHost : IDisposable
             // submitted-exit reconciliation below is how an exit becomes
             // EXIT_CONFIRMED — skipping it on the very cycle the position
             // vanished would leave protection unconfirmed forever.
+            //
+            // The OTHER half of the bookkeeping law: the prune below needs
+            // owned.Count > 0, so while flat every stale tracking entry used
+            // to strand FOREVER — LocalBookLots, and with it the exposure
+            // floor built on it, pinned at a position nobody holds until the
+            // ops-layer reconcile + restart (the ~2.5-minute refused-trade
+            // window). Retire the stale entries now — but ONLY on a
+            // PROVEN-flat venue (ProvenLiveTicketsAsync): a bare empty read
+            // is the congestion lie the local book exists to survive.
+            if (_exitStates.Count > 0 || _entryRegimes.Count > 0 || _profitFloors.Count > 0)
+            {
+                var (live, proof) = await ProvenLiveTicketsAsync(positions).ConfigureAwait(true);
+                if (live is not null)
+                {
+                    foreach (var gone in _exitStates.Keys.Where(k => !live.Contains(k)).ToList())
+                    {
+                        _exitStates.Remove(gone);
+                        _entryRegimes.Remove(gone);
+                        _profitFloors.Remove(gone);
+                        // THE CLOSE LINE (the second half of the limitation):
+                        // tickets the venue dropped without an app-driven
+                        // close (SL hits, manual flattens) never got a
+                        // "closed #" row, so FxJournalBook held the fill open
+                        // until the ops script wrote one by hand. Same shape
+                        // the ensemble's full close writes — every downstream
+                        // parser (FxJournalBook, trade_lifecycle,
+                        // watch_profit_floor, backfill_shadow_ledger) sees a
+                        // normal close.
+                        Journal("FX_EXIT",
+                            $"#{gone}: closed #{gone} — broker no longer holds the ticket; " +
+                            $"stale tracking retired ({proof})",
+                            System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                Ticket = gone,
+                                Partial = false,
+                                Lots = (double?)null,
+                                Retcode = 10009,
+                                Reconciled = true,
+                                Proof = proof,
+                            }));
+                    }
+
+                    // Orphaned regime/floor memory whose exit state was
+                    // already dropped: same proven-flat sweep, no close line
+                    // (the book is _exitStates).
+                    foreach (var k in _entryRegimes.Keys.Where(k => !live.Contains(k)).ToList())
+                    {
+                        _entryRegimes.Remove(k);
+                    }
+                    foreach (var k in _profitFloors.Keys.Where(k => !live.Contains(k)).ToList())
+                    {
+                        _profitFloors.Remove(k);
+                    }
+                }
+            }
             return;
         }
 
@@ -1392,8 +1447,33 @@ public sealed class FxEngineHost : IDisposable
             var live = owned.Select(p => p.Ticket).ToHashSet();
             foreach (var gone in _exitStates.Keys.Where(k => !live.Contains(k)).ToList())
             {
+                // A submitted floor exit's close line belongs to the
+                // reconciliation below (it fires THIS cycle — confirm.Count
+                // > 0 gated this prune): deferring here keeps exactly one
+                // "closed #" row per ticket. Every other vanish (SL hit,
+                // refused-then-dropped close) has NO close line yet — write
+                // it now so the journal book retires the fill without the
+                // ops-layer reconcile.
+                var deferredToReconcile = _floorGuards.TryGetValue(gone, out var prunedGuard)
+                    && prunedGuard.State == Core.Fx.FxFloorState.ExitSubmitted;
                 _exitStates.Remove(gone);
                 _entryRegimes.Remove(gone);
+                _profitFloors.Remove(gone);
+                if (!deferredToReconcile)
+                {
+                    Journal("FX_EXIT",
+                        $"#{gone}: closed #{gone} — broker no longer holds the ticket; " +
+                        "stale tracking retired (healthy positions read)",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Ticket = gone,
+                            Partial = false,
+                            Lots = (double?)null,
+                            Retcode = 10009,
+                            Reconciled = true,
+                            Proof = "healthy positions read",
+                        }));
+                }
             }
         }
 
@@ -1458,6 +1538,31 @@ public sealed class FxEngineHost : IDisposable
                             g.PeakR.ToString("0.0") + "R → breach at " + g.BreachR.ToString("+0.0;-0.0") + "R") },
                         resolvedAction: "floor-exit", won: true,
                         DateTimeOffset.UtcNow);
+
+                    // THE CLOSE LINE: the floor's exit never wrote the
+                    // "closed #" row FxJournalBook parses, so the journal
+                    // book held the fill open — the exposure guard floored
+                    // at a stale book until the ops-layer reconcile +
+                    // restart (~2.5 min of refused trades after every floor
+                    // save). Same shape the ensemble's full close writes:
+                    // retire the ticket in the journal AND in the host's
+                    // own book, right here, no ops script in the loop.
+                    Journal("FX_EXIT",
+                        $"#{gone}: closed #{gone} — deal {g.ExitOrderId ?? "?"} " +
+                        "(profit floor exit confirmed by broker reconciliation)",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Ticket = gone,
+                            Partial = false,
+                            Lots = (double?)null,
+                            Retcode = 10009,
+                            Confirmed = true,
+                            EventId = g.EventId,
+                            ExitOrderId = g.ExitOrderId,
+                        }));
+                    _exitStates.Remove(gone);
+                    _entryRegimes.Remove(gone);
+                    _profitFloors.Remove(gone);
                 }
                 g.MarkReset();
                 _floorGuards.Remove(gone);
@@ -1493,6 +1598,46 @@ public sealed class FxEngineHost : IDisposable
                     $"{Symbol} | Close was accepted but the position persists; protection continues and the exit will be re-issued next cycle.");
             }
         }
+    }
+
+    /// <summary>Prove the venue is flat enough for this host to retire
+    /// stale tracking state — the in-app twin of the ops-layer
+    /// venue_is_flat gate (book_recovery.ps1: two empty /positions reads
+    /// AND equity == balance AND margin == 0). Returns the ticket set a
+    /// prune may trust as live, or null when flatness is NOT proven (never
+    /// prune — the safe direction is refusing trades, not freeing the
+    /// book). Two safe shapes:
+    /// (a) a NON-empty positions read — a degraded read degrades to EMPTY
+    ///     (never to a lie carrying rows), so absence from it is evidence;
+    /// (b) two agreeing EMPTY reads PLUS a settled account: equity ≈ balance
+    ///     AND margin == 0. The empty pair alone is the 2026-09-29
+    ///     congestion lie (/account probed fine while /positions degraded),
+    ///     so it only counts when the account independently says flat.
+    /// Missing account data or an absent margin field fails CLOSED.</summary>
+    private async Task<(HashSet<long>? Live, string Proof)> ProvenLiveTicketsAsync(
+        IReadOnlyList<Mt5Position> positions)
+    {
+        if (positions.Count > 0)
+        {
+            return (positions.Select(p => p.Ticket).ToHashSet(), "healthy positions read");
+        }
+
+        var second = await _mt5.GetPositionsAsync().ConfigureAwait(true);
+        if (second.Count > 0)
+        {
+            return (second.Select(p => p.Ticket).ToHashSet(), "healthy positions read");
+        }
+
+        var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
+        if (account is not null
+            && account.Margin is { } margin && margin <= 1e-6
+            && Math.Abs(account.Equity - account.Balance) <= 0.01)
+        {
+            return (new HashSet<long>(),
+                "two agreeing empty reads + settled account (equity ≈ balance, margin 0)");
+        }
+
+        return (null, string.Empty);
     }
 
     /// <summary>Snap an exit's lots to the venue's volume step (never below

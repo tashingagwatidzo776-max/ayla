@@ -36,6 +36,13 @@ public class DemoPaperExecutionTests
         public bool AccountUnverified;
         public bool AccountReal;
         public bool AccountMissing;
+
+        /// <summary>The /account used-margin value the flat-proof gate reads
+        /// (book_recovery.ps1: margin == 0 is part of "flat"). null (the
+        /// default) serializes as JSON null → the client reads an absent
+        /// margin → every proven-flat prune fails CLOSED, exactly like an
+        /// older sidecar. Tests that want the prune to prove set it to 0.</summary>
+        public double? AccountMargin;
         public bool TicksDown;
         public object[] Positions = Array.Empty<object>();
         public int CloseCalls;
@@ -90,6 +97,7 @@ public class DemoPaperExecutionTests
                         balance = 2632.19,
                         equity = 2632.19,
                         margin_free = 2632.19,
+                        margin = AccountMargin,
                         leverage = 1000,
                         trade_mode = AccountReal ? 2 : AccountUnverified ? 1 : 0,
                     });
@@ -451,6 +459,114 @@ public class DemoPaperExecutionTests
         };
         await host.RunCycleAsync();
         Assert.Equal(0.1, host.LocalBookLots);
+    }
+
+    [Fact]
+    public async Task ProvenFlat_Prune_Retires_Stale_Book_And_Journals_The_Closed_Line()
+    {
+        // The host-book limitation (2026-10-06): the prune below needed
+        // owned.Count > 0, so after the venue dropped a ticket the tracking
+        // state stranded FOREVER while flat — LocalBookLots, and with it the
+        // exposure floor, pinned at a position nobody holds until the
+        // ops-layer reconcile + restart. On a PROVEN-flat venue (here: a
+        // healthy non-empty read lacking our ticket) the stale entry must
+        // retire AND the journal must get the "closed #" line FxJournalBook
+        // parses — no ops script in the loop.
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                // Near entry (mae ~0.1R): the brain HOLDs it, so cycle 1
+                // seeds the book without closing anything.
+                new { ticket = 111L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1475, profit = -5.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var host = NewHost(script, journal);
+        await host.RunCycleAsync();
+        Assert.True(host.LocalBookLots > 0, "the book must seed from a real read");
+
+        // Cycle 2: the ticket vanished (SL hit — no app-driven close, so no
+        // close line exists yet) while a SIBLING row keeps the read
+        // non-empty: the floor guard reconciles away unsubmitted, but the
+        // tracking state stays until the flat branch below can prove and
+        // retire it.
+        script.Positions = new object[]
+        {
+            new { ticket = 901L, symbol = "EURUSD", side = "buy", volume = 0.1,
+                  price_open = 1.1500, price_current = 1.1505, profit = 5.0,
+                  sl = 0.0, tp = 0.0, comment = "" },
+        };
+        await host.RunCycleAsync();
+        Assert.True(host.LocalBookLots > 0, "the stale state survives while guards exist");
+
+        // Cycle 3: this host's book is flat and the read is healthy
+        // (non-empty, lacking our ticket) → proven → retire + close line.
+        await host.RunCycleAsync();
+        Assert.Equal(0.0, host.LocalBookLots);
+        journal.Flush();
+        var closed = journal.GetRecent(null, 400).Where(e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #111")).ToList();
+        Assert.Single(closed);
+
+        // Idempotent: further flat cycles must not duplicate the close row.
+        await host.RunCycleAsync();
+        journal.Flush();
+        Assert.Single(journal.GetRecent(null, 400).Where(e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #111")));
+    }
+
+    [Fact]
+    public async Task Flat_Prune_Fails_Closed_Without_A_Settled_Account()
+    {
+        // The empty-pair lie: two agreeing EMPTY position reads can still
+        // be the congestion degrade that the local book exists to survive
+        // (2026-09-29: /account probed fine while /positions degraded). So
+        // case (b) also demands the account independently say flat — equity
+        // ≈ balance AND margin == 0, the ops venue_is_flat gate. An absent
+        // or non-zero margin must NEVER prune; margin 0 (with equity ==
+        // balance) proves it.
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                new { ticket = 111L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1475, profit = -5.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var host = NewHost(script, journal);
+        await host.RunCycleAsync();
+        Assert.True(host.LocalBookLots > 0, "the book must seed");
+
+        // Retire the guard (sibling read) so the flat branch is reachable
+        // on the next cycle.
+        script.Positions = new object[]
+        {
+            new { ticket = 901L, symbol = "EURUSD", side = "buy", volume = 0.1,
+                  price_open = 1.1500, price_current = 1.1505, profit = 5.0,
+                  sl = 0.0, tp = 0.0, comment = "" },
+        };
+        await host.RunCycleAsync();
+
+        // Two agreeing EMPTY reads — but the account reports a LIVE margin:
+        // the venue is not flat by the ops gate. The book must NOT wipe.
+        script.Positions = Array.Empty<object>();
+        script.AccountMargin = 5.0;
+        await host.RunCycleAsync();
+        Assert.Equal(0.1, host.LocalBookLots);
+
+        // Margin 0 + equity == balance (the stub's account): proven flat
+        // → the stale entry retires and the journal gets its close row.
+        script.AccountMargin = 0.0;
+        await host.RunCycleAsync();
+        Assert.Equal(0.0, host.LocalBookLots);
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #111"));
     }
 
     [Fact]
@@ -1026,6 +1142,12 @@ public class DemoPaperExecutionTests
         journal.Flush();
         Assert.Contains(journal.GetRecent(null, 400), e =>
             e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+        // The floor's close now writes the "closed #" row FxJournalBook
+        // parses, and the host book retires WITH it — the exposure floor
+        // frees itself here, no ops-layer reconcile + restart needed.
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #555"));
+        Assert.Equal(0.0, host.LocalBookLots);
     }
 
     [Fact]

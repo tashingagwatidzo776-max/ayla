@@ -58,7 +58,12 @@ public sealed record Mt5Deal(
 public sealed record Mt5Account(
     long Login, string Server, string Currency,
     double Balance, double Equity, double MarginFree, int Leverage,
-    int? TradeMode = null)
+    int? TradeMode = null,
+    // The used-margin read the ops venue_is_flat gate checks
+    // (book_recovery.ps1: margin == 0 is part of "flat"). Optional: older
+    // sidecars/stubs that omit it read null, and every flatness proof that
+    // leans on it then fails CLOSED.
+    double? Margin = null)
 {
     /// <summary>The venue's own demo/real verdict from
     /// <c>account_info().trade_mode</c>: true = verified virtual (demo),
@@ -180,7 +185,10 @@ public sealed class Mt5BridgeClient : IDisposable
             // Optional field: absent on an older sidecar → null (fails closed).
             r.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number
                 ? tm.GetInt32()
-                : null);
+                : null,
+            r.TryGetProperty("margin", out var mg) && mg.ValueKind == JsonValueKind.Number
+                ? mg.GetDouble()
+                : (double?)null);
     }
 
     /// <summary>Live bid/ask for a symbol, or null when unavailable.</summary>
