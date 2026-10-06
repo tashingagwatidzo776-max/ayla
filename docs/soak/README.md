@@ -48,7 +48,7 @@ do not edit rows by hand.
 
 | Date | Entries | Settlements | Refusals | Verdict |
 |------|--------:|------------:|---------:|---------|
-| 2026-10-06 | 2510 | 0 | 0 | CLEAN |
+| 2026-10-06 | 12393 | 426 | 0 | CLEAN |
 | 2026-10-05 | 106 | 0 | 0 | CLEAN |
 | 2026-10-04 | 147 | 0 | 0 | CLEAN |
 | 2026-10-03 | 2 | 0 | 0 | NO DATA |
