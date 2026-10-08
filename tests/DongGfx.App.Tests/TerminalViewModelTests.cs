@@ -51,13 +51,15 @@ public class TerminalViewModelTests : IDisposable
 
     private TerminalViewModel CreateVm(DashboardViewModel? dashboard = null,
         Mt5BridgeClient? mt5Client = null,
-        Func<FxPortfolioHost?>? fxHostFactory = null)
+        Func<FxPortfolioHost?>? fxHostFactory = null,
+        Action? armRealMoneyUnlock = null)
     {
         return new TerminalViewModel(
             () => _settings,
             persist: () => _saves++,
             isRealMoneyUnlocked: () => _gate.IsUnlocked,
             dashboard: dashboard ?? new DashboardViewModel(),
+            armRealMoneyUnlock: armRealMoneyUnlock ?? (() => _gate.Arm()),
             journal: _journal,
             mt5: mt5Client ?? new Mt5BridgeClient(new StubHandler(), new Uri("http://127.0.0.1:1/")),
             setAutonomyBound: v => _settings.AutonomyEnabled = v,
@@ -118,6 +120,71 @@ public class TerminalViewModelTests : IDisposable
         // A safety stop must not auto-restore the loop against the new
         // account: the persisted running flag is cleared.
         Assert.False(_settings.FxBrainRunning);
+    }
+
+    // ── Always-on brain loop (auto-start policy) ────────────────────
+
+    [Fact]
+    public void AutoStartBrainLoop_StartsEvenWhenNotPersistedRunning()
+    {
+        // The loop is ALWAYS-ON by operator policy: a launch starts it even
+        // when the last session left the flag false. Autonomy remains the
+        // safety master, so a started loop places nothing while it is off.
+        _settings.FxBrainRunning = false;
+        _settings.AutonomyEnabled = false;
+        var host = NewFxPortfolio();
+        var vm = CreateVm(fxHostFactory: () => host);
+
+        vm.AutoStartBrainLoop();
+
+        Assert.True(host.IsRunning);
+        Assert.Equal("FX BRAIN: PAPER", vm.FxBadge);
+        Assert.True(_settings.FxBrainRunning);
+    }
+
+    // ── Real-money unlock panel ─────────────────────────────────────
+
+    [Fact]
+    public void ArmRealMoneyUnlock_CorrectPhrase_ArmsAndReportsArmed()
+    {
+        var vm = CreateVm();
+        Assert.False(vm.RealMoneyUnlockArmed);
+
+        vm.RealMoneyUnlockPhrase = RealMoneyGate.ConfirmationPhrase;
+        vm.ArmRealMoneyUnlockCommand.Execute(null);
+
+        Assert.True(_gate.IsUnlocked);
+        Assert.True(vm.RealMoneyUnlockArmed);
+        Assert.Contains("ARMED", vm.RealMoneyUnlockStatus);
+        // The typed secret must not linger in the box after arming.
+        Assert.Equal("", vm.RealMoneyUnlockPhrase);
+    }
+
+    [Fact]
+    public void ArmRealMoneyUnlock_WrongPhrase_FailsClosedAndSaysSo()
+    {
+        var vm = CreateVm();
+        vm.RealMoneyUnlockPhrase = "trade real money";   // case matters
+        vm.ArmRealMoneyUnlockCommand.Execute(null);
+
+        Assert.False(_gate.IsUnlocked);
+        Assert.Contains("mismatch", vm.RealMoneyUnlockStatus);
+    }
+
+    [Fact]
+    public void AutoStartBrainLoop_IsIdempotentWhenAlreadyRunning()
+    {
+        var host = NewFxPortfolio();
+        var vm = CreateVm(fxHostFactory: () => host);
+        vm.ToggleFxBrainCommand.Execute(null);
+        Assert.True(host.IsRunning);
+
+        // A second auto-start (or one racing a manual start) must not
+        // rebuild/dispose the running host.
+        vm.AutoStartBrainLoop();
+
+        Assert.True(host.IsRunning);
+        Assert.Same(host, vm.FxHost);
     }
 
     // ── Build-freshness badge ──────────────────────────────────────

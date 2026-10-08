@@ -50,11 +50,21 @@ public class TerminalViewModelCoverageTests : IDisposable
         public Dictionary<string, (HttpStatusCode Status, string Json)> Routes { get; } = new();
         public Dictionary<string, Exception> Throws { get; } = new();
 
+        /// <summary>The most recent request body — lets a test assert the
+        /// ticket's fields (action, sl, tp) actually reached the bridge.</summary>
+        public string? LastBody { get; private set; }
+
         public void Route(string path, string json) => Routes[path] = (HttpStatusCode.OK, json);
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
+            // Only overwrite on a request that carries a body: the poll's
+            // GETs would otherwise erase the POST body a test just asserted.
+            if (request.Content is { } content)
+            {
+                LastBody = content.ReadAsStringAsync().GetAwaiter().GetResult();
+            }
             var path = request.RequestUri!.AbsolutePath;
             // Route key = absolute path + query when one is present, so
             // partial-close's /close/42?lots=0.2 can be distinguished.
@@ -791,6 +801,153 @@ public class TerminalViewModelCoverageTests : IDisposable
         Assert.Equal(2660.0, row.DayHigh);
         Assert.Equal(2640.0, row.DayLow);
         Assert.True(row.Spread >= 0);
+    }
+
+    // ── Ticket fields, toolbox rows, timeframe list, LAB RUN ──────────
+    // The inventory flagged these as exposed by the shell but unreferenced
+    // by any desktop-free test, so none of them had a behaviour guard.
+
+    [Fact]
+    public async Task OrderTicket_StopLimit_Gates_And_Sends_The_Selected_Legs()
+    {
+        var handler = new RouteHandler();
+        handler.Route("/order", OrderJson);
+        var (vm, h) = NewVm(handler: handler);
+
+        // The dropdowns are built from these lists (bound via ItemsSource).
+        Assert.Contains("buy", vm.Mt5Actions);
+        Assert.Contains("sell", vm.Mt5Actions);
+        Assert.Equal(new[] { "market", "limit", "stop", "stoplimit" }, vm.Mt5Types);
+        vm.Mt5Action = "sell";
+
+        // The stop trigger exists only for stop-limit, and its absence is
+        // refused before anything reaches the bridge.
+        vm.Mt5Type = "stoplimit";
+        Assert.True(vm.Mt5NeedsStopPrice);
+        Assert.Equal(System.Windows.Visibility.Visible, vm.Mt5StopPriceVisibility);
+        vm.Mt5Price = 2600;
+        await vm.PlaceMt5OrderCommand.ExecuteAsync(null);
+        Assert.Contains("need a stop trigger price", vm.Mt5OrderStatus);
+
+        // Supply the trigger plus SL/TP: the fill succeeds and the ticket's
+        // chosen side and protection legs reach the bridge body.
+        vm.Mt5StopPrice = 2590;
+        vm.Mt5Sl = 2550;
+        vm.Mt5Tp = 2700;
+        vm.Mt5Lots = 0.1;
+        await vm.PlaceMt5OrderCommand.ExecuteAsync(null);
+
+        Assert.Contains("fill", vm.Mt5OrderStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(h.LastBody);
+        Assert.Contains("\"action\":\"sell\"", h.LastBody);
+        Assert.Contains("\"price\":2600", h.LastBody);
+        Assert.Contains("\"stopprice\":2590", h.LastBody);   // the trigger is actually sent
+        Assert.Contains("\"sl\":2550", h.LastBody);
+        Assert.Contains("\"tp\":2700", h.LastBody);
+    }
+
+    [Fact]
+    public async Task Toolbox_Trade_Exposure_And_Journal_Rows_Populate()
+    {
+        var handler = new RouteHandler();
+        handler.Route("/positions", "{\"positions\": [" +
+            "{\"ticket\": 41, \"symbol\": \"XAUUSDmicro\", \"side\": \"buy\", \"volume\": 0.3, \"price_open\": 2600.0, \"price_current\": 2650.0, \"profit\": 5.0}, " +
+            "{\"ticket\": 42, \"symbol\": \"XAUUSDmicro\", \"side\": \"sell\", \"volume\": 0.2, \"price_open\": 2660.0, \"price_current\": 2650.0, \"profit\": 2.0}]}");
+        var (vm, _) = NewVm(handler: handler);
+        _journal.Log(Guid.Empty, "FX_DECISION", "probe decision row");
+        _journal.Flush();
+
+        await vm.PollMt5ForTestsAsync().ConfigureAwait(true);
+        await vm.RefreshHistoryForTests().ConfigureAwait(true);   // rebuilds the journal rows
+
+        // Trade tab: both positions, with the ✕ button enabled for MT5 rows.
+        Assert.Equal(2, vm.TradeRows.Count);
+        Assert.Equal("MT5-41", vm.TradeRows[0].Ticket);
+        Assert.Equal(System.Windows.Visibility.Visible, vm.TradeRows[0].Mt5CloseVisibility);
+
+        // Exposure tab: the two legs net to one row for the symbol.
+        var exposure = Assert.Single(vm.ExposureRows);
+        Assert.Equal("XAUUSDmicro", exposure.Symbol);
+        Assert.Equal(0.1, exposure.NetVolume, 5);
+        Assert.Equal(7.0, exposure.OpenProfit, 5);
+
+        // Journal tab: the entry just logged shows up as a row.
+        Assert.Contains(vm.JournalRows, r =>
+            r.Category == "FX_DECISION" && r.Details.Contains("probe decision row"));
+    }
+
+    [Fact]
+    public void Timeframes_List_Feeds_The_Chart_Selector()
+    {
+        var (vm, _) = NewVm();
+
+        Assert.Equal(
+            new[] { "M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1" },
+            vm.Timeframes);
+        Assert.Equal("M1", vm.SelectedTimeframe);
+    }
+
+    [Fact]
+    public async Task ModifyMt5Position_AppliesTp_WhenOnlyTpIsEntered()
+    {
+        var (vm, h) = NewVm();
+        h.Route("/modify", "{\"ok\": true, \"retcode\": 10009, \"retcode_name\": \"TRADE_RETCODE_DONE\", " +
+            "\"modified_ticket\": 42, \"sl\": 0.0, \"tp\": 2660.0}");
+        vm.ModifyTp = "2660";   // TP alone is enough — the SL box stays empty.
+
+        await vm.ModifyMt5PositionCommand.ExecuteAsync(42L).ConfigureAwait(true);
+
+        Assert.Contains("SL/TP updated", vm.Mt5OrderStatus);
+        Assert.Contains("\"tp\":2660", h.LastBody);
+    }
+
+    [Fact]
+    public void FxLabRunCommand_Replays_The_Empty_Journal()
+    {
+        var (vm, _) = NewVm();
+
+        // LAB RUN is an explicit command, not generator-emitted, so pin both
+        // that it exists and that its async path reports a definitive state.
+        Assert.NotNull(vm.FxLabRunCommand);
+        Assert.True(vm.FxLabRunCommand.CanExecute(null));
+
+        var run = typeof(TerminalViewModel).GetMethod("FxLabRunAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var task = (Task)run.Invoke(vm, null)!;   // runs to its first await here
+
+        // The lab completes off this thread, so its status update is queued to
+        // the VM's dispatcher; with no message loop in tests, pump it. Stay
+        // synchronous so the reads below happen on the dispatcher's thread.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                () => { }, System.Windows.Threading.DispatcherPriority.Background);
+            Thread.Sleep(10);
+        }
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            () => { }, System.Windows.Threading.DispatcherPriority.Background);
+
+        Assert.Contains("nothing to replay", vm.FxStatusText);
+    }
+
+    [Fact]
+    public async Task Mt5Poll_Drives_The_Dashboard_Connection_Pill_Both_Ways()
+    {
+        var dashboard = new DashboardViewModel();
+        var (vm, _) = NewVm(dashboard: dashboard);
+
+        await vm.PollMt5ForTestsAsync().ConfigureAwait(true);
+        Assert.True(dashboard.IsConnected);   // green dot on a healthy bridge
+
+        // A bridge that refuses the connection must clear it again.
+        var downVm = new TerminalViewModel(
+            () => _settings, persist: () => { }, isRealMoneyUnlocked: () => false,
+            dashboard: dashboard, journal: _journal,
+            mt5: new Mt5BridgeClient(new DownHandler(), new Uri("http://127.0.0.1:1/")));
+        await downVm.PollMt5ForTestsAsync().ConfigureAwait(true);
+
+        Assert.False(dashboard.IsConnected);
     }
 
     // ── Candle chart + indicator read-out ─────────────────────────────

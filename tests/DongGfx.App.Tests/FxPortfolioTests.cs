@@ -352,6 +352,175 @@ public class FxPortfolioTests
         Assert.Equal(0, book.OpenLots(), 8);
     }
 
+    /// <summary>The REAL-exec fill shape: no "fill" word anywhere —
+    /// "sell 0.1 lots XAUUSDmicro @ 4108.84 — ticket 8791975604: {…}".</summary>
+    private static string RealFillLine(string ts, string side, string lots, string sym, long ticket) =>
+        $"{{\"Timestamp\":\"{ts}\",\"Category\":\"FX_ORDER\",\"Details\":\"" +
+        $"{side} {lots} lots {sym} @ 1.1 — ticket {ticket}: {{}}\"}}";
+
+    [Fact]
+    public void JournalBook_Real_Exec_Fill_Without_A_Fill_Word_Opens_The_Ticket()
+    {
+        // 2026-10-07 live: 9 of 10 real fills journaled without a matching
+        // close row, and the book parsed NONE of the fills — its gate only
+        // matched the literal word "fill", so this floor leg stood at zero
+        // through a live real position (the exact leak the journal book
+        // exists to survive). The real row shape must open the ticket, and
+        // its close must retire it, exactly like a paper fill.
+        var dir = Path.Combine(Path.GetTempPath(), $"dg-jbook-real-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllLines(Path.Combine(dir, "journal_20261007.jsonl"), new[]
+            {
+                RealFillLine("2026-10-07T16:48:12Z", "sell", "0.1", "XAUUSDmicro", 555),
+            });
+            var book = new FxJournalBook(dir);
+            Assert.Equal(0.1, book.OpenLots(), 8);
+            var open = book.OpenTickets();
+            Assert.Equal(0.1, open[555], 8);
+
+            File.AppendAllLines(Path.Combine(dir, "journal_20261007.jsonl"),
+                new[] { CloseLine("2026-10-07T17:01:12Z", 555) });
+            var book2 = new FxJournalBook(dir, clock: () => DateTimeOffset.UtcNow.AddSeconds(60));
+            Assert.Equal(0.0, book2.OpenLots(), 8);
+            Assert.Empty(book2.OpenTickets());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    // ── journal-book reconcile (portfolio level) ─────────────────────
+
+    private static Func<Task<IReadOnlyList<Mt5Position>>> Positions(
+        params Mt5Position[] positions) =>
+        () => Task.FromResult<IReadOnlyList<Mt5Position>>(positions);
+
+    private static readonly Mt5Account SettledAccount =
+        new(201587365, "Deriv-Demo", "USD",
+            Balance: 1000, Equity: 1000, MarginFree: 1000, Leverage: 1000,
+            TradeMode: 0, Margin: 0.0);
+
+    private static Func<Task<Mt5Account?>> Account(Mt5Account? account) =>
+        () => Task.FromResult(account);
+
+    [Fact]
+    public async Task Reconcile_Proof_Closes_A_Restart_Race_Strand_On_The_Second_Proven_Pass()
+    {
+        // The strand: a venue-side exit lands while the app is down, so no
+        // host ever journals the "closed #" row — the fill sits in the
+        // journal book forever and the exposure guard refuses every trade.
+        // Pass 1 records, pass 2 (still gone from journal, venue, and hosts)
+        // writes the proof close, pass 3 stays silent — never twice.
+        var open = new Dictionary<long, double> { [777] = 0.1 };
+        var pending = new HashSet<long>();
+        var getPositions = Positions();                       // healthy, empty-ish shape (b)
+        var getAccount = Account(SettledAccount);             // two empty reads + settled
+
+        var pass1 = await FxPortfolioHost.ReconcilePassAsync(
+            open, Array.Empty<long>(), getPositions, getAccount, pending);
+        Assert.Empty(pass1);
+
+        var pass2 = await FxPortfolioHost.ReconcilePassAsync(
+            open, Array.Empty<long>(), getPositions, getAccount, pending);
+        Assert.Equal(new long[] { 777 }, pass2);
+
+        var pass3 = await FxPortfolioHost.ReconcilePassAsync(
+            open, Array.Empty<long>(), getPositions, getAccount, pending);
+        Assert.Empty(pass3);
+    }
+
+    [Fact]
+    public async Task Reconcile_Never_Closes_A_Ticket_The_Venue_Holds_Or_A_Host_Tracks()
+    {
+        var open = new Dictionary<long, double> { [777] = 0.1, [888] = 0.1 };
+        var pending = new HashSet<long>();
+        var venue = new Mt5Position(777, "XAUUSDmicro", "sell", 0.1, 1, 1, 0);
+        var getPositions = Positions(venue);                   // healthy read holding 777
+        var getAccount = Account(SettledAccount);
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var gone = await FxPortfolioHost.ReconcilePassAsync(
+                open, tracked: new long[] { 888 }, getPositions, getAccount, pending);
+            Assert.Empty(gone);   // 777 venue-held, 888 host-tracked
+        }
+    }
+
+    [Fact]
+    public async Task Reconcile_Fails_Closed_While_Flatness_Is_Unproven()
+    {
+        // Degraded reads + a missing account (Margin absent → the settled
+        // proof fails CLOSED): nothing may be written, and an unproven
+        // pass never counts toward the two-pass close — the first close
+        // may only follow TWO proven observations.
+        var open = new Dictionary<long, double> { [777] = 0.1 };
+        var pending = new HashSet<long>();
+        var getPositions = Positions();
+        var getAccount = Account(null);                        // bridge unreachable
+
+        Assert.Empty(await FxPortfolioHost.ReconcilePassAsync(
+            open, Array.Empty<long>(), getPositions, getAccount, pending));
+        Assert.Empty(await FxPortfolioHost.ReconcilePassAsync(
+            open, Array.Empty<long>(), getPositions, getAccount, pending));
+
+        // Now flatness becomes proven: first proven pass only records.
+        var provenAccount = Account(SettledAccount);
+        Assert.Empty(await FxPortfolioHost.ReconcilePassAsync(
+            open, Array.Empty<long>(), getPositions, provenAccount, pending));
+        Assert.Equal(new long[] { 777 }, await FxPortfolioHost.ReconcilePassAsync(
+            open, Array.Empty<long>(), getPositions, provenAccount, pending));
+    }
+
+    [Fact]
+    public async Task Reconcile_Journal_Book_Writes_A_Proof_Close_Row_The_Parsers_See()
+    {
+        // End to end: a phantom real fill in the journal + a healthy
+        // venue read that lacks the ticket (a manual position keeps the
+        // read non-empty) → two passes → a normal FX_EXIT "closed #" row
+        // lands in the journal, in the exact shape FxJournalBook,
+        // trade_lifecycle, and reconcile_journal_book.py already parse.
+        var journal = NewJournal();
+        var fillFile = Path.Combine(journal.JournalDir,
+            $"journal_{DateTime.UtcNow.AddDays(-1):yyyyMMdd}.jsonl");
+        File.WriteAllLines(fillFile,
+            new[] { RealFillLine("2026-10-06T17:45:08Z", "buy", "0.1", "XAGUSD", 777) });
+
+        var handler = new PositionsHandler
+        {
+            // Non-empty healthy read carrying SOME position — its ticket
+            // differs from the phantom's, so absence of 777 is evidence.
+            PositionsJson = $"{{\"positions\":[{Pos("XAUUSDmicro", 0.05)}]}}",
+        };
+        var p = NewPortfolio(handler, journal, "XAUUSDmicro");
+        try
+        {
+            await p.ReconcileJournalBookAsync();               // pass 1: records only
+            journal.Flush();
+            Assert.DoesNotContain(journal.GetRecent(null, 200),
+                e => e.Category == "FX_EXIT" && e.Details.Contains("closed #777"));
+
+            await p.ReconcileJournalBookAsync();               // pass 2: proof close
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 200),
+                e => e.Category == "FX_EXIT" && e.Details.Contains("closed #777")
+                     && e.Details.Contains("journal book reconcile"));
+
+            // A third pass must not write a second (double-retiring) close.
+            await p.ReconcileJournalBookAsync();
+            journal.Flush();
+            Assert.Single(journal.GetRecent(null, 200)
+                .Where(e => e.Category == "FX_EXIT" && e.Details.Contains("closed #777")));
+        }
+        finally
+        {
+            p.Dispose();
+            try { File.Delete(fillFile); } catch { /* best effort */ }
+        }
+    }
+
     // ── small-account guard ───────────────────────────────────────────
 
     [Fact]
@@ -553,6 +722,29 @@ public class FxPortfolioTests
             .Where(e => e.Category == "FX_RISK" && e.Details.Contains("exposure audit: book")));
         p.Dispose();
         p2.Dispose();
+    }
+
+    [Fact]
+    public void Exposure_Audit_Stays_Silent_On_Representation_Noise_At_The_Cap()
+    {
+        // 2026-10-06: a full-cap book carries microscopic noise — venue
+        // float32 serializes 0.1 lots as 0.10000000149011612, and the journal
+        // book's fills-minus-closes double sum leaves ~1e-16 of residue. Both
+        // sit far below one volume step (0.01), so an exact-cap book must not
+        // WARN; only a genuine breach may.
+        var journal = NewJournal();
+        var fillFile = Path.Combine(journal.JournalDir,
+            $"journal_{DateTime.UtcNow.AddDays(-1):yyyyMMdd}.jsonl");
+        File.WriteAllLines(fillFile,
+            new[] { FillLine("2026-10-06T08:00:00Z", "buy", "0.10000000149011612", "XAUUSDmicro", 888) });
+
+        var p = NewPortfolio(new PositionsHandler(), journal, "XAUUSDmicro");
+        p.AuditExposure();
+        journal.Flush();
+        Assert.DoesNotContain(journal.GetRecent(null, 200),
+            e => e.Category == "FX_RISK" && e.Details.Contains("exposure audit: book"));
+        File.Delete(fillFile);
+        p.Dispose();
     }
 
     [Fact]
