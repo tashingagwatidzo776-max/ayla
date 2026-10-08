@@ -8,6 +8,7 @@ namespace DongGfx.Core.Tests;
 /// portfolio view the dashboard's promotion card reads). Hermetic — temp
 /// dirs only, no journal, no venue.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxShadowLedgerTests
 {
     private static string Row(long ticket, string engine, double exit, bool helped, string symbol = "EURUSD") =>
@@ -71,6 +72,16 @@ public class FxShadowLedgerTests
         // Other engines do not ride the save — drawdown gave the evidence.
         Assert.False(FxExitShadow.Helped(
             vote with { Engine = "counterfactual" }, resolvedAction: "floor-exit", won: true));
+
+        // The giveback mirror the guard appends rides the SAME save: the
+        // peak→breach evidence is the giveback story, so starving giveback
+        // on guard saves (2026-10-07) was wrong. Same bar applies.
+        var mirror = vote with { Engine = "giveback" };
+        Assert.True(FxExitShadow.Helped(mirror, resolvedAction: "floor-exit", won: true));
+        Assert.False(FxExitShadow.Helped(
+            mirror with { Exit = 0.4 }, resolvedAction: "floor-exit", won: true));
+        Assert.False(FxExitShadow.Helped(
+            mirror, resolvedAction: "floor-exit", won: false));
     }
 
     [Fact]

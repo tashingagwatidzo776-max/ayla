@@ -13,6 +13,7 @@ namespace DongGfx.Core.Tests;
 /// regime floor — ±0.6 wicks on a price of 1.08 read as a huge relative
 /// ATR, so builders must scale wicks to the price under test).
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxProfitBrainTests
 {
     /// <summary>M1 bars around a price with sub-ATR wicks: open-to-close

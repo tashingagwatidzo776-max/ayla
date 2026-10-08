@@ -10,6 +10,7 @@ namespace DongGfx.App.Tests;
 /// The weekly FX_LAB digest: pure builder aggregation, cutoff semantics,
 /// and the webhook + soak-doc append legs. Journal-only by construction.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxLabDigestTests
 {
     private static JournalEntry LabEntry(string symbol, bool approved, int daysAgo) => new()
