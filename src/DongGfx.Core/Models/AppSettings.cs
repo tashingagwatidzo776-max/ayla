@@ -24,11 +24,12 @@ public sealed class AppSettings
     public bool AutonomyEnabled { get; set; }
 
     /// <summary>Whether the FX brain's engine loop was RUNNING at the last
-    /// persist — the toggle's state, not an autonomy grant. On launch the
-    /// app auto-restarts the engine loop when this is true, so a relaunch
-    /// never silently leaves a running brain stopped (or vice versa).
-    /// Autonomy stays the safety master: a restored loop with autonomy off
-    /// journals decisions and places nothing.</summary>
+    /// persist — the toggle's state, not an autonomy grant. The loop is
+    /// ALWAYS-ON by operator policy: every launch auto-starts it regardless
+    /// of this flag, except when the crash safe-mode hold is active (a fault
+    /// loop is never auto-started). This flag is retained so the last state
+    /// is still recorded. Autonomy stays the safety master: a running loop
+    /// with autonomy off journals decisions and places nothing.</summary>
     public bool FxBrainRunning { get; set; }
 
     /// <summary>TP1 partial prototype (default OFF): when armed, the Profit
@@ -37,6 +38,24 @@ public sealed class AppSettings
     /// of only journaled. Every execution journals as TP1-EXEC under
     /// FX_PROFIT; the Exit Brain's overrides and vote still outrank it.</summary>
     public bool FxExecuteTp1Partials { get; set; }
+
+    /// <summary>Operator-armed TP1 plan-% override (null = the allocation
+    /// plan's own TP1 leg). Set by the dashboard's one-click Arm action when
+    /// the plan-% gate recommends a different percentage: the engine then
+    /// uses THIS figure in place of the brain's own TP1 leg for eligibility,
+    /// lot sizing and journaling — the path from advice to an effective plan.
+    /// Persisted, because arming the recommendation is a standing operator
+    /// decision that must survive a restart; cleared by the Revert action.
+    /// Clamped to [0, 100] on load so a hand-edited file can never size past
+    /// the position.</summary>
+    public double? Tp1PlanPctOverride { get; set; }
+
+    /// <summary>Minimum entry confidence for dispatch (default 0 = off,
+    /// the pre-gate behavior). A winning signal whose raw confidence falls
+    /// below this is journaled as FX_SIGNAL and counted toward the paper
+    /// soak but never dispatched — the host refuses it with a
+    /// "confidence gate" FX_ORDER row. Clamped to [0, 1] on load.</summary>
+    public double FxMinEntryConfidence { get; set; }
 
     // ── MT5 / FX brain safety ──────────────────────────────────────
     /// <summary>Maximum volume (lots) for a single MT5 order placed through

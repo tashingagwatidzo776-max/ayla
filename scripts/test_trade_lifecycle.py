@@ -40,6 +40,15 @@ class TmpData:
             for r in rows:
                 fh.write(json.dumps(r) + "\n")
 
+    def verdicts(self, rows):
+        """Write the watcher's graded-verdict ledger at its default path
+        under this temp TF_DATA_DIR."""
+        path = self.root / "watcher" / "tp1-graded-verdicts.jsonl"
+        path.parent.mkdir(exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            for v in rows:
+                fh.write(json.dumps(v) + "\n")
+
     def run(self, *args):
         env = dict(os.environ, TF_DATA_DIR=str(self.root),
                    PYTHONIOENCODING="utf-8")
@@ -167,6 +176,88 @@ def test_json_view_is_machine_readable():
     data = json.loads(r.stdout)
     assert data["42"]["settlement"]["won"] is True
     assert data["42"]["profit"][0]["floor"] == 4.0
+
+
+def test_tp1_graded_verdict_is_surfaced():
+    """A banked ticket's graded verdict rides the lifecycle into --json,
+    the table, and the per-ticket timeline."""
+    d = TmpData()
+    d.journal(full_story(42))
+    d.verdicts([{
+        "ticket": 42, "verdict": "beat", "banked_r": 3.25,
+        "live_peak_r": 6.5, "settled_r": 5.1, "capture_pct": 78.5,
+        "giveback_baseline_r": 5.1, "with_rung_r": 6.88,
+        "vs_giveback_r": 1.78,
+    }])
+
+    js = d.run("--json")
+    assert js.returncode == 0, js.stdout + js.stderr
+    v = json.loads(js.stdout)["42"]["tp1"]
+    assert v["verdict"] == "beat"
+    assert v["vs_giveback_r"] == 1.78
+
+    table = d.run()
+    assert table.returncode == 0, table.stdout + table.stderr
+    assert "beat (+1.78R)" in table.stdout
+    # The rung R sits beside the no-rung counterfactual in the table.
+    assert "rung/no-rung" in table.stdout
+    assert "+6.88R / +5.10R" in table.stdout
+
+    tl = d.run("--ticket", "42")
+    assert "TP1 rung banked +3.25R" in tl.stdout
+    assert "no-rung +5.10R vs rung +6.88R" in tl.stdout
+    assert "beat" in tl.stdout
+
+
+def test_tp1_portfolio_summary_and_trailing_callout():
+    """The table rolls the graded verdicts up (beat/trailed/flat/pending +
+    net R) and calls out the rungs that trailed the giveback."""
+    d = TmpData()
+    d.journal(full_story(42) + full_story(43) + full_story(44))
+    d.verdicts([
+        {"ticket": 42, "verdict": "beat", "vs_giveback_r": 1.78},
+        {"ticket": 43, "verdict": "trailed", "vs_giveback_r": -1.90},
+        {"ticket": 44, "verdict": "trailed", "vs_giveback_r": -0.40},
+    ])
+
+    r = d.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "TP1 grading: 3 banked rung(s): 1 beat, 2 trailed" in r.stdout
+    assert "net -0.52R vs giveback" in r.stdout
+    assert "TP1 rung TRAILED the giveback" in r.stdout
+    assert "#43 (-1.90R)" in r.stdout
+    # The material loss is alerted on its own; the -0.40R rung is not.
+    assert ("\U0001f6a8 TP1 rung loss alert (\u22651R surrendered vs "
+            "giveback): #43 (-1.90R)") in r.stdout
+    assert "#44 (-0.40R)" in r.stdout          # in the general trailing line
+    alert = next(ln for ln in r.stdout.splitlines() if "loss alert" in ln)
+    assert "#44" not in alert
+
+    # The trailing ticket is also flagged in its own timeline.
+    tl = d.run("--ticket", "43")
+    assert "TP1 rung TRAILED the giveback by -1.90R" in tl.stdout
+    assert "TP1 rung loss alert: surrendered 1.90R" in tl.stdout
+
+
+def test_tp1_portfolio_line_silent_without_rungs():
+    d = TmpData()
+    d.journal(full_story(42))
+    r = d.run()
+    assert "TP1 grading:" not in r.stdout
+    assert "TRAILED" not in r.stdout
+
+
+def test_missing_verdict_ledger_yields_null_tp1():
+    """No ledger (no rung has banked) leaves a null `tp1` — the ticket
+    still renders, the absence is explicit."""
+    d = TmpData()
+    d.journal(full_story(42))
+    r = d.run("--json")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["42"]["tp1"] is None
+
+    table = d.run()
+    assert "#42" in table.stdout and "settled WIN" in table.stdout
 
 
 def test_unknown_ticket_exits_1():
