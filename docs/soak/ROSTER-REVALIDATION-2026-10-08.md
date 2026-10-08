@@ -11,7 +11,9 @@ tilt, never cut.
 **Headline:** 98/109 closes measured (coverage 90%), 38.8% win, avg +0.49R,
 total +47.7R. 23 recent cells measured. **No cell is excluded** — the in-app
 recent-tape gate is armed with **0 refusals** so far, so the live filtered
-roster equals the full roster.
+roster equals the full roster. After the 2026-10-08 port, the *offline*
+mode-1 sweep reads the same tape — and a corrected-baseline A/B proves the
+two rosters are **exactly equal** (0.0R delta, both symbols).
 
 ## §5 two-week negative-delta rule
 
@@ -21,10 +23,20 @@ anything?) and the **mode-1 sweep A/B** — the original §5 recipe, re-run
 tape copy against the same live memory snapshot (last trained 2026-10-07
 13:13 UTC). Isolation check: 0.000R moved outside GBPUSD/XAUUSDmicro.
 
+**Baseline correction (2026-10-08, after the port):** the original scripts
+left the base leg unflagged, so it ran each symbol's *default* roster mode —
+GBPUSD's default is mode 4 (production **+ quiet-FX extension voices**), not
+the full roster, and after the `XAUUSDMICRO` case-label fix XAUUSDmicro's
+default became mode 1 (so an unflagged re-run would have compared mode 1
+against itself). The post-port re-run passes `--roster 0` (true full roster,
+`FxFamilies.All()`) explicitly on the base leg, both legs from the same
+snapshot copy: the only variable is the roster.
+
 | Run | Metric | GBPUSD filtered−full | XAUUSDmicro filtered−full |
 |---|---|---|---|
-| 2026-10-07 sweep (week-1) | mode-1 sweep A/B | **−267.8R** (+178.5 full vs −89.3 filtered) | +101.3R (+3065.7 vs +3167.0) |
-| 2026-10-08 sweep (week-2) | mode-1 sweep A/B | **−267.8R** (+178.5 vs −89.3; net +$20.35 vs −$7.81) | +101.3R (+3065.7 vs +3167.0; net +$64,934 vs +$67,466) |
+| 2026-10-07 sweep (week-1) | mode-1 sweep A/B (old cumulative filter) | **−267.8R** (+178.5 full vs −89.3 filtered) | +101.3R (+3065.7 vs +3167.0) |
+| 2026-10-08 sweep (week-2) | mode-1 sweep A/B (old cumulative filter) | **−267.8R** (+178.5 vs −89.3; net +$20.35 vs −$7.81) | +101.3R (+3065.7 vs +3167.0; net +$64,934 vs +$67,466) |
+| 2026-10-08 post-port sweep | recent-tape mode 1 vs `--roster 0` | **0.0R** (+381.5 vs +381.5; +$227.31 both) | **0.0R** (+3065.7 vs +3065.7; +$64,934.19 both) |
 | 2026-10-08 live | in-app gate | 0 — 0 refusals, filter never engaged | 0 |
 
 **Trigger: met on the sweep metric.** GBPUSD filtered−full is negative
@@ -33,10 +45,22 @@ widen the cut.”** Two caveats, stated plainly: (1) the runs are one day
 apart, not seven — with an unchanged memory snapshot the A/B is
 deterministic and week-2 largely reproduces week-1 instead of offering an
 independent sample; (2) live behaviour is untouched either way — mode-1
-stays off (rule 1) and the live recent-tape gate has cut nothing. The
-cell fix the mandate points at is the standing follow-up: port recent-
-tape expectancy cells into FxTrain mode-1 so the offline filter stops
-reading lifetime cells.
+stays off (rule 1) and the live recent-tape gate has cut nothing.
+
+**Post-port re-run (same day): the mandated fix landed and the corrected
+A/B reads 0.0R on both symbols.** With the recent-tape roster in mode 1 and
+an explicit full-roster baseline, filtered − full is exactly zero — the
+expected result while no cell reaches the exclusion bar (the tape excludes
+nothing, both legs train identical rosters, the deterministic replay is
+bit-identical: +$227.31 = +$227.31, +$64,934.19 = +$64,934.19). This is the
+end-to-end proof that default-keep holds offline exactly as it does in the
+gate: **0 live gate refusals + 0.0R sweep delta + fake-journal positive
+control** (a synthetic 33-loss cell *was* excluded on the first reseed).
+An intermediate post-port run whose base leg was still unflagged showed
+“+202.9R” on GBP — that was the mode-4 quiet-extension voices in the
+baseline, not tape behaviour; the explicit `--roster 0` baseline removes
+that confound. Next week's §5 delta will be the first with an excludable
+cell possible — that is the run that measures the policy.
 
 ## Recent tape vs cumulative cells (all 23 measured cells)
 
@@ -113,10 +137,15 @@ n≥10 is winning (≥ +0.10R) · `AT/NEAR-BAR` = recent n≥10 and mean ≤ 0.
 - **Recent-tape gate is the live implementation of items 2–4** and is
   behaving per policy: 0 exclusions, default-keep, XAU/vol-breakout
   watched at n=20/−0.08R.
-- **Sweep A/B re-run complete** (was the open item): the mode-1 sweep
-  reproduces GBP's stale-cell verdict — §5's trigger is met, so porting
-  recent-tape expectancy cells into FxTrain mode-1 is now the *mandated*
-  fix, not an optional follow-up. Until it lands, mode-1 stays off (rule
-  1) and this journal-cell re-validation remains the live weekly check.
+- **Sweep A/B re-run complete, and the mandated fix LANDED the same day**:
+  FxTrain mode 1 is now the recent-tape roster (full roster minus the
+  in-app gate's exclusions, reseeded from the live journal) — the offline
+  sweep and the live gate read the same cells, so next week's §5 delta
+  measures the real policy instead of stale lifetime cells. The
+  corrected-baseline re-run (explicit `--roster 0`) shows **0.0R delta on
+  both symbols** — filtered ≡ full while no cell is excludable, the
+  offline twin of the gate's 0-refusal default-keep. Mode 1 stays an
+  offline/research view (rule 1); the live gate already implements items
+  2–4.
 
 *Next re-validation: 2026-10-15.*

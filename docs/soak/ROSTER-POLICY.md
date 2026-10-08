@@ -91,6 +91,12 @@ policy item 2 reads directly instead of inferring it from lifetime cells.
 ## Status
 
 Evidence: **complete** (both symbols, A/B, per-family deltas). Policy above
-is the design; implementation (recent-tape expectancy cells in FxTrain
-mode-1) is not yet built — until then, rule 1 governs: **roster-1 off,
-full roster live.**
+is the design; **implementation landed 2026-10-08**: FxTrain mode 1 is now
+the recent-tape roster (full roster minus the in-app gate's exclusions,
+reseeded from the live journal via `FxRecentTapeReseed` — policy items
+2–4 in both the offline sweep and the live dispatch gate), replacing the
+old “positive cumulative record” filter that read the lifetime cells.
+Modes 2/3 keep the cumulative view as research only. Rule 1 still governs
+production: **roster-1 off, full roster live** — and after this landing the
+distinction is moot at today's samples (no cell has reached the n ≥ 30 bar,
+so the tape excludes nothing and default-keeps everything).
