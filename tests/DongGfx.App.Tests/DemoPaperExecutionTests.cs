@@ -1597,11 +1597,12 @@ public class DemoPaperExecutionTests
         Assert.Contains(journal.GetRecent(null, 400), e =>
             e.Category == "FX_EXIT" && e.Details.Contains("closed #555"));
         // The floor's close carries its settled R too (spec §1): entry vs
-        // this cycle's mid over the sized stop, flagged as a snapshot.
+        // this cycle's mid over the sized stop — tier 1 (close-price), the
+        // same computation the ensemble's full close grades.
         var floorClose = journal.GetRecent(null, 400).Single(e =>
             e.Category == "FX_EXIT" && e.Details.Contains("closed #555"));
         Assert.Contains("RealizedR", floorClose.Details);
-        Assert.Contains("profit-snapshot", floorClose.Details);
+        Assert.Contains("close-price", floorClose.Details);
         Assert.Equal(0.0, host.LocalBookLots);
     }
 
@@ -1641,6 +1642,58 @@ public class DemoPaperExecutionTests
         journal.Flush();
         Assert.Contains(journal.GetRecent(null, 400), e =>
             e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+    }
+
+    [Fact]
+    public async Task Floor_Confirmation_Settles_R_After_The_Prune_Deferred_The_Close_Line()
+    {
+        // The 2026-10-08 live defect: every floor confirm landed
+        // OutcomeSource=unknown (4 of 4 post-payload). The prune that
+        // retires the vanished ticket DEFERS its "closed #" line to the
+        // confirmation loop (exactly one row per ticket) but destroyed
+        // _exitStates on the way — so floorR re-read a book that had
+        // already forgotten the ticket. With a sibling position the
+        // proven-flat prune runs in the SAME cycle as the confirmation:
+        // the snapshot must ride over on the guard, never burn to
+        // unknown (and never starve RecordSettled of the floor save).
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L, State = "PROFIT_PROTECTED", PeakR = 12.4,
+            MaeR = 0.4, FloorR = 8.2, GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var script = FloorBreachScript();
+        var host = NewHost(script, journal);
+
+        // Cycle 1: breach → submit; the venue still lists the ticket.
+        await host.RunCycleAsync();
+        Assert.Equal(1, script.CloseCalls);
+
+        // Cycle 2: 555 is gone, a sibling on ANOTHER symbol keeps the
+        // book non-empty — the prune retires 555 from _exitStates
+        // (deferring its close line) moments before the confirmation
+        // loop settles it.
+        script.Positions = new object[]
+        {
+            new { ticket = 901L, symbol = "EURUSD", side = "buy", volume = 0.1,
+                  price_open = 1.1500, price_current = 1.1505, profit = 5.0,
+                  sl = 0.0, tp = 0.0, comment = "" },
+        };
+        await host.RunCycleAsync();
+        journal.Flush();
+
+        var entries = journal.GetRecent(null, 400);
+        Assert.Contains(entries, e => e.Category == "FX_FLOOR"
+            && e.Details.Contains("EXIT CONFIRMED"));
+        var close = entries.Single(e => e.Category == "FX_EXIT"
+            && e.Details.Contains("closed #555"));
+        // Exactly one close row, carrying the settled R as tier 1
+        // (close-price) — never "unknown": the book forgot the ticket, the
+        // guard did not.
+        Assert.Contains("\"OutcomeSource\":\"close-price\"", close.Details);
+        Assert.DoesNotContain("\"RealizedR\":null", close.Details);
     }
 
     [Fact]

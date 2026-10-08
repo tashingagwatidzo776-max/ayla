@@ -1407,6 +1407,16 @@ public sealed class FxEngineHost : IDisposable
                         // exactly one "closed #" row per ticket.
                         var deferredToReconcile = _floorGuards.TryGetValue(gone, out var prunedGuard)
                             && prunedGuard.State == Core.Fx.FxFloorState.ExitSubmitted;
+                        if (deferredToReconcile && prunedGuard is not null)
+                        {
+                            // The book forgets the ticket right here, but
+                            // the DEFERRED close line below still needs
+                            // entry/side/stop for its settled R — hand the
+                            // snapshot to the guard the confirmation loop
+                            // reads it back from (live 2026-10-08: every
+                            // floor confirm landed unknown without this).
+                            prunedGuard.DeferredCloseState = closedState;
+                        }
                         _exitStates.Remove(gone);
                         _entryRegimes.Remove(gone);
                         _profitFloors.Remove(gone);
@@ -1944,6 +1954,13 @@ public sealed class FxEngineHost : IDisposable
                 // ops-layer reconcile.
                 var deferredToReconcile = _floorGuards.TryGetValue(gone, out var prunedGuard)
                     && prunedGuard.State == Core.Fx.FxFloorState.ExitSubmitted;
+                if (deferredToReconcile && prunedGuard is not null)
+                {
+                    // Same deferral as the proven-flat sweep above: the
+                    // snapshot rides on the guard for the confirmation
+                    // loop's settled R instead of dying with the book.
+                    prunedGuard.DeferredCloseState = closedState;
+                }
                 _exitStates.Remove(gone);
                 _entryRegimes.Remove(gone);
                 _profitFloors.Remove(gone);
@@ -2064,13 +2081,22 @@ public sealed class FxEngineHost : IDisposable
                     // retire the ticket in the journal AND in the host's
                     // own book, right here, no ops script in the loop.
                     // Floor exits flatten AT the floor: entry vs this
-                    // cycle's mid over the sized stop — the honest snapshot
-                    // R (measurement + recent-tape feed).
-                    var floorR = _exitStates.TryGetValue(gone, out var fstate)
+                    // cycle's mid over the sized stop — the SAME
+                    // computation the ensemble's full close grades, so a
+                    // settled floor exit is tier 1 (close-price), not a
+                    // snapshot: relabelled 2026-10-08 (spec §1 row 2).
+                    // The prune that retired this ticket DEFERRED the close
+                    // line to here and handed its snapshot over — the book
+                    // no longer holds the state, so fall back to the guard's
+                    // stash before giving up on a settled R (unknown).
+                    var floorState = _exitStates.TryGetValue(gone, out var fstate)
+                        ? fstate
+                        : g.DeferredCloseState;
+                    var floorR = floorState is { } fs
                         ? Core.Fx.FxRealizedR.Compute(
-                            fstate.EntryPrice, mid,
-                            fstate.InitialStopDistance > 0 ? fstate.InitialStopDistance : fstate.RiskPerLot,
-                            fstate.Side)
+                            fs.EntryPrice, mid,
+                            fs.InitialStopDistance > 0 ? fs.InitialStopDistance : fs.RiskPerLot,
+                            fs.Side)
                         : (double?)null;
                     if (floorR is { } floorRv)
                     {
@@ -2088,7 +2114,7 @@ public sealed class FxEngineHost : IDisposable
                             Retcode = 10009,
                             Confirmed = true,
                             RealizedR = floorR is { } fr2 ? Core.Fx.FxJson.Sanitize(fr2) : (double?)null,
-                            OutcomeSource = floorR is not null ? "profit-snapshot" : "unknown",
+                            OutcomeSource = floorR is not null ? "close-price" : "unknown",
                             EventId = g.EventId,
                             ExitOrderId = g.ExitOrderId,
                         }));

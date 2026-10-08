@@ -102,6 +102,17 @@ public sealed class FxProfitFloorGuard
     /// in-process (the journal snapshot covers the cross-restart case).</summary>
     public string? SubmittedEventId { get; private set; }
 
+    /// <summary>The exit-state snapshot a prune lifted out of the host's
+    /// book while DEFERRING this guard's "closed #" line to the
+    /// broker-reconciliation confirmation loop (exactly one close row per
+    /// ticket). The confirmation's settlement R reads it back after the
+    /// book has forgotten the ticket — without it every floor exit lands
+    /// OutcomeSource=unknown (live 2026-10-08: 4 of 4 confirms, and the
+    /// recent tape never saw the save). Host-set only, deliberately NOT
+    /// in FxFloorSnapshot: a restart between prune and confirm loses the
+    /// snapshot (unknown), never a wrong R.</summary>
+    public FxPositionState? DeferredCloseState { get; set; }
+
     public FxProfitFloorGuard(long ticket, string symbol, string side)
     {
         _ticket = ticket;
