@@ -131,6 +131,13 @@ public sealed partial class TerminalViewModel : ObservableObject
 
     public FxPortfolioHost? FxHost => _fxHost;
 
+    /// <summary>Raised when the engine loop starts or stops — including the
+    /// startup auto-restore, which runs ~10s in. Surfaces that report soak
+    /// progress (the dashboard line) refresh at once instead of waiting for
+    /// the next 60s poll tick, so a resumed bar is visible the moment the
+    /// brain comes back.</summary>
+    public event Action? FxBrainRunnerChanged;
+
     [RelayCommand]
     private void ToggleFxBrain()
     {
@@ -140,8 +147,11 @@ public sealed partial class TerminalViewModel : ObservableObject
             FxBadge = "FX BRAIN: OFF";
             FxStatusText = "engine stopped";
             FxSoakBadge = "";   // the pill must not outlive a stopped brain
+            FxSoakTooltip = SoakTooltipBase;
+            _soakProvenanceAnnounced = null;   // next start announces its own bar
             _lastSoakSeen = -1;
             PersistBrainRunning(running: false);
+            FxBrainRunnerChanged?.Invoke();
             return;
         }
 
@@ -159,6 +169,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxStatusText = $"engine running on {string.Join(", ", _fxHost.Symbols)} (paper mode)";
         UpdateFxSoakBadge();
         PersistBrainRunning(running: true);
+        FxBrainRunnerChanged?.Invoke();
     }
 
     [RelayCommand]
@@ -212,6 +223,9 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: OFF";
         _lastSoakSeen = -1;
         FxSoakBadge = "";
+        FxSoakTooltip = SoakTooltipBase;   // no stale claim about a stopped bar
+        _soakProvenanceAnnounced = null;
+        FxBrainRunnerChanged?.Invoke();
 
         if (accountSwitched)
         {
@@ -224,6 +238,59 @@ public sealed partial class TerminalViewModel : ObservableObject
     {
         _fxHost?.GoPaper();
         FxBadge = "FX BRAIN: PAPER";
+    }
+
+    // ── Real-money session unlock (the missing arm surface) ───────────
+
+    private readonly Action? _armRealMoneyUnlock;
+
+    /// <summary>The phrase the operator types to arm the real-money session
+    /// unlock. Bound two-way to the unlock panel's text box; cleared after a
+    /// successful arm so the secret does not linger on screen.</summary>
+    [ObservableProperty]
+    private string realMoneyUnlockPhrase = "";
+
+    /// <summary>Outcome of the last arm attempt (mismatch / armed), shown
+    /// beside the panel so a refusal is explained rather than silent.</summary>
+    [ObservableProperty]
+    private string realMoneyUnlockStatus = "";
+
+    /// <summary>True while the shared session unlock is armed — drives the
+    /// panel's armed/locked label. Read through the injected predicate, so
+    /// it always agrees with what the order gates actually see.</summary>
+    public bool RealMoneyUnlockArmed => _isRealMoneyUnlocked?.Invoke() ?? false;
+
+    /// <summary>Arms the real-money session unlock after verifying the typed
+    /// confirmation phrase (exact match, trimmed). Fail-closed: a mismatch
+    /// arms nothing and says so. The arm itself (latch + audit journal row)
+    /// is injected by the composition root, so this view model stays
+    /// dialog-free and testable. Arming on a demo account is harmless — the
+    /// gate still passes demo through and demands the venue's real verdict
+    /// before any real order.</summary>
+    [RelayCommand]
+    private void ArmRealMoneyUnlock()
+    {
+        var typed = (RealMoneyUnlockPhrase ?? "").Trim();
+        if (!string.Equals(typed, Core.Models.RealMoneyGate.ConfirmationPhrase,
+                StringComparison.Ordinal))
+        {
+            RealMoneyUnlockStatus =
+                $"phrase mismatch — type exactly \"{Core.Models.RealMoneyGate.ConfirmationPhrase}\"";
+            return;
+        }
+
+        if (_armRealMoneyUnlock is null)
+        {
+            RealMoneyUnlockStatus = "unlock unavailable in this build";
+            return;
+        }
+
+        _armRealMoneyUnlock();
+        RealMoneyUnlockPhrase = "";
+        OnPropertyChanged(nameof(RealMoneyUnlockArmed));
+        RealMoneyUnlockStatus = RealMoneyUnlockArmed
+            ? "real-money unlock ARMED for this session"
+            : "unlock did not arm";
     }
 
     /// <summary>Operator re-arm after a supervisor loss stop.</summary>
@@ -313,6 +380,17 @@ public sealed partial class TerminalViewModel : ObservableObject
     [ObservableProperty]
     private string fxSoakBadge = "";
 
+    /// <summary>What the soak pill's counters mean — the static sentence the
+    /// pill always carried, plus the provenance of the bar when there is one
+    /// to state (carried over from an earlier session / restarted on a build
+    /// change). A number alone cannot say whether it was earned now or
+    /// resumed, and that difference is the whole point of the bar.</summary>
+    public const string SoakTooltipBase =
+        "Per-symbol paper-soak progress (n/m signals). GO LIVE needs EVERY symbol at its bar — the laggard is shown first.";
+
+    [ObservableProperty]
+    private string fxSoakTooltip = SoakTooltipBase;
+
     /// <summary>Rebuild the soak badge from live host state. Never throws;
     /// clears the badge when there is no running host. Any thread (routed
     /// through OnUiThread by its callers).</summary>
@@ -321,17 +399,83 @@ public sealed partial class TerminalViewModel : ObservableObject
         try
         {
             var host = _fxHost;
-            FxSoakBadge = host is { } h && h.IsRunning && h.Symbols.Count > 0
-                ? string.Join(" ", h.Hosts
-                    .OrderBy(hh => hh.PaperSignalsSeen)                    // laggard first
-                    .ThenBy(hh => hh.Symbol, StringComparer.OrdinalIgnoreCase)
-                    .Select(hh => $"{hh.Symbol} {hh.PaperSignalsSeen}/{hh.PaperSoakSignalsRequired}"))
-                : "";
+            if (host is not { } h || !h.IsRunning || h.Symbols.Count == 0)
+            {
+                FxSoakBadge = "";
+                FxSoakTooltip = SoakTooltipBase;
+                return;
+            }
+
+            var progress = string.Join(" ", h.Hosts
+                .OrderBy(hh => hh.PaperSignalsSeen)                    // laggard first
+                .ThenBy(hh => hh.Symbol, StringComparer.OrdinalIgnoreCase)
+                .Select(hh => $"{hh.Symbol} {hh.PaperSignalsSeen}/{hh.PaperSoakSignalsRequired}"));
+
+            // WHERE the bar came from matters as much as where it stands: a
+            // bar that resumed at 7/10 is different evidence from one earned
+            // since this brain started, and a build change resets it on
+            // purpose. The pill itself stays exactly as wide as it was (its
+            // row is already full at four symbols and clipped my first
+            // attempt at a suffix), so the provenance goes where there IS
+            // room: the pill's tooltip and the terminal's own status line,
+            // announced once per state change.
+            FxSoakBadge = progress;
+            var restored = h.PaperSoakRestored;
+            if (h.PaperSoakInvalidatedBuild is { } dropped)
+            {
+                FxSoakTooltip = $"{SoakTooltipBase} The counters were cleared because the "
+                    + $"build changed since {dropped}: the bar is evidence about the engine "
+                    + $"that earned it. Counting starts over under {VersionInfo.Stamp}.";
+                AnnounceSoakProvenance(
+                    $"paper soak restarted — build changed since {dropped} (now {VersionInfo.Stamp})");
+            }
+            else if (h.PaperSoakInvalidatedAccount is { } droppedAccount)
+            {
+                FxSoakTooltip = $"{SoakTooltipBase} The counters were cleared because the "
+                    + $"MT5 account changed since {droppedAccount}: the soak is the evidence "
+                    + $"base for the go-live gate on the account about to trade, so it does "
+                    + $"not carry across a switch. Counting starts over on this account.";
+                AnnounceSoakProvenance(
+                    $"paper soak restarted — account changed since {droppedAccount}");
+            }
+            else if (restored > 0)
+            {
+                FxSoakTooltip = $"{SoakTooltipBase} {restored} of these signals were counted in "
+                    + $"an earlier session ({VersionInfo.Stamp}) and restored from the soak ledger, "
+                    + $"so the bar resumes instead of restarting — GO LIVE can be reached "
+                    + $"across sessions.";
+                AnnounceSoakProvenance(
+                    $"paper soak resumed — {restored} signals carried over from the last session "
+                    + $"(build {VersionInfo.Stamp})");
+            }
+            else
+            {
+                FxSoakTooltip = SoakTooltipBase;
+            }
         }
         catch
         {
             // A badge is never worth an exception — keep the last value.
         }
+    }
+
+    /// <summary>The soak provenance sentence already announced (null when
+    /// none) — the status line is only written when it CHANGES, so the
+    /// engine's own live status is not stomped on every badge refresh.</summary>
+    private string? _soakProvenanceAnnounced;
+
+    /// <summary>Say where the soak bar came from, once per state, in the
+    /// terminal's own status line — a full-width strip that has room for a
+    /// sentence the pill does not.</summary>
+    private void AnnounceSoakProvenance(string message)
+    {
+        if (_soakProvenanceAnnounced == message)
+        {
+            return;
+        }
+
+        _soakProvenanceAnnounced = message;
+        FxStatusText = message;
     }
 
     /// <summary>Timer hook: refresh the soak badge cheaply and only when a
@@ -390,7 +534,8 @@ public sealed partial class TerminalViewModel : ObservableObject
         Action<string>? setSymbolBound = null,
         TickArchive? tickArchive = null,
         Func<FxPortfolioHost?>? fxHostFactory = null,
-        PriceAlertEngine? alerts = null)
+        PriceAlertEngine? alerts = null,
+        Action? armRealMoneyUnlock = null)
     {
         // FIRST: the UI-thread helper is used from the constructor itself —
         // it must never see an unset dispatcher.
@@ -407,6 +552,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         _setAutonomyBound = setAutonomyBound;
         _setBrainRunningBound = setBrainRunningBound;
         _setSymbolBound = setSymbolBound;
+        _armRealMoneyUnlock = armRealMoneyUnlock;
         // Market Watch right-click → Create Alert arms PriceAlertEngine
         // alerts; a test-injected engine is used as-is (no toast plumbing).
         _alerts = alerts ?? new PriceAlertEngine(new NotificationService());
@@ -1312,6 +1458,9 @@ public sealed partial class TerminalViewModel : ObservableObject
                     OrderRows.Clear();
                 }
 
+                // The header's status pill mirrors the bridge itself, not the
+                // terminal's own latch — clear it on every failed poll.
+                OnUiThread(() => _dashboard.IsConnected = false);
                 return;
             }
 
@@ -1321,6 +1470,7 @@ public sealed partial class TerminalViewModel : ObservableObject
             OnUiThread(() =>
             {
                 IsMt5Connected = true;
+                _dashboard.IsConnected = true;   // lights the header status pill
                 // A disabled AutoTrading terminal refuses every order with
                 // client-disabled (10027) — say so at a glance, right where
                 // the connection state lives. Unknown (old sidecar) shows
@@ -1358,7 +1508,7 @@ public sealed partial class TerminalViewModel : ObservableObject
     private async Task<string> ExecuteMt5OrderAsync(
         string symbol, string action, double lots,
         string type = "market", double? price = null,
-        double? sl = null, double? tp = null)
+        double? stopPrice = null, double? sl = null, double? tp = null)
     {
         var settings = _settings();
 
@@ -1406,7 +1556,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         try
         {
             var result = await _mt5.PlaceOrderAsync(
-                symbol, action, type, lots, price, null, sl, tp).ConfigureAwait(true);
+                symbol, action, type, lots, price, stopPrice, sl, tp).ConfigureAwait(true);
 
             var status = result.Ok
                 ? $"{action} {type} filled: ticket {result.Order ?? result.Deal} @ {result.Price:0.#####}"
@@ -1458,7 +1608,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         // The ticket's own pending-type validation rides ahead of the
         // shared executor; everything else (guards + send) is one path.
         Mt5OrderStatus = await ExecuteMt5OrderAsync(
-            Mt5Symbol, Mt5Action, Mt5Lots, Mt5Type, Mt5Price, Mt5Sl, Mt5Tp)
+            Mt5Symbol, Mt5Action, Mt5Lots, Mt5Type, Mt5Price, Mt5StopPrice, Mt5Sl, Mt5Tp)
             .ConfigureAwait(true);
     }
 
@@ -1729,12 +1879,16 @@ public sealed partial class TerminalViewModel : ObservableObject
         _persist();
     }
 
-    /// <summary>Auto-restore: restarts the engine loop when it was running
-    /// at the last persist. Called once at startup by the app shell; a
-    /// restored loop is still paper-mode until the human go-lives again.</summary>
-    public void RestoreBrainIfPersistedRunning()
+    /// <summary>Auto-start: the engine loop comes up on EVERY launch — the
+    /// brain loop is always-on by operator policy. Called once at startup by
+    /// the app shell, after the crash safe-mode hold has already cleared (a
+    /// fault loop is never auto-started). The started loop is still
+    /// paper-mode until the human go-lives, and autonomy stays the safety
+    /// master: a running loop with autonomy off journals decisions and
+    /// places nothing. Idempotent — a loop already running is left alone.</summary>
+    public void AutoStartBrainLoop()
     {
-        if (_settings().FxBrainRunning && _fxHost is not { } h)
+        if (_fxHost is not { } h)
         {
             ToggleFxBrain();
         }
