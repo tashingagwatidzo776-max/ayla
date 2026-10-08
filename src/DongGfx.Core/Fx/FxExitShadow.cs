@@ -55,22 +55,27 @@ public static class FxExitShadow
     /// <summary>Hit rate a shadow engine must sustain to earn weight.</summary>
     public const double PromotionHitRate = 0.6;
 
-    /// <summary>A shadow vote "helped" in exactly two ways: (1) the classic
+    /// <summary>A shadow vote "helped" in exactly three ways: (1) the classic
     /// rule — at the trade's final evaluation it showed real exit conviction
     /// (≥ half pressure) on a trade that went on to win while the ensemble
-    /// held or merely watched; or (2) the trade was a PROFIT-FLOOR SAVE the
+    /// held or merely watched; (2) the trade was a PROFIT-FLOOR SAVE the
     /// giveback evidence itself drove home (override or deep giveback vote
     /// per <see cref="FxExitBrain.IsProfitFloorSave"/>) — then the giveback
     /// shadow voice and the drawdown engine that carried it are credited
-    /// with the save. (Losing trades need no rescue: the drawdown/override
-    /// tier owns them.)</summary>
+    /// with the save; or (3) the save was EXECUTED BY THE HARD-FLOOR GUARD
+    /// (resolvedAction "floor-exit"), where no settled decision exists —
+    /// the guard appends drawdown's evidence plus the giveback mirror of
+    /// it, and BOTH are credited: the mirror is the same evidence read by
+    /// the engine the save is named after (2026-09-30: giveback was
+    /// starved on every guard save). (Losing trades need no rescue: the
+    /// drawdown/override tier owns them.)</summary>
     public static bool Helped(FxExitVote shadowVote, string resolvedAction, bool won,
         FxExitDecision? decision = null) =>
         won && shadowVote.Exit >= 0.5 && resolvedAction is "hold" or "monitor"
         || (decision is not null
             && FxExitBrain.IsProfitFloorSave(decision)
             && shadowVote is { Engine: "giveback" or "drawdown", Exit: >= 0.5 })
-        || (won && shadowVote is { Engine: "drawdown", Exit: >= 0.5 }
+        || (won && shadowVote is { Engine: "drawdown" or "giveback", Exit: >= 0.5 }
             && resolvedAction == "floor-exit");
 
     /// <summary>The weight an engine's measured accuracy has earned: zero
@@ -184,7 +189,7 @@ public sealed class FxShadowLedger
     {
         try
         {
-            foreach (var line in File.ReadAllLines(path))
+            foreach (var line in Logging.TradeJournal.ReadLinesShared(path))
             {
                 try
                 {
