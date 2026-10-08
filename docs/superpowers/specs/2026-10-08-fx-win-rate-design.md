@@ -31,7 +31,7 @@ There are exactly **five** writers of the `closed #N` row (verified by search):
 | # | Site | Shape | Realized-R source |
 |---|------|-------|-------------------|
 | 1 | `FxEngineHost.cs:1668` | ensemble full close (`closed #N — deal …`) | **compute**: entry (`p`) vs current tick mid ÷ sized stop → `OutcomeSource = "close-price"` |
-| 2 | `FxEngineHost.cs:1864` | profit-floor exit confirmed | last in-memory `_exitStates` ProfitR snapshot before removal → `"profit-snapshot"`; else `null` |
+| 2 | `FxEngineHost.cs:2115` | profit-floor exit confirmed | **compute**: entry vs this cycle's mid ÷ sized stop (same law as row 1 — the deferred prune now hands its snapshot to the confirmation loop, 2026-10-08) → `"close-price"`; else `"unknown"` (was `"profit-snapshot"` pre-relabel — every floor confirm landed `unknown` before the handoff fix) |
 | 3 | `FxEngineHost.cs:1221` | stale tracking retired (two-pass proof) | same snapshot fallback → `"profit-snapshot"`; else `null` |
 | 4 | `FxEngineHost.cs:1768` | stale tracking retired (healthy positions read) | same snapshot fallback → `"profit-snapshot"`; else `null` |
 | 5 | `FxPortfolioHost.cs:627` | ops reconcile close (`broker no longer holds the ticket`) | last journaled ProfitR for the ticket if present, else `null` → `"unknown"` |
@@ -102,6 +102,18 @@ first).
   "candidates for exclusion" section listing cells that currently fail the recent-tape
   bar — the pre-deployment sanity check that the filter's future cuts are the right ones.
 - Exit code 0 always (report, not a gate).
+
+### 4. `scripts/fx_outcome_coverage.py` (companion dashboard, added 2026-10-08)
+
+- Per-DAY table of close rows by `OutcomeSource` (`close-price` /
+  `profit-snapshot` / `unknown` / `(no-payload)`) so a coverage
+  regression is visible on the day it starts, plus a per-WRITER matrix
+  (floor-confirm / stale-retire / ops-reconcile / operator-reconcile /
+  ensemble-close) so a source a close shape should never carry — e.g.
+  floor confirms landing `unknown` — is impossible to miss.
+- Same journal inputs, `--days`/`--since`/`--data-dir` flags and
+  exit-0 report contract as `fx_win_rate.py`; test in
+  `scripts/test_fx_outcome_coverage.py` (wired into CI's integration job).
 
 ## Verification plan
 
