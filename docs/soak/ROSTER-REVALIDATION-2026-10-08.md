@@ -15,15 +15,28 @@ roster equals the full roster.
 
 ## §5 two-week negative-delta rule
 
-| Week | Filtered − full delta | Note |
-|---|---|---|
-| 2026-10-07 (sweep A/B) | GBPUSD **−267.8R** (roster-1 −89.3R vs full +178.5R) | mode-1 cumulative-cell filter; first negative week |
-| 2026-10-08 (this week) | **0 on every symbol** | mode-1 off (rule 1); live recent-tape gate excluded nothing |
+Two metrics: the **live gate** (does the in-app recent-tape filter cut
+anything?) and the **mode-1 sweep A/B** — the original §5 recipe, re-run
+2026-10-08 with the recorded `roster-ab.sh` / `xau-ab.sh` on a refreshed
+tape copy against the same live memory snapshot (last trained 2026-10-07
+13:13 UTC). Isolation check: 0.000R moved outside GBPUSD/XAUUSDmicro.
 
-The rule requires *two consecutive* negative weeks. Week 2 is 0, not
-negative → **trigger not met, streak reset.** Rule 1 stands: mode-1 remains
-research-only; the full roster is live; the recent-tape gate (policy items
-2–4) is the only active filter and it has not yet cut anything.
+| Run | Metric | GBPUSD filtered−full | XAUUSDmicro filtered−full |
+|---|---|---|---|
+| 2026-10-07 sweep (week-1) | mode-1 sweep A/B | **−267.8R** (+178.5 full vs −89.3 filtered) | +101.3R (+3065.7 vs +3167.0) |
+| 2026-10-08 sweep (week-2) | mode-1 sweep A/B | **−267.8R** (+178.5 vs −89.3; net +$20.35 vs −$7.81) | +101.3R (+3065.7 vs +3167.0; net +$64,934 vs +$67,466) |
+| 2026-10-08 live | in-app gate | 0 — 0 refusals, filter never engaged | 0 |
+
+**Trigger: met on the sweep metric.** GBPUSD filtered−full is negative
+for the second consecutive run → §5's mandate is **“fix the cells, don't
+widen the cut.”** Two caveats, stated plainly: (1) the runs are one day
+apart, not seven — with an unchanged memory snapshot the A/B is
+deterministic and week-2 largely reproduces week-1 instead of offering an
+independent sample; (2) live behaviour is untouched either way — mode-1
+stays off (rule 1) and the live recent-tape gate has cut nothing. The
+cell fix the mandate points at is the standing follow-up: port recent-
+tape expectancy cells into FxTrain mode-1 so the offline filter stops
+reading lifetime cells.
 
 ## Recent tape vs cumulative cells (all 23 measured cells)
 
@@ -90,16 +103,20 @@ n≥10 is winning (≥ +0.10R) · `AT/NEAR-BAR` = recent n≥10 and mean ≤ 0.
 
 ## Verdict
 
-- **Cell source stale? No** in the §5 sense: no two-week negative
-  filtered−full streak, and the live gate has cut nothing.
+- **Cell source stale? Yes for GBPUSD on the offline metric** — two
+  consecutive negative sweep deltas trigger the fix-the-cells mandate;
+  **not stale on the live metric**: the recent-tape gate has cut nothing
+  and its cells read recent expectancy directly (1 stale-keep cell
+  watched, XAU/vol-breakout, not yet excludable).
 - **mode-1 stays off** (rule 1). Full roster live; confidence gate +
   memory weight-tilt continue to down-weight gradually.
 - **Recent-tape gate is the live implementation of items 2–4** and is
   behaving per policy: 0 exclusions, default-keep, XAU/vol-breakout
   watched at n=20/−0.08R.
-- **Open follow-up** (unchanged from 10-07): port recent-tape expectancy
-  cells into FxTrain mode-1 so the offline sweep A/B stops reading
-  lifetime cells; until then §5's sweep re-run remains N/A and this
-  journal-cell re-validation is the weekly check.
+- **Sweep A/B re-run complete** (was the open item): the mode-1 sweep
+  reproduces GBP's stale-cell verdict — §5's trigger is met, so porting
+  recent-tape expectancy cells into FxTrain mode-1 is now the *mandated*
+  fix, not an optional follow-up. Until it lands, mode-1 stays off (rule
+  1) and this journal-cell re-validation remains the live weekly check.
 
 *Next re-validation: 2026-10-15.*
