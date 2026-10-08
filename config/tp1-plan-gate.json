@@ -1,0 +1,17 @@
+{
+  "_comment": "Shared TP1 plan-% gate tunables — the single source of truth read by BOTH scripts/watch_tp1_first_arm.py and the C# app (DongGfx.App.Infrastructure.Tp1PlanGateConfig). Editing a value here changes the watcher's gate AND the app's breaker without a rebuild. Keys are mirrored 1:1 by PLAN_GATE_CONFIG_KEYS in the watcher and Tp1PlanGateConfig.Keys in the app; a missing/malformed file leaves both sides on their compiled defaults.",
+  "min_graded": 3,
+  "net_r": -1.0,
+  "up_net_r": 1.0,
+  "step_r": 1.0,
+  "step_pct": 5.0,
+  "min_pct": 0.0,
+  "max_pct": 60.0,
+  "score_min_graded": 1,
+  "step_feedback_min": 3,
+  "step_feedback_pct": 2.0,
+  "step_min": 1.0,
+  "step_max": 15.0,
+  "step_max_drift": 3.0,
+  "stale_days": 7
+}

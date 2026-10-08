@@ -415,8 +415,10 @@ public static class FxProfitBrain
     };
 
     /// <summary>The protected-profit floor: schedule-based on peak R,
-    /// tightened (never loosened) while reversal probability is high, and
-    /// NEVER below the floor already established for this trade.</summary>
+    /// tightened (never loosened) while reversal probability is high —
+    /// including below the first schedule rung, where only high-confidence
+    /// evidence may open a floor — and NEVER below the floor already
+    /// established for this trade.</summary>
     public static double ProfitFloor(
         double peakR, double currentR, double reversalP,
         double prevFloorR, FxProfitBrainOptions options)
@@ -426,8 +428,14 @@ public static class FxProfitBrain
         {
             if (peakR >= peak) floor = f;
         }
-        if (floor <= 0) return Math.Max(0, prevFloorR);        // Adaptive tighten: strong reversal evidence protects nearly all of
-        // the current profit (but never above the cap of the peak).
+        // Adaptive tighten: strong reversal evidence protects nearly all of
+        // the current profit (but never above the cap of the peak). It runs
+        // EVEN WHEN the schedule floor is still 0 (peak below the first rung,
+        // < 1.0R): the old early return here skipped every tighten, which
+        // left small-peak near-misses with FloorR = 0 for life (2026-10-08
+        // giveback investigation). With no evidence, or underwater, the
+        // floor stays 0 and the never-down law below preserves prevFloorR —
+        // identical to the old behaviour.
         if (reversalP > ReversalHighConfidence && currentR > floor)
         {
             floor = Math.Max(floor, currentR - 0.1);
@@ -437,7 +445,11 @@ public static class FxProfitBrain
         // tightens toward the cap without demanding full reversal confluence
         // (the all-or-nothing gap: heavy giveback with only moderate
         // reversal evidence kept yesterday's schedule floor all day).
-        else if (reversalP >= PreTightenReversal && currentR > floor * 1.25)
+        // Schedule-only: with floor 0 the `currentR > floor * 1.25` guard
+        // degenerates to `currentR > 0` and would lock noise floors on any
+        // sliver of profit, so moderate evidence alone cannot open a floor
+        // below the first rung — only high-confidence adaptive can.
+        else if (floor > 0 && reversalP >= PreTightenReversal && currentR > floor * 1.25)
         {
             floor = Math.Max(floor, currentR * 0.75);   // capped below, with every other floor
         }

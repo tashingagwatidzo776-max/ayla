@@ -295,7 +295,13 @@ public class FxSupervisorTests
             killSwitchEngaged: () => false,
             lotsCap: () => 1.00m,
             realMoneyUnlocked: () => false,
-            supervisor: supervisor);
+            supervisor: supervisor)
+        {
+            // The scripted candle tape is stamped in 2023 against a live
+            // wall clock, so the feed-freshness guard would hold every
+            // cycle here. Freshness has its own dedicated tests.
+            StaleBarSeconds = 0,
+        };
     }
 
     [Fact]

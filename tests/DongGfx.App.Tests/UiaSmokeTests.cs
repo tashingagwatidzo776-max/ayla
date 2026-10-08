@@ -26,6 +26,7 @@ namespace DongGfx.App.Tests;
 /// uia-smoke job (Category=Uia), not in the unit gate.
 /// </summary>
 [Trait("Category", "Uia")]
+[Collection("Uia")]   // serial with the journal-copy smoke: one clipboard, one desktop
 public class UiaSmokeTests
 {
     private readonly ITestOutputHelper _output;
@@ -51,25 +52,7 @@ public class UiaSmokeTests
         }
         finally
         {
-            if (owned)
-            {
-                try
-                {
-                    // CloseMainWindow first so the app's own teardown runs
-                    // (journal flush, gate reset); force-kill as fallback.
-                    proc.Refresh();
-                    if (!proc.HasExited && proc.CloseMainWindow())
-                    {
-                        proc.WaitForExit(10_000);
-                    }
-                    if (!proc.HasExited)
-                    {
-                        proc.Kill(entireProcessTree: true);
-                        proc.WaitForExit(5_000);
-                    }
-                }
-                catch { /* best effort — the smoke already asserted */ }
-            }
+            CloseOwned(proc, owned);
         }
     }
 
@@ -167,6 +150,163 @@ public class UiaSmokeTests
         catch
         {
             return false;
+        }
+    }
+
+    private static void CloseOwned(Process? proc, bool owned)
+    {
+        if (!owned || proc is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // CloseMainWindow first so the app's own teardown runs
+            // (journal flush, gate reset); force-kill as fallback.
+            proc.Refresh();
+            if (!proc.HasExited && proc.CloseMainWindow())
+            {
+                proc.WaitForExit(10_000);
+            }
+            if (!proc.HasExited)
+            {
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5_000);
+            }
+        }
+        catch { /* best effort — the smoke already asserted */ }
+    }
+
+    // ── the TP1 override banner's reason-matched action ────────────
+
+    /// <summary>
+    /// End-to-end for the dashboard's override banner: with an armed plan-%
+    /// override and a fresh watcher verdict whose unmet precondition is
+    /// <c>engine-idle</c>, the banner renders the armed value, the verdict
+    /// line (reason included) and the reason-matched "Start brain" button —
+    /// and pressing it through UI Automation actually starts the engine:
+    /// the Terminal badge flips OFF → PAPER, the same effect the Settings
+    /// toggle produces. A seeded TF_DATA_DIR keeps the scenario
+    /// deterministic and entirely off the live session's settings/journal.
+    /// </summary>
+    [Fact]
+    public void Override_Banner_Action_Button_Starts_The_Brain()
+    {
+        var dataDir = SeedOverrideBanner();
+        var (proc, owned) = LaunchSeeded(dataDir);
+        if (proc is null)
+        {
+            return;   // a live instance is running: vacuous, like the boot smoke
+        }
+        try
+        {
+            var win = WindowOf(proc.Id, TimeSpan.FromSeconds(45));
+            Assert.True(win is not null, $"no main window appeared for pid={proc.Id}");
+
+            // Dashboard is the first tab: the armed value AND the watcher's
+            // verdict render on the banner, the unmet precondition spelled
+            // out — and, since engine-idle HAS a fix, the stand-in hint
+            // text does not.
+            Assert.NotNull(TextContaining(win!, "TP1 plan % armed at 15%",
+                TimeSpan.FromSeconds(25)));
+            Assert.NotNull(TextContaining(win!, "waiting for a rung",
+                TimeSpan.FromSeconds(15)));
+            Assert.NotNull(TextContaining(win!, "(the brain loop is off)",
+                TimeSpan.FromSeconds(5)));
+
+            // The reason-matched button is offered…
+            var button = Named(win!, "Start brain", TimeSpan.FromSeconds(15));
+            Assert.NotNull(button);
+
+            // …and pressing it really starts the brain.
+            ((System.Windows.Automation.InvokePattern)button!.GetCurrentPattern(
+                System.Windows.Automation.InvokePattern.Pattern)).Invoke();
+
+            var tab = Named(win!, "Terminal", TimeSpan.FromSeconds(20));
+            Assert.NotNull(tab);
+            ((System.Windows.Automation.SelectionItemPattern)tab!.GetCurrentPattern(
+                System.Windows.Automation.SelectionItemPattern.Pattern)).Select();
+            Assert.NotNull(Named(win!, "FX BRAIN: PAPER", TimeSpan.FromSeconds(25)));
+            _output.WriteLine("smoke: Start brain pressed via UIA; badge is FX BRAIN: PAPER");
+        }
+        finally
+        {
+            CloseOwned(proc, owned);
+        }
+    }
+
+    /// <summary>Builds a scratch data dir whose settings arm a 15% plan-%
+    /// override and whose watcher verdict — fresh and naming that same
+    /// plan % — reports the unmet precondition as engine-idle: the exact
+    /// state the banner's action button exists for.</summary>
+    private static string SeedOverrideBanner()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tf-data-uia-override");
+        try
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+        catch { /* a previous smoke may still be winding down */ }
+        Directory.CreateDirectory(Path.Combine(dir, "watcher"));
+        File.WriteAllText(Path.Combine(dir, "settings.json"),
+            "{\"FxBrainRunning\":false,\"Tp1PlanPctOverride\":15}");
+        var now = DateTimeOffset.UtcNow.ToString("o");
+        File.WriteAllText(
+            Path.Combine(dir, "watcher", "tp1-override-verification.json"),
+            "{\"status\":\"waiting\",\"plan_pct\":15,\"armed_ts\":\"" + now
+            + "\",\"age_days\":0.1,\"partials\":true,\"seen_pct\":null,"
+            + "\"computed_at\":\"" + now
+            + "\",\"reason\":\"engine-idle\",\"reason_text\":\"the brain loop is off\"}");
+        return dir;
+    }
+
+    /// <summary>Launches the Debug exe with TF_DATA_DIR pointed at the
+    /// seeded dir. Never attaches to a running instance — the live
+    /// session must not be disturbed, so a live instance makes this a
+    /// vacuous pass, exactly like the boot smoke.</summary>
+    private (Process? Proc, bool Owned) LaunchSeeded(string dataDir)
+    {
+        var existing = Process.GetProcessesByName("DongGfx");
+        if (existing.Length > 0)
+        {
+            foreach (var p in existing) p.Dispose();
+            _output.WriteLine("DongGfx.exe already running — banner smoke skipped (vacuous pass)");
+            return (null, false);
+        }
+
+        var exe = LocateAppExe();
+        var psi = new ProcessStartInfo(exe) { UseShellExecute = false };
+        psi.Environment[DongGfx.App.Infrastructure.SettingsService.DataDirEnvVar] = dataDir;
+        _output.WriteLine($"launching {exe} with TF_DATA_DIR={dataDir}");
+        var launched = Process.Start(psi);
+        Assert.NotNull(launched);
+        return (launched!, true);
+    }
+
+    /// <summary>Finds a descendant whose UIA name CONTAINS the substring
+    /// (WPF exposes a TextBlock's full text as its name). Scans at least
+    /// once even with a zero wait, so absence probes work too.</summary>
+    private System.Windows.Automation.AutomationElement? TextContaining(
+        System.Windows.Automation.AutomationElement scope, string part, TimeSpan wait)
+    {
+        var deadline = DateTime.UtcNow + wait;
+        while (true)
+        {
+            var els = scope.FindAll(
+                System.Windows.Automation.TreeScope.Descendants,
+                System.Windows.Automation.Condition.TrueCondition);
+            var hit = els.Cast<System.Windows.Automation.AutomationElement>()
+                .FirstOrDefault(t => t.Current.Name?.Contains(part) == true);
+            if (hit is not null)
+            {
+                return hit;
+            }
+            if (DateTime.UtcNow >= deadline)
+            {
+                return null;
+            }
+            Thread.Sleep(400);
         }
     }
 

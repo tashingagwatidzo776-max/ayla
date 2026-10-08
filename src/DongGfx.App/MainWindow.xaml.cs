@@ -141,6 +141,76 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Navigates to the Journal tab with a category pre-selected —
+    /// the dashboard's fault notice uses it so the rows behind a fault count
+    /// are one click away. UI thread only.</summary>
+    public void OpenJournal(string category)
+    {
+        SelectTab("Journal");
+        if (DataContext is not MainViewModel vm)
+        {
+            return;
+        }
+
+        vm.JournalVm.ShowCategory(category);
+
+        // Land on the newest row of the category (the VM selected it) and bring
+        // it into view once layout has caught up with the reload.
+        var selected = vm.JournalVm.SelectedEntry;
+        if (selected is not null)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    JournalEntriesGrid.ScrollIntoView(selected);
+                }
+                catch
+                {
+                    // Scrolling is best-effort — never fault navigation.
+                }
+            }), System.Windows.Threading.DispatcherPriority.Background);
+        }
+    }
+
+    /// <summary>Right-clicking a journal row selects it first, so the context
+    /// menu's "Copy details" acts on the row under the cursor rather than
+    /// whatever happened to be selected before.</summary>
+    private void OnJournalRowRightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        try
+        {
+            var row = System.Windows.Controls.ItemsControl.ContainerFromElement(
+                (System.Windows.Controls.ItemsControl)sender,
+                (System.Windows.DependencyObject)e.OriginalSource)
+                as System.Windows.Controls.DataGridRow;
+            if (row is not null)
+            {
+                JournalEntriesGrid.SelectedItem = row.Item;
+            }
+        }
+        catch
+        {
+            // Selection-on-right-click is a convenience — never throw out of a
+            // mouse handler.
+        }
+    }
+
+    /// <summary>The TP1 hint can go stale while the app runs (an overdue
+    /// plan-% review trips the breaker asynchronously). Recompute it
+    /// whenever the tab changes so the Settings surface is never lying.
+    /// Cheap: an uncached ledger read guarded by the switch itself.</summary>
+    private void OnMainTabChanged(
+        object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (DataContext is MainViewModel m)
+        {
+            m.SettingsVm.RefreshTp1Hint();
+            m.Dashboard.RefreshTp1PlanHold();
+            m.Dashboard.RefreshTp1PlanReview();
+        }
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (DataContext is MainViewModel vm)
@@ -150,6 +220,9 @@ public partial class MainWindow : Window
             vm.TerminalVm.CandleChart = TerminalCandles;
             WireChartTrading(vm.TerminalVm, TerminalCandles);
             WireMaps(vm);
+            vm.SettingsVm.RefreshTp1Hint();   // breaker state at first paint
+            vm.Dashboard.RefreshTp1PlanHold();
+            vm.Dashboard.RefreshTp1PlanReview();
         }
 
         // Initialize tray icon for headless operation.

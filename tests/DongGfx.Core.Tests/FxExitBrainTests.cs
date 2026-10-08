@@ -9,6 +9,7 @@ namespace DongGfx.Core.Tests;
 /// bands, override precedence, partial-lots math, and MFE/MAE monotonicity.
 /// Pure inputs — no plumbing.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxExitBrainTests
 {
     private static List<FxBar> FlatBars(int n = 40, double price = 2400)

@@ -52,6 +52,27 @@ public sealed class FxExitWeeklyDigest : IDisposable
     /// LedgerPath when set.</summary>
     public Func<IReadOnlyList<FxShadowLedgerRow>>? LedgerOverride { get; set; }
 
+    /// <summary>TP1 graded-verdict ledger path (the watcher's
+    /// <c>tp1-graded-verdicts.jsonl</c>). When set, each banked rung's line
+    /// carries the graded verdict and its R versus the giveback baseline.
+    /// Null skips the annotation. The verdicts are read, not recomputed, so
+    /// the digest reports the exact arithmetic the watcher graded with.</summary>
+    public string? Tp1VerdictsPath { get; set; }
+
+    /// <summary>Override for tests: the graded verdicts keyed by ticket.
+    /// Null = read Tp1VerdictsPath when set.</summary>
+    public Func<IReadOnlyDictionary<long, Tp1GradedVerdict>>? Tp1VerdictsOverride { get; set; }
+
+    /// <summary>TP1 plan-% review ledger path (the watcher's append-only
+    /// <c>tp1-plan-reviews.jsonl</c>). When set, the digest summarizes the
+    /// recommendations made since the last post and whether they were
+    /// open, cleared, or acted on. Null skips the section.</summary>
+    public string? PlanReviewsPath { get; set; }
+
+    /// <summary>Override for tests: the plan-review rows. Null = read
+    /// PlanReviewsPath when set.</summary>
+    public Func<IReadOnlyList<PlanReview>>? PlanReviewsOverride { get; set; }
+
     private readonly TradeJournal _journal;
     private readonly WebhookService? _webhook;
     private System.Threading.Timer? _timer;
@@ -89,7 +110,8 @@ public sealed class FxExitWeeklyDigest : IDisposable
         try
         {
             var entries = EntriesOverride?.Invoke() ?? _journal.GetRecent(null, 20_000);
-            var (message, markdown) = Build(entries, DateTimeOffset.UtcNow);
+            var tp1Verdicts = Tp1VerdictsOverride?.Invoke() ?? ReadTp1Verdicts();
+            var (message, markdown) = Build(entries, DateTimeOffset.UtcNow, tp1Verdicts);
 
             // The shadow engines' promotion rollup rides along: how many
             // settled trades each weight-0 engine has observed, its hit
@@ -106,6 +128,22 @@ public sealed class FxExitWeeklyDigest : IDisposable
                 message = message.Length == 0 ? section : $"{message} {section}";
                 markdown += "\n### Shadow engines (promotion ledger)\n\n" +
                             string.Join("\n", lines.Select(l => $"- {l}")) + "\n";
+            }
+
+            // The plan-% review ledger: how many recommendations the gate
+            // made since the last post and what came of them — a weekly
+            // audit that the human review step actually happened.
+            var planReviews = PlanReviewsOverride?.Invoke() ?? ReadPlanReviews();
+            if (planReviews.Count > 0)
+            {
+                var (reviewLine, reviewSection) =
+                    PlanReviewSummary(planReviews, DateTimeOffset.UtcNow);
+                if (reviewSection.Length > 0)
+                {
+                    message = message.Length == 0
+                        ? reviewLine : $"{message} {reviewLine}";
+                    markdown += reviewSection;
+                }
             }
 
             if (message.Length == 0)
@@ -155,6 +193,201 @@ public sealed class FxExitWeeklyDigest : IDisposable
         }
     }
 
+    private IReadOnlyList<PlanReview> ReadPlanReviews()
+    {
+        if (PlanReviewsPath is not { } path)
+        {
+            return [];
+        }
+
+        try
+        {
+            return ReadPlanReviewEvents(path);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>Parses the append-only plan-review ledger and folds it into
+    /// one row per recommendation, in order. Malformed lines are skipped;
+    /// a missing file is the caller's concern.</summary>
+    internal static IReadOnlyList<PlanReview> ReadPlanReviewEvents(string path)
+    {
+        var order = new List<string>();
+        var byId = new Dictionary<string, PlanReview>();
+        foreach (var line in Core.Logging.TradeJournal.ReadLinesShared(path))
+        {
+            if (line.Trim().Length == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var r = doc.RootElement;
+                var ev = Str(r, "event");
+                var id = Str(r, "id");
+                if (ev == "recommended")
+                {
+                    if (id.Length == 0 || TryTime(r, "ts") is not { } ts)
+                    {
+                        continue;
+                    }
+
+                    byId[id] = new PlanReview(
+                        id, Str(r, "direction"), ts,
+                        NumberOrNull(r, "baseline_pct"),
+                        NumberOrNull(r, "candidate_pct"),
+                        NumberOrNull(r, "net_r"), "open", null, null, "",
+                        NumberOrNull(r, "mean_vs_giveback_r"),
+                        AsInt(NumberOrNull(r, "graded")),
+                        AsInt(NumberOrNull(r, "trailed")),
+                        AsInt(NumberOrNull(r, "beaten")));
+                    order.Add(id);
+                }
+                else if (byId.TryGetValue(id, out var rec))
+                {
+                    if (ev == "cleared" && rec.Status == "open")
+                    {
+                        byId[id] = rec with
+                        {
+                            Status = "cleared",
+                            ClearedAt = TryTime(r, "ts"),
+                        };
+                    }
+                    else if (ev == "acted")
+                    {
+                        byId[id] = rec with
+                        {
+                            Status = "acted",
+                            ActedAt = TryTime(r, "ts"),
+                            ActedNote = Str(r, "note"),
+                        };
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Malformed event — skip it, keep the rest.
+            }
+        }
+
+        return order.Select(id => byId[id]).ToList();
+    }
+
+    private static string Str(JsonElement r, string name) =>
+        r.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() ?? "" : "";
+
+    private static DateTimeOffset? TryTime(JsonElement r, string name) =>
+        r.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+        && DateTimeOffset.TryParse(v.GetString(), CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+            out var t)
+            ? t : null;
+
+    /// <summary>The plan-% review rollup since the last post (the digest's
+    /// 7-day window): how many recommendations the gate made and how many
+    /// are still open, cleared, or acted on, plus one line per review —
+    /// the weekly audit of the whole gate-to-action path.</summary>
+    internal static (string Message, string Markdown) PlanReviewSummary(
+        IReadOnlyList<PlanReview> reviews, DateTimeOffset now)
+    {
+        var cutoff = now - TimeSpan.FromDays(7);
+        var recent = reviews.Where(r => r.Ts >= cutoff).OrderBy(r => r.Ts).ToList();
+        if (recent.Count == 0)
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var open = recent.Count(r => r.Status == "open");
+        var cleared = recent.Count(r => r.Status == "cleared");
+        var acted = recent.Count(r => r.Status == "acted");
+        var message =
+            $"TP1 plan-% reviews since the last post: {recent.Count} — " +
+            $"{open} open, {cleared} cleared, {acted} acted.";
+        var lines = recent.Select(r =>
+        {
+            var plan = r.BaselinePct is { } b && r.CandidatePct is { } c
+                ? $"{b:0.#}%→{c:0.#}%" : "—";
+            var net = r.NetR is { } n ? $"{n:+0.00;-0.00}R" : "—";
+            var note = r.Status == "acted" && r.ActedNote.Length > 0
+                ? $" ({r.ActedNote})" : string.Empty;
+            return $"- {r.Ts:yyyy-MM-dd} {r.Direction} {plan} (net {net}) " +
+                   $"— {r.Status}{note}";
+        });
+        var markdown = "\n### TP1 plan-% reviews (auto)\n\n" +
+            $"- since the last post: {recent.Count} recommended — {open} open, " +
+            $"{cleared} cleared, {acted} acted\n" +
+            string.Join("\n", lines) + "\n";
+        return (message, markdown);
+    }
+
+    private IReadOnlyDictionary<long, Tp1GradedVerdict> ReadTp1Verdicts()
+    {
+        if (Tp1VerdictsPath is not { } path)
+        {
+            return new Dictionary<long, Tp1GradedVerdict>();
+        }
+
+        try
+        {
+            return ReadVerdicts(path);
+        }
+        catch
+        {
+            return new Dictionary<long, Tp1GradedVerdict>();
+        }
+    }
+
+    /// <summary>Parses the watcher's verdict ledger (one JSON object per
+    /// banked ticket) into a ticket-keyed map. Malformed lines are skipped;
+    /// a missing file is the caller's concern.</summary>
+    internal static IReadOnlyDictionary<long, Tp1GradedVerdict> ReadVerdicts(string path)
+    {
+        var verdicts = new Dictionary<long, Tp1GradedVerdict>();
+        foreach (var line in Core.Logging.TradeJournal.ReadLinesShared(path))
+        {
+            if (line.Trim().Length == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var r = doc.RootElement;
+                if (!r.TryGetProperty("ticket", out var t) || !t.TryGetInt64(out var ticket))
+                {
+                    continue;
+                }
+
+                var verdict = r.TryGetProperty("verdict", out var v)
+                    && v.ValueKind == JsonValueKind.String
+                    ? v.GetString() ?? string.Empty : string.Empty;
+                verdicts[ticket] = new Tp1GradedVerdict(
+                    verdict, NumberOrNull(r, "vs_giveback_r"),
+                    NumberOrNull(r, "capture_pct"));
+            }
+            catch (JsonException)
+            {
+                // Malformed line — skip it, keep the rest.
+            }
+        }
+
+        return verdicts;
+    }
+
+    private static double? NumberOrNull(JsonElement r, string name) =>
+        r.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetDouble() : null;
+
+    private static int? AsInt(double? value) =>
+        value is { } v ? (int)v : null;
+
     private IReadOnlyList<FxShadowLedgerRow> ReadLedger()
     {
         if (LedgerPath is not { } path)
@@ -172,6 +405,23 @@ public sealed class FxExitWeeklyDigest : IDisposable
         }
     }
 
+    /// <summary>One plan-% review, folded from the watcher's append-only
+    /// ledger event stream: the recommendation plus its lifecycle status
+    /// (open / cleared / acted).</summary>
+    public sealed record PlanReview(
+        string Id, string Direction, DateTimeOffset Ts,
+        double? BaselinePct, double? CandidatePct, double? NetR, string Status,
+        DateTimeOffset? ClearedAt, DateTimeOffset? ActedAt, string ActedNote,
+        double? MeanVsGivebackR = null, int? Graded = null,
+        int? Trailed = null, int? Beaten = null);
+
+    /// <summary>One banked rung's graded verdict, as emitted by
+    /// scripts/watch_tp1_first_arm.py to the verdict ledger — the same
+    /// arithmetic the digest's capture line mirrors, read rather than
+    /// recomputed.</summary>
+    public sealed record Tp1GradedVerdict(
+        string Verdict, double? VsGivebackR, double? CapturePct);
+
     /// <summary>One decoded FX_EXIT journal payload.</summary>
     internal sealed record ExitPayload(
         string Action, string? Override, double MaeR, double MfeR, double ProfitR,
@@ -184,7 +434,8 @@ public sealed class FxExitWeeklyDigest : IDisposable
     /// drawdown) are counted separately from the consensus band actions —
     /// how often safety had to outrank the vote is itself evidence.</summary>
     internal static (string Message, string Markdown) Build(
-        IReadOnlyList<JournalEntry> entries, DateTimeOffset now)
+        IReadOnlyList<JournalEntry> entries, DateTimeOffset now,
+        IReadOnlyDictionary<long, Tp1GradedVerdict>? tp1Verdicts = null)
     {
         var cutoff = now - TimeSpan.FromDays(7);
         var payloads = new List<ExitPayload>();
@@ -309,7 +560,7 @@ public sealed class FxExitWeeklyDigest : IDisposable
             $"- round-trips (MFE ≥1R, closed ≤0.2R): {roundTrips}/{decisive.Count} ({roundTripPct:P0})\n" +
             $"- profit capture (realized/MFE, decisive ≥0.5R MFE): {profitCapture:P0}\n" +
             CaptureTrendMarkdown(entries) +
-            Tp1CaptureMarkdown(entries) +
+            Tp1CaptureMarkdown(entries, tp1Verdicts) +
             (profitStates.Count > 0
                 ? $"\n### Profit brain (FX_PROFIT telemetry)\n\n" +
                   $"- reports: {profitStates.Count}; floor breaches: {profitStates.Count(p => p.Breach)}; " +
@@ -351,7 +602,9 @@ public sealed class FxExitWeeklyDigest : IDisposable
     /// prototype produces rows; malformed rows never crash the digest.
     /// One line per graded ticket (latest EXEC per ticket), oldest first.
     /// </summary>
-    internal static string Tp1CaptureMarkdown(IReadOnlyList<JournalEntry> entries)
+    internal static string Tp1CaptureMarkdown(
+        IReadOnlyList<JournalEntry> entries,
+        IReadOnlyDictionary<long, Tp1GradedVerdict>? verdicts = null)
     {
         var execTickets = new Dictionary<long, string>();   // ticket → exec summary
         foreach (var e in entries)
@@ -402,9 +655,12 @@ public sealed class FxExitWeeklyDigest : IDisposable
 
             if (execTickets.ContainsKey(p.Ticket))
             {
+                var graded = verdicts is { } map
+                    && map.TryGetValue(p.Ticket, out var g) ? g : null;
                 lines.Add($"- #{p.Ticket}: banked a rung, captured " +
                           $"{p.ProfitR:0.##}R of its {p.MfeR:0.##}R peak " +
-                          $"({(p.MfeR > 0 ? p.ProfitR / p.MfeR : 0) * 100:0}% capture)");
+                          $"({(p.MfeR > 0 ? p.ProfitR / p.MfeR : 0) * 100:0}% capture)" +
+                          VerdictSuffix(graded));
             }
             else
             {
@@ -419,6 +675,21 @@ public sealed class FxExitWeeklyDigest : IDisposable
                    $"- fleet capture WITHOUT a TP1 rung (this window): {fleet * 100:0}% " +
                    $"({fleetWithoutTp1.Count} decisive exit(s))\n";
         return lines.Count > 0 ? head + string.Join("\n", lines) + "\n" : string.Empty;
+    }
+
+    /// <summary>The graded verdict trailing a banked-rung line: the verdict
+    /// and its R versus the giveback baseline, or '' when the ticket has no
+    /// graded verdict (the ledger was empty or predates the rung).</summary>
+    private static string VerdictSuffix(Tp1GradedVerdict? v)
+    {
+        if (v is null || v.Verdict.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return v.VsGivebackR is { } d
+            ? $" — {v.Verdict} ({d:+0.00;-0.00}R vs giveback)"
+            : $" — {v.Verdict}";
     }
 
     /// <summary>The giveback engine's promotion review: when one of its
@@ -604,7 +875,8 @@ public sealed class FxExitWeeklyDigest : IDisposable
             }
 
             var path = Path.Combine(directory, "fx-capture-trend.svg");
-            File.WriteAllText(path, CaptureTrendSvg(weeks, WeeklySaves(entries, weeks)), Encoding.UTF8);
+            File.WriteAllText(path, CaptureTrendSvg(
+                weeks, WeeklySaves(entries, weeks), WeeklyTp1Graded(entries, weeks)), Encoding.UTF8);
             return path;
         }
         catch
@@ -632,6 +904,49 @@ public sealed class FxExitWeeklyDigest : IDisposable
             {
                 var (year, week) = IsoWeek(e.Timestamp);
                 seen.Add((FormattableString.Invariant($"ISO {year}-W{week:00}"), ticket));
+            }
+        }
+
+        return weeks.Select(w => seen.Count(s => s.Label == w.Label)).ToList();
+    }
+
+    /// <summary>TP1-graded tickets per ISO week, aligned with
+    /// <paramref name="weeks"/> (index i is the count for weeks[i]). A
+    /// graded ticket is a banked rung (an FX_PROFIT TP1-EXEC row with
+    /// Executed true), counted once per (week, ticket) — the chart's blue
+    /// outline makes the weeks the TP1 prototype actually engaged
+    /// stand out beside the captures they produced.</summary>
+    internal static IReadOnlyList<int> WeeklyTp1Graded(
+        IReadOnlyList<JournalEntry> entries, IReadOnlyList<CaptureWeek> weeks)
+    {
+        var seen = new HashSet<(string Label, long Ticket)>();
+        foreach (var e in entries)
+        {
+            if (e.Category != "FX_PROFIT" || !e.Details.Contains("TP1-EXEC"))
+            {
+                continue;
+            }
+
+            var brace = e.Details.IndexOf('{');
+            if (brace < 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(e.Details[brace..]);
+                var r = doc.RootElement;
+                if (r.TryGetProperty("Ticket", out var t) && t.TryGetInt64(out var ticket)
+                    && ticket > 0
+                    && r.TryGetProperty("Executed", out var ok) && ok.ValueKind == JsonValueKind.True)
+                {
+                    var (year, week) = IsoWeek(e.Timestamp);
+                    seen.Add((FormattableString.Invariant($"ISO {year}-W{week:00}"), ticket));
+                }
+            }
+            catch (JsonException)
+            {
             }
         }
 
@@ -730,7 +1045,9 @@ public sealed class FxExitWeeklyDigest : IDisposable
     /// labeled with the capture ratio, the R banked of R available, and the
     /// trade count. Self-contained inline styles — renders in any viewer
     /// the soak doc travels with.</summary>
-    internal static string CaptureTrendSvg(IReadOnlyList<CaptureWeek> weeks, IReadOnlyList<int>? savesPerWeek = null)
+    internal static string CaptureTrendSvg(
+        IReadOnlyList<CaptureWeek> weeks, IReadOnlyList<int>? savesPerWeek = null,
+        IReadOnlyList<int>? tp1PerWeek = null)
     {
         if (weeks.Count == 0)
         {
@@ -748,6 +1065,10 @@ public sealed class FxExitWeeklyDigest : IDisposable
         sb.Append($"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{W.ToString(inv)}\" height=\"{H.ToString(inv)}\" viewBox=\"0 0 {W.ToString(inv)} {H.ToString(inv)}\">");
         sb.Append($"<rect width=\"{W.ToString(inv)}\" height=\"{H.ToString(inv)}\" fill=\"#fafafa\"/>");
         sb.Append($"<text x=\"{Left.ToString(inv)}\" y=\"20\" font-family=\"monospace\" font-size=\"13\" fill=\"#333\">profit capture — realized/MFE per ISO week</text>");
+        if (tp1PerWeek is not null && tp1PerWeek.Any(n => n > 0))
+        {
+            sb.Append($"<text x=\"{(W - Right).ToString(inv)}\" y=\"20\" text-anchor=\"end\" font-family=\"monospace\" font-size=\"10\" fill=\"#1565c0\">blue outline = TP1 rung graded</text>");
+        }
 
         // Grid: 0/25/50/75/100%.
         foreach (var pct in new[] { 0, 25, 50, 75, 100 })
@@ -764,6 +1085,13 @@ public sealed class FxExitWeeklyDigest : IDisposable
             var barH = plotH * Math.Clamp(wk.CaptureRatio, 0, 1);
             var y = Top + plotH - barH;
             sb.Append($"<rect x=\"{x.ToString(inv)}\" y=\"{y.ToString(inv)}\" width=\"{barW.ToString(inv)}\" height=\"{barH.ToString(inv)}\" fill=\"#2e7d32\"/>");
+
+            // Blue outline: this ISO week saw a TP1 rung banked — the
+            // rung's weeks stand out beside the captures they produced.
+            if (tp1PerWeek is { } tp1 && i < tp1.Count && tp1[i] > 0)
+            {
+                sb.Append($"<rect x=\"{x.ToString(inv)}\" y=\"{y.ToString(inv)}\" width=\"{barW.ToString(inv)}\" height=\"{barH.ToString(inv)}\" fill=\"none\" stroke=\"#1565c0\" stroke-width=\"2\"/>");
+            }
             sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(y - 5).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"10\" fill=\"#333\">{(wk.CaptureRatio * 100).ToString("0", inv)}%</text>");
             sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(Top + plotH + 16).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"9\" fill=\"#555\">{wk.Label}</text>");
             sb.Append($"<text x=\"{((x + barW / 2)).ToString(inv)}\" y=\"{(Top + plotH + 29).ToString(inv)}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"8\" fill=\"#999\">{wk.CapturedR.ToString("0.##", inv)}R/{wk.AvailableR.ToString("0.##", inv)}R · {wk.Trades} trade(s)</text>");

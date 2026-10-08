@@ -32,7 +32,7 @@ public static class FxFeatureStore
             return rows;
         }
 
-        foreach (var line in File.ReadLines(path))
+        foreach (var line in Logging.TradeJournal.ReadLinesShared(path))
         {
             if (string.IsNullOrWhiteSpace(line))
             {

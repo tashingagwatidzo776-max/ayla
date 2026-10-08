@@ -22,6 +22,15 @@ public sealed class FxEngineHost : IDisposable
     private readonly Func<decimal> _equityFloorFloor;
     private readonly Func<bool> _realMoneyUnlocked;
     private readonly System.Windows.Threading.DispatcherTimer _timer;
+
+    /// <summary>Between-cycle breach detection: a locked profit floor must
+    /// not wait up to 60s for the next cycle (observed 2026-10-08 —
+    /// +0.71R sampled, the next sample -0.46R straight THROUGH a 0.3R
+    /// floor). The watch advances every locked-floor guard on a fresh tick
+    /// every FloorWatchIntervalSeconds; see RunFloorWatchTickAsync.</summary>
+    internal const int FloorWatchIntervalSeconds = 5;
+    private readonly System.Windows.Threading.DispatcherTimer _floorWatchTimer;
+    private string? _floorWatchLastError;
     private readonly TimeSpan _cycleOffset;
     private bool _firstCycle = true;
     private bool _cycleRunning;
@@ -41,6 +50,23 @@ public sealed class FxEngineHost : IDisposable
     /// <summary>Paper soak requirement: the host will not GoLive until at
     /// least this many paper signals have been journaled (plan guardrail).</summary>
     public int PaperSoakSignalsRequired { get; set; } = 10;
+
+    /// <summary>Paper signals this host RESTORED from the ledger when it was
+    /// built (0 on a cold start). The account bar's soak pill names it, so a
+    /// bar carried over from an earlier session is never mistaken for
+    /// signals earned since this brain started.</summary>
+    public int PaperSoakRestored { get; private set; }
+
+    /// <summary>The build stamp whose counters were DROPPED for this host
+    /// (null when nothing was): a build change restarts the bar on purpose,
+    /// and the pill reports that instead of appearing to lose progress.</summary>
+    public string? PaperSoakInvalidatedBuild { get; private set; }
+
+    /// <summary>The MT5 login whose counters were DROPPED for this host
+    /// (null when nothing was): an account switch restarts the bar on
+    /// purpose — the soak is the evidence base for the go-live gate on the
+    /// account about to trade, so it does not carry across a switch.</summary>
+    public string? PaperSoakInvalidatedAccount { get; private set; }
 
     /// <summary>Portfolio veto (multi-symbol): returns a refusal reason when
     /// the requested lots would exceed the shared exposure cap.</summary>
@@ -77,8 +103,7 @@ public sealed class FxEngineHost : IDisposable
             if (!System.IO.Directory.Exists(dir)) return null;
             (double, double, double)? found = null;
             foreach (var file in System.IO.Directory.GetFiles(dir, "journal_*.jsonl").OrderBy(f => f))
-            {
-                foreach (var line in System.IO.File.ReadLines(file))
+            {                    foreach (var line in Core.Logging.TradeJournal.ReadLinesShared(file))
                 {
                     if (!line.Contains("FX_PROFIT")) continue;
                     try
@@ -114,6 +139,109 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
+    /// <summary>Rebuild the recent-tape windows from the journal once per
+    /// process — n≥WindowN takes days of tape to fill, so a deploy must not
+    /// reset it. Set only AFTER the replay lands, so a close recording
+    /// concurrently waits on the lock instead of racing the historical
+    /// rows. Never throws: FxRecentTapeReseed treats an unreadable journal
+    /// as an empty one, which default-keeps every family.</summary>
+    private void EnsureRecentTapeSeeded()
+    {
+        if (_recentTapeSeeded)
+        {
+            return;
+        }
+        lock (_tapeSeedLock)
+        {
+            if (_recentTapeSeeded)
+            {
+                return;
+            }
+            Core.Fx.FxRecentTapeReseed.Run(_journal.JournalDir, _recentTape);
+            _recentTapeSeeded = true;
+        }
+    }
+
+    /// <summary>The family a ticket bins under: in-memory first (set at
+    /// dispatch), else the fill row's Signal (restart reseed). Null when
+    /// neither exists — never mis-bin a trade.</summary>
+    internal string? FamilyFor(long ticket)
+    {
+        if (_familiesByTicket.TryGetValue(ticket, out var family))
+        {
+            return family;
+        }
+        family = FamilyFromJournal(_journal.JournalDir, ticket);
+        if (!string.IsNullOrEmpty(family))
+        {
+            _familiesByTicket[ticket] = family;
+            return family;
+        }
+        return null;
+    }
+
+    /// <summary>Feed one settled outcome into the recent-tape cells —
+    /// called by the close writers that know their R. Non-finite R or
+    /// unknown family: no Record (never fabricate, never mis-bin).</summary>
+    private void RecordSettled(long ticket, string symbol, double realizedR)
+    {
+        if (double.IsNaN(realizedR) || double.IsInfinity(realizedR))
+        {
+            return;
+        }
+        var family = FamilyFor(ticket);
+        if (!string.IsNullOrEmpty(family))
+        {
+            EnsureRecentTapeSeeded();
+            _recentTape.Record(symbol, family, realizedR);
+        }
+    }
+
+    /// <summary>The alpha family (fill row's Signal) a ticket was entered
+    /// with — the restart source for <see cref="_familiesByTicket"/>: the
+    /// fill payload carries Signal and the journal outlives the process.
+    /// Newest match wins (partial-fill re-entries). Null when no family is
+    /// journaled. Static so tests can point it at a scratch journal dir.</summary>
+    internal static string? FamilyFromJournal(string journalDir, long ticket)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(journalDir)) return null;
+            string? found = null;
+            foreach (var file in System.IO.Directory.GetFiles(journalDir, "journal_*.jsonl").OrderBy(f => f))
+            {                    foreach (var line in Core.Logging.TradeJournal.ReadLinesShared(file))
+                {
+                    if (!line.Contains("FX_ORDER")) continue;
+                    try
+                    {
+                        // JSON envelope first, Details payload second — the
+                        // escaped-quote raw text is never string-surgered.
+                        using var env = System.Text.Json.JsonDocument.Parse(line);
+                        if (!env.RootElement.TryGetProperty("Details", out var det)) continue;
+                        var text = det.GetString();
+                        var brace = text?.IndexOf('{') ?? -1;
+                        if (brace < 0) continue;
+                        using var doc = System.Text.Json.JsonDocument.Parse(text![brace..]);
+                        var r = doc.RootElement;
+                        var order = r.TryGetProperty("Order", out var o) && o.ValueKind == System.Text.Json.JsonValueKind.Number ? o.GetInt64() : 0;
+                        var deal = r.TryGetProperty("Deal", out var d) && d.ValueKind == System.Text.Json.JsonValueKind.Number ? d.GetInt64() : 0;
+                        if (order != ticket && deal != ticket) continue;
+                        if (r.TryGetProperty("Signal", out var s) && s.ValueKind == System.Text.Json.JsonValueKind.String)
+                        {
+                            found = s.GetString();
+                        }
+                    }
+                    catch (System.Text.Json.JsonException) { }
+                }
+            }
+            return found;
+        }
+        catch
+        {
+            return null;   // best-effort substrate
+        }
+    }
+
     /// <summary>The structural R unit an engine-owned ticket was sized
     /// with, read back from the FX_ORDER journal (the restart reseed — the
     /// in-memory <see cref="_sizedStops"/> map dies with the process, the
@@ -127,8 +255,7 @@ public sealed class FxEngineHost : IDisposable
             if (!System.IO.Directory.Exists(journalDir)) return 0;
             var found = 0.0;
             foreach (var file in System.IO.Directory.GetFiles(journalDir, "journal_*.jsonl").OrderBy(f => f))
-            {
-                foreach (var line in System.IO.File.ReadLines(file))
+            {                    foreach (var line in Core.Logging.TradeJournal.ReadLinesShared(file))
                 {
                     if (!line.Contains("FX_ORDER")) continue;
                     try
@@ -210,10 +337,42 @@ public sealed class FxEngineHost : IDisposable
     /// this seam.</summary>
     private readonly Func<DateTimeOffset> _clock;
 
+    /// <summary>Durable soak counters (null in bare tests): the GO LIVE bar
+    /// accrues across restarts instead of dying with the process.</summary>
+    private readonly PaperSoakLedger? _soakLedger;
+
+    /// <summary>Feed-freshness threshold: hold new ENTRIES once the venue's
+    /// newest bar is older than this many seconds. Default 300 (five M1
+    /// bars) — a live tape never lets a forming bar age past ~60s, while a
+    /// closed market leaves the book frozen for hours.
+    ///
+    /// This is the guard the dead-tape ATR floor CANNOT provide: the floor
+    /// measures the volatility of frozen history, so a quiet-but-not-dead
+    /// Friday close (gold read ATR% 0.0248 vs the 0.02 floor) passes it
+    /// forever and re-fires the same signal every cycle on a closed market —
+    /// observed 2026-10-03, when XAUUSDmicro logged 55 identical signals and
+    /// pushed its paper soak to 51/10 while the venue was shut. Bar AGE is
+    /// the only honest test of "is this tape live".
+    ///
+    /// 0 disables the guard (test fixtures carry synthetic timestamps).
+    /// Risk management is NOT held: open positions are still managed.
+    /// Fail-closed — it can only suppress a decision, never produce one.</summary>
+    public int StaleBarSeconds { get; set; } = 300;
+
+    /// <summary>True while entries are held for a stale feed, so the hold is
+    /// journaled ONCE instead of once per cycle.</summary>
+    private bool _feedStaleLatched;
+
     /// <summary>The portfolio's shared webhook (null in bare tests): breach
     /// alerts are in-process and instant, minutes before the scheduled
     /// watcher can confirm the close.</summary>
     private readonly WebhookService? _webhook;
+
+    /// <summary>Optional persistent brain memory (null in bare tests):
+    /// supplies a bounded per-alpha confidence weight so measured training
+    /// evidence can tilt which alpha wins the vote. It can never place, size
+    /// or schedule — only re-rank an already-computed confidence.</summary>
+    private readonly FxBrainMemory? _memory;
 
     public FxEngineHost(
         Mt5BridgeClient mt5,
@@ -233,7 +392,9 @@ public sealed class FxEngineHost : IDisposable
         Func<string, double, double>? smallAccountClamp = null,
         TimeSpan cycleOffset = default,
         string? shadowLedgerPath = null,
-        Func<DateTimeOffset>? clock = null)
+        PaperSoakLedger? soakLedger = null,
+        Func<DateTimeOffset>? clock = null,
+        FxBrainMemory? memory = null)
     {
         _cycleOffset = cycleOffset;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
@@ -243,6 +404,7 @@ public sealed class FxEngineHost : IDisposable
         _mt5 = mt5;
         _journal = journal;
         _webhook = webhook;
+        _memory = memory;
         Symbol = symbol;
         _killSwitchEngaged = killSwitchEngaged;
         _lotsCap = lotsCap;
@@ -258,8 +420,59 @@ public sealed class FxEngineHost : IDisposable
         _shadowLedger = shadowLedgerPath is null
             ? null
             : new Core.Fx.FxShadowLedger(shadowLedgerPath);
+
+        // Cross-session soak: restore this symbol's accrued paper signals
+        // BEFORE the first cycle, so the GO LIVE bar reads the evidence the
+        // journal already holds instead of a fresh zero. Two outcomes are
+        // journaled — a restore (progress kept) and a drop (the ledger was
+        // stamped by another build, which is evidence for that engine, not
+        // this one). Silence would leave the operator guessing why the bar
+        // moved between launches.
+        _soakLedger = soakLedger;
+        if (soakLedger is { } soak)
+        {
+            PaperSignalsSeen = soak.Seen(symbol);
+            PaperSoakRestored = PaperSignalsSeen;
+            PaperSoakInvalidatedBuild = soak.InvalidatedScope;
+            PaperSoakInvalidatedAccount = soak.InvalidatedAccount;
+            if (soak.InvalidatedScope is { } oldScope)
+            {
+                Journal("FX_MODE",
+                    $"paper soak counters reset — build changed since {oldScope} (now {VersionInfo.Stamp})",
+                    "{}");
+            }
+            else if (soak.InvalidatedAccount is { } oldAccount)
+            {
+                // Account switch: the soak restarts with the account, so a
+                // bar that fell back to zero is explained instead of reading
+                // as lost progress.
+                Journal("FX_MODE",
+                    $"paper soak counters reset — account changed since {oldAccount}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        DroppedAccount = oldAccount,
+                        Build = VersionInfo.Stamp,
+                    }));
+            }
+            else if (PaperSignalsSeen > 0)
+            {
+                Journal("FX_MODE",
+                    $"paper soak restored {PaperSignalsSeen}/{PaperSoakSignalsRequired} on {symbol} (build {VersionInfo.Stamp})",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Symbol = symbol,
+                        Restored = PaperSignalsSeen,
+                        Required = PaperSoakSignalsRequired,
+                        Build = VersionInfo.Stamp,
+                    }));
+            }
+        }
         _engine = new FxEngine(symbol, Timeframe, Journal, lotsCap: (double)_lotsCap(), riskFraction: riskFraction,
-            equityProvider: () => _lastEquity);
+            equityProvider: () => _lastEquity,
+            // Memory tilt: the alpha's own confidence stays the journaled
+            // value; this weight only re-ranks the winner. Null memory =
+            // 1.0 for everyone, i.e. the raw-confidence comparison.
+            confidenceWeight: _memory is null ? null : alpha => _memory.ConfidenceWeight(symbol, alpha));
         // The canonical 20-family roster (FxFamilies.All): the engine picks
         // the highest-confidence speaker per regime, so twenty voices widen
         // the vote without touching the risk model.
@@ -299,6 +512,38 @@ public sealed class FxEngineHost : IDisposable
                 _cycleRunning = false;
             }
         };
+
+        // ── THE FLOOR WATCH (between cycles) ───────────────────────────
+        // The 60s cycle above is the source of truth, but a locked floor
+        // can be shot through inside one window. This secondary timer
+        // never runs a cycle and never journals the profit snapshot — it
+        // only feeds a FRESH tick to guards that hold a locked floor, and
+        // defers entirely while a cycle is running.
+        _floorWatchTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(FloorWatchIntervalSeconds),
+        };
+        _floorWatchTimer.Tick += async (_, _) =>
+        {
+            try
+            {
+                await RunFloorWatchTickAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                // Opportunistic accelerator: the 60s cycle still owns the
+                // position. Journal only when the failure CHANGES so a
+                // persistent fault cannot flood the log every 5 seconds.
+                var msg = ex.GetBaseException().Message;
+                if (msg != _floorWatchLastError)
+                {
+                    _floorWatchLastError = msg;
+                    Journal("FX_FLOOR",
+                        $"floor watch tick failed (cycle still owns protection): {msg}",
+                        System.Text.Json.JsonSerializer.Serialize(new { Error = msg }));
+                }
+            }
+        };
     }
 
     public void Start()
@@ -309,6 +554,7 @@ public sealed class FxEngineHost : IDisposable
         }
 
         _timer.Start();
+        _floorWatchTimer.Start();
         if (Supervisor.SessionStartBalance is null)
         {
             _ = AnchorSupervisorAsync();   // first host to start anchors; siblings share
@@ -369,7 +615,11 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
-    public void Stop() => _timer.Stop();
+    public void Stop()
+    {
+        _timer.Stop();
+        _floorWatchTimer.Stop();
+    }
 
     public void GoLive()
     {
@@ -421,6 +671,11 @@ public sealed class FxEngineHost : IDisposable
         _busy = true;
         try
         {
+            // Seed the recent-tape windows BEFORE anything can journal a
+            // close this cycle: the seeder replays history, and a close
+            // journaled first would be counted twice (once by the replay,
+            // once by RecordSettled).
+            EnsureRecentTapeSeeded();
             var candles = await _mt5.GetCandlesAsync(Symbol, Timeframe, 120).ConfigureAwait(true);
             if (candles.Count < 35)
             {
@@ -462,6 +717,54 @@ public sealed class FxEngineHost : IDisposable
             // A transient halt (bridge/kill/governor) that has recovered.
             Supervisor.ClearTransientHalts();
 
+            // Feed-freshness gate: hold NEW entries when the newest bar has
+            // aged past the threshold (weekend, holiday, stalled feed). The
+            // regime layer cannot catch this — it only reads the frozen
+            // bars themselves, which can still look like a healthy trend.
+            var cycleEpoch = _clock().ToUnixTimeSeconds();
+            var barAgeSeconds = cycleEpoch - bars[^1].Time;
+            if (StaleBarSeconds > 0 && barAgeSeconds > StaleBarSeconds)
+            {
+                if (!_feedStaleLatched)
+                {
+                    _feedStaleLatched = true;
+                    Journal("FX_MODE",
+                        $"holding entries — feed stale: newest {Symbol} bar is " +
+                        $"{TimeSpan.FromSeconds(Math.Max(0, barAgeSeconds)).TotalMinutes:0} min old " +
+                        $"(market closed?); entries resume when the tape moves",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Symbol,
+                            BarAgeSeconds = barAgeSeconds,
+                            ThresholdSeconds = StaleBarSeconds,
+                            NewestBarUtc = DateTimeOffset.FromUnixTimeSeconds(bars[^1].Time).ToString("o"),
+                        }));
+                    StatusChanged?.Invoke($"holding — newest bar " +
+                        $"{TimeSpan.FromSeconds(Math.Max(0, barAgeSeconds)).TotalMinutes:0} min old (market closed?)");
+                }
+
+                // Risk management still runs: an open position is managed
+                // even while entries are held (and the venue refuses any
+                // close it cannot fill). Soak is untouched — no decision,
+                // no signal, no credit.
+                await ManageOwnedPositionsAsync(bars, FxRegime.LowLiquidity).ConfigureAwait(true);
+                return;
+            }
+
+            if (_feedStaleLatched)
+            {
+                _feedStaleLatched = false;
+                Journal("FX_MODE",
+                    $"feed fresh — newest {Symbol} bar is {Math.Max(0, barAgeSeconds)}s old; entries resumed",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Symbol,
+                        BarAgeSeconds = barAgeSeconds,
+                        ThresholdSeconds = StaleBarSeconds,
+                    }));
+                StatusChanged?.Invoke("feed fresh — entries resumed");
+            }
+
             var decision = _engine.RunOnce(_clock(), bars, bid, ask);
             LastDecision = decision;
 
@@ -471,7 +774,12 @@ public sealed class FxEngineHost : IDisposable
             // this the counter never advanced and GO LIVE could never fire.
             if (CountsTowardSoak(decision, _engine.IsLive))
             {
-                PaperSignalsSeen++;
+                // Persist as we count: the ledger takes the higher of the
+                // in-memory count and the stored one, so a lost write can
+                // only understate the soak — never manufacture progress.
+                PaperSignalsSeen = _soakLedger is { } soakLedger
+                    ? soakLedger.Record(Symbol, PaperSignalsSeen)
+                    : PaperSignalsSeen + 1;
                 Journal("FX_MODE",
                     $"paper soak {PaperSignalsSeen}/{PaperSoakSignalsRequired} on {Symbol}",
                     System.Text.Json.JsonSerializer.Serialize(new
@@ -491,6 +799,49 @@ public sealed class FxEngineHost : IDisposable
             if (decision.Action is FxDecisionAction.Ordered or FxDecisionAction.PaperExecuted
                 && decision.Signal is not null)
             {
+                // Entry-quality gate: below the operator's floor the signal
+                // is observed (soaked, journaled) but not traded. Placed
+                // BEFORE the cooldown so a refused entry never consumes the
+                // dispatch window a qualifying one would.
+                // Recent-tape roster gate (ROSTER-POLICY §2-4): a family
+                // whose LAST WindowN settled trades on THIS symbol are clearly
+                // negative — two consecutive failing evaluations — is cut from
+                // the symbol's roster. Lifetime memory may only tilt weights,
+                // never cut (rule 1); n < WindowN always keeps (default-keep).
+                // Same refusal shape and placement as the confidence gate
+                // below: observed, journaled, not traded — and a refusal never
+                // consumes the dispatch cooldown.
+                EnsureRecentTapeSeeded();
+                if (_recentTape.IsExcluded(Symbol, decision.Signal.Alpha))
+                {
+                    var tapeMean = _recentTape.WindowMeanR(Symbol, decision.Signal.Alpha);
+                    Journal("FX_ORDER",
+                        $"roster recent-tape excluded — {decision.Signal.Alpha} mean {(tapeMean is { } m ? m.ToString("+0.00;-0.00", System.Globalization.CultureInfo.InvariantCulture) : "?")}R over last {_recentTape.WindowCount(Symbol, decision.Signal.Alpha)} settled, not dispatched",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Symbol,
+                            Alpha = decision.Signal.Alpha,
+                            WindowN = Core.Fx.FxRecentTape.WindowN,
+                            WindowMeanR = tapeMean is { } mm ? Core.Fx.FxJson.Sanitize(mm) : (double?)null,
+                            FailStreak = _recentTape.FailStreak(Symbol, decision.Signal.Alpha),
+                        }));
+                    return;
+                }
+
+                if (decision.Signal.Confidence < MinEntryConfidence)
+                {
+                    Journal("FX_ORDER",
+                        $"confidence gate — {decision.Signal.Alpha} conf {decision.Signal.Confidence:0.00} < min {MinEntryConfidence:0.00}, not dispatched",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Symbol,
+                            Alpha = decision.Signal.Alpha,
+                            Confidence = FxJson.Sanitize(decision.Signal.Confidence),
+                            MinEntryConfidence,
+                        }));
+                    return;
+                }
+
                 var now = DateTimeOffset.UtcNow;
                 if (OrderCooldownActive(_lastOrderDispatchUtc, now, OrderCooldown))
                 {
@@ -747,6 +1098,9 @@ public sealed class FxEngineHost : IDisposable
             {
                 // The thesis engine needs the regime the trade was born in.
                 _entryRegimes[ticket] = decision.Regime.Regime;
+                // The roster the recent-tape filter bins this trade under —
+                // the fill row journals the same Signal for restarts.
+                _familiesByTicket[ticket] = decision.Signal.Alpha;
                 // Remember the structural R unit: a restart must re-seed the
                 // exit brain's ruler from the journal, not from a normalized
                 // venue SL.
@@ -782,6 +1136,25 @@ public sealed class FxEngineHost : IDisposable
     /// venue's SL instead lets MT5's min-stop normalization silently
     /// shrink the unit and re-arm the MAE emergency on spread noise.</summary>
     private readonly Dictionary<long, double> _sizedStops = new();
+
+    /// <summary>The alpha family each engine-owned ticket was entered with
+    /// (Signal at dispatch; the fill row's Signal otherwise — the restart
+    /// source, same lazy pattern as SizedStopFromJournal). Bins settled
+    /// outcomes into the recent-tape cells.</summary>
+    private readonly Dictionary<long, string> _familiesByTicket = new();
+
+    /// <summary>Recent-tape expectancy cells (ROSTER-POLICY items 2-4):
+    /// every close writer that knows its R Records here; the entry gate
+    /// next to the confidence gate consults IsExcluded. Seeded from the
+    /// journal once per process so deploys don't reset the windows.</summary>
+    private readonly Core.Fx.FxRecentTape _recentTape = new();
+
+    private readonly object _tapeSeedLock = new();
+    private bool _recentTapeSeeded;
+
+    /// <summary>Test seam: the recent-tape cells (pre-seed exclusions and
+    /// inspect windows without touching the live journal).</summary>
+    internal Core.Fx.FxRecentTape RecentTape => _recentTape;
 
     /// <summary>Tickets whose TP1 rung is ARMED (ticket → the rung price
     /// first sighted once the trade had banked ≥1R of peak). The ladder
@@ -819,6 +1192,13 @@ public sealed class FxEngineHost : IDisposable
     /// armed before the gate fired (restart ordering).</summary>
     private readonly HashSet<long> _tp1GateSkippedTickets = new();
 
+    /// <summary>Tickets whose TP1 arming was held by the overdue plan-%
+    /// review circuit breaker (Tp1PlanBreaker): one TP1-HOLD row per ticket,
+    /// per process lifetime. The set only gates the journal line — arming
+    /// resumes by itself once the breaker clears, because eligibility is
+    /// re-evaluated every cycle and a held ticket was never armed.</summary>
+    private readonly HashSet<long> _tp1BreakerSkippedTickets = new();
+
     /// <summary>TP1 partial prototype master switch (AppSettings, default
     /// OFF). When armed, the Profit Brain's TP1 rung is EXECUTED once per
     /// ticket through the same close path the Exit Brain uses — the
@@ -834,6 +1214,31 @@ public sealed class FxEngineHost : IDisposable
     /// default outside that collection.</summary>
     public static bool ExecuteTp1Partials { get; set; }
 
+    /// <summary>Overdue plan-% review circuit breaker (Tp1PlanBreaker): when
+    /// this returns true the TP1 rung is HELD — no arm, no bank — until the
+    /// review is acted on or cleared. Injected by the app so the engine stays
+    /// filesystem-free in tests; null = the breaker is off.
+    /// TEST-SAFETY: process-wide static, restore in a finally block.</summary>
+    public static Func<bool>? Tp1PlanReviewHold { get; set; }
+
+    /// <summary>Operator-armed TP1 plan-% override (AppSettings, null = the
+    /// brain's own allocation plan). When set, the engine replaces the plan's
+    /// TP1 leg with this percentage for eligibility, lot sizing and the ARM/
+    /// EXEC journal rows — the one-click arm's path from the gate's advice to
+    /// an effective plan. The dashboard's Arm action writes it and Revert
+    /// clears it; a value of 0 makes the rung ineligible ([0,100] clamped at
+    /// load). TEST-SAFETY: process-wide static, restore in a finally block.</summary>
+    public static double? Tp1PlanPctOverride { get; set; }
+
+    /// <summary>Minimum entry confidence (AppSettings, default 0 = off).
+    /// A winning signal whose RAW confidence falls below this is observed —
+    /// journaled as FX_SIGNAL and counted toward the paper soak — but never
+    /// dispatched: the host refuses it with an FX_ORDER "confidence gate"
+    /// row instead of paying spread on a coin flip (the training simulator's
+    /// MinConfidence, enforced live and measured on the tape before adoption).
+    /// TEST-SAFETY: process-wide static, restore in a finally block.</summary>
+    public static double MinEntryConfidence { get; set; }
+
     /// <summary>The brain's own book: lots it currently tracks as open.
     /// A FLOOR for the portfolio exposure guard — venue reads can degrade
     /// to an empty list under congestion (the 2026-09-29 cap failure), but
@@ -841,6 +1246,27 @@ public sealed class FxEngineHost : IDisposable
     /// Deliberately conservative: entries never shrink it below the truth
     /// for long, and pruning only happens on trusted reads.</summary>
     public double LocalBookLots => _exitStates.Values.Sum(s => s.InitialLots);
+
+    /// <summary>Tickets this host currently tracks — the portfolio-level
+    /// journal-book reconcile must NOT proof-close a ticket any host still
+    /// manages (the host's own prune writes its close row); a torn read
+    /// during a concurrent cycle write degrades to "tracks nothing", which
+    /// the two-pass reconcile absorbs before it ever writes a close.</summary>
+    internal IReadOnlyCollection<long> TrackedTickets
+    {
+        get
+        {
+            try
+            {
+                return _exitStates.Keys.ToArray();
+            }
+            catch (InvalidOperationException)
+            {
+                // Dictionary mutated mid-enumeration by the host's cycle.
+                return Array.Empty<long>();
+            }
+        }
+    }
 
     /// <summary>One-shot fetch of this symbol's venue spec from the bridge
     /// /symbols snapshot. Fire-and-forget and retry-safe: failures leave the
@@ -928,14 +1354,130 @@ public sealed class FxEngineHost : IDisposable
             var owned = positions
                 .Where(p => Core.Fx.FxExitBrain.Owns(p.Comment) && p.Symbol == Symbol)
                 .ToList();
-        if (owned.Count == 0 && _floorGuards.Count == 0)
+        if (owned.Count == 0)
         {
-            // Nothing to manage AND no floor protection in flight. When a
-            // guard EXISTS, the pass continues even with an empty book: the
-            // submitted-exit reconciliation below is how an exit becomes
-            // EXIT_CONFIRMED — skipping it on the very cycle the position
-            // vanished would leave protection unconfirmed forever.
-            return;
+            // Nothing to manage. Both bookkeeping duties here used to be
+            // gated behind `guards.Count == 0`, and that gate itself
+            // stranded the book: EVERY managed position gets a guard
+            // object on first sighting, so a venue-side vanish left the
+            // position's OWN never-submitted guard behind — which skipped
+            // this block, while the confirmation loop below only fires
+            // for a non-empty read or an ExitSubmitted guard. On a fully
+            // flat venue neither held: 2026-10-07 18:49-19:23 UTC,
+            // #8792100270's guard blocked its own prune for 35 minutes —
+            // _exitStates (and with it TrackedTickets, which the
+            // portfolio reconcile trusts) pinned at a position nobody
+            // held, until a restart wiped the guard.
+            //
+            // Now, when the venue PROVES flat (ProvenLiveTicketsAsync — a
+            // bare empty read is the congestion lie the local book exists
+            // to survive), clear the guards the venue disproves AND retire
+            // the stale tracking entries — except a SUBMITTED guard's
+            // ticket, whose close line belongs to the confirmation loop
+            // (exactly one "closed #" row per ticket, same deferral the
+            // healthy-read prune below uses). Fall through only while such
+            // a guard remains.
+            if (_exitStates.Count > 0 || _entryRegimes.Count > 0
+                || _profitFloors.Count > 0 || _floorGuards.Count > 0)
+            {
+                var (live, proof) = await ProvenLiveTicketsAsync(positions).ConfigureAwait(true);
+                if (live is not null)
+                {
+                    // Never-submitted (or failed) guards for tickets the
+                    // venue no longer holds: pure memory — the close line
+                    // for their ticket comes from the prune right below.
+                    foreach (var stale in _floorGuards
+                        .Where(kv => !live.Contains(kv.Key)
+                                  && kv.Value.State != Core.Fx.FxFloorState.ExitSubmitted)
+                        .Select(kv => kv.Key).ToList())
+                    {
+                        _floorGuards[stale].MarkReset();
+                        _floorGuards.Remove(stale);
+                        _floorArmedAlerted.Remove(stale);
+                    }
+
+                    foreach (var gone in _exitStates.Keys.Where(k => !live.Contains(k)).ToList())
+                    {
+                        // Snapshot the state BEFORE the removal below — the
+                        // close row's settled R and the recent-tape feed need
+                        // entry/side/stop after the book forgets the ticket.
+                        var closedState = _exitStates.TryGetValue(gone, out var cs) ? cs : null;
+                        // A submitted floor exit's close line belongs to the
+                        // confirmation loop below — deferring here keeps
+                        // exactly one "closed #" row per ticket.
+                        var deferredToReconcile = _floorGuards.TryGetValue(gone, out var prunedGuard)
+                            && prunedGuard.State == Core.Fx.FxFloorState.ExitSubmitted;
+                        _exitStates.Remove(gone);
+                        _entryRegimes.Remove(gone);
+                        _profitFloors.Remove(gone);
+                        if (!deferredToReconcile)
+                        {
+                            // THE CLOSE LINE (the second half of the limitation):
+                            // tickets the venue dropped without an app-driven
+                            // close (SL hits, manual flattens) never got a
+                            // "closed #" row, so FxJournalBook held the fill open
+                            // until the ops script wrote one by hand. Same shape
+                            // the ensemble's full close writes — every downstream
+                            // parser (FxJournalBook, trade_lifecycle,
+                            // watch_profit_floor, backfill_shadow_ledger) sees a
+                            // normal close.
+                            // No tick on this early path — bars[^1].Close is
+                            // the codebase's own price fallback (the exit brain
+                            // uses it identically), so SL-hit retires feed the
+                            // recent tape now instead of waiting for the next
+                            // restart's reseed replay.
+                            var retireR3 = closedState is null
+                                ? (double?)null
+                                : Core.Fx.FxRealizedR.Compute(
+                                    closedState.EntryPrice, bars[^1].Close,
+                                    closedState.InitialStopDistance > 0
+                                        ? closedState.InitialStopDistance
+                                        : closedState.RiskPerLot,
+                                    closedState.Side);
+                            if (retireR3 is { } retireR3v)
+                            {
+                                RecordSettled(gone, Symbol, retireR3v);
+                            }
+                            _familiesByTicket.Remove(gone);
+                            Journal("FX_EXIT",
+                                $"#{gone}: closed #{gone} — broker no longer holds the ticket; " +
+                                $"stale tracking retired ({proof})",
+                                System.Text.Json.JsonSerializer.Serialize(new
+                                {
+                                    Ticket = gone,
+                                    Partial = false,
+                                    Lots = (double?)null,
+                                    Retcode = 10009,
+                                    Reconciled = true,
+                                    Proof = proof,
+                                    RealizedR = retireR3 is { } r3 ? Core.Fx.FxJson.Sanitize(r3) : (double?)null,
+                                    OutcomeSource = retireR3 is not null ? "profit-snapshot" : "unknown",
+                                }));
+                        }
+                    }
+
+                    // Orphaned regime/floor memory whose exit state was
+                    // already dropped: same proven-flat sweep, no close line
+                    // (the book is _exitStates).
+                    foreach (var k in _entryRegimes.Keys.Where(k => !live.Contains(k)).ToList())
+                    {
+                        _entryRegimes.Remove(k);
+                    }
+                    foreach (var k in _profitFloors.Keys.Where(k => !live.Contains(k)).ToList())
+                    {
+                        _profitFloors.Remove(k);
+                    }
+                }
+            }
+
+            // Fall through ONLY for a submitted exit awaiting confirmation
+            // (the loop below's gate — readsAgree + ExitSubmitted — is
+            // satisfied on this flat book). Everything else stops here:
+            // nothing to manage, book as current as the venue can prove.
+            if (!_floorGuards.Values.Any(g => g.State == Core.Fx.FxFloorState.ExitSubmitted))
+            {
+                return;
+            }
         }
 
         var atr = owned.Count > 0 && bars.Count >= 15
@@ -1024,71 +1566,8 @@ public sealed class FxEngineHost : IDisposable
 
             if (guardVerdict.Command == Core.Fx.FxFloorCommand.ExecuteExit)
             {
-                Journal("FX_FLOOR",
-                    $"{p.Symbol} #{p.Ticket}: {guardVerdict.Reason}",
-                    System.Text.Json.JsonSerializer.Serialize(new
-                    {
-                        Ticket = p.Ticket,
-                        Symbol = p.Symbol,
-                        Direction = p.Side,
-                        OriginalRisk = Core.Fx.FxJson.Sanitize(st.RiskPerLot),
-                        CurrentR = Core.Fx.FxJson.Sanitize(guardVerdict.ExecutableR),
-                        PeakR = Core.Fx.FxJson.Sanitize(guardVerdict.PeakR),
-                        ProtectedFloorR = Core.Fx.FxJson.Sanitize(guardVerdict.FloorR),
-                        ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
-                        FloorState = guardVerdict.State.ToString(),
-                        EventId = guardVerdict.EventId,
-                        ExitReason = "hard profit floor breach",
-                    }));
-
-                // Submit with an in-cycle retry ladder; reconciliation and
-                // any further retries continue on the next cycle.
-                for (var attempt = 1; attempt <= Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts; attempt++)
-                {
-                    var close = await _mt5.ClosePositionAsync(p.Ticket, null).ConfigureAwait(true);
-                    if (close.Ok)
-                    {
-                        guard.MarkSubmitted(close.Order?.ToString() ?? close.Deal?.ToString() ?? "?");
-                        _webhook?.PostRiskRail(
-                            $"🚨 HARD PROFIT FLOOR BREACH — #{p.Ticket}",
-                            $"{p.Symbol} | Current: {guardVerdict.ExecutableR:+0.0;-0.0}R | Floor: {guardVerdict.FloorR:0.0}R " +
-                            $"(peak {guardVerdict.PeakR:0.0}R). Hard exit submitted (deal {close.Deal ?? close.Order}).");
-                        Journal("FX_FLOOR",
-                            $"{p.Symbol} #{p.Ticket}: PROFIT FLOOR EXIT SUBMITTED — deal {close.Deal ?? close.Order} " +
-                            $"(event {guardVerdict.EventId}, attempt {attempt})",
-                            System.Text.Json.JsonSerializer.Serialize(new
-                            {
-                                Ticket = p.Ticket,
-                                EventId = guardVerdict.EventId,
-                                ExitOrderId = close.Order,
-                                Deal = close.Deal,
-                                BrokerResponse = close.RetcodeName,
-                                Attempt = attempt,
-                                ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
-                            }));
-                        break;
-                    }
-
-                    Journal("FX_FLOOR",
-                        $"{p.Symbol} #{p.Ticket}: PROFIT FLOOR EXIT FAILED — {close.RetcodeName} " +
-                        $"(attempt {attempt}/{Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts}); protection remains active, retrying",
-                        System.Text.Json.JsonSerializer.Serialize(new
-                        {
-                            Ticket = p.Ticket,
-                            EventId = guardVerdict.EventId,
-                            BrokerResponse = close.RetcodeName,
-                            Attempt = attempt,
-                        }));
-                }
-
-                if (guard.State != Core.Fx.FxFloorState.ExitSubmitted)
-                {
-                    guard.MarkFailed();
-                    _webhook?.PostRiskRail(
-                        $"❌ PROFIT FLOOR EXIT FAILED — #{p.Ticket}",
-                        $"{p.Symbol} | All {Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts} submit attempts refused. " +
-                        $"Protection remains active at {guardVerdict.FloorR:0.0}R — retrying next cycle. NEVER reverting to HOLD.");
-                }
+                await SubmitFloorExitAsync(p.Ticket, p.Symbol, p.Side, st.RiskPerLot,
+                    guard, guardVerdict, executablePrice).ConfigureAwait(true);
             }
 
 
@@ -1244,10 +1723,15 @@ public sealed class FxEngineHost : IDisposable
             // the peak and out-executes any static rung — bank the rung
             // there and you sell the floor's better exit at 25% of the
             // book. Skip arming; let the floor own the partial.
+            // The plan % the rung is armed/sized at: the operator's one-click
+            // arm override when present, else the brain's own allocation leg.
+            // A 0% override makes the rung ineligible below, which is exactly
+            // "do not take a partial" — the fail-safe reading of a 0% call.
+            var planPct = Tp1PlanPctOverride ?? profit.Allocation.Tp1;
             var tp1ArmEligible = ExecuteTp1Partials
                 && _venueSpec is not null
                 && decision.Action is not ("full" or "partial")
-                && profit.Allocation.Tp1 >= 10
+                && planPct >= 10
                 && st.MfeR >= 1.0;
             var tp1GateBlocked = tp1ArmEligible
                 && profit.TrailingMode == "STRUCTURE_TRAIL";
@@ -1261,11 +1745,29 @@ public sealed class FxEngineHost : IDisposable
                     {
                         Ticket = p.Ticket,
                         TrailingMode = profit.TrailingMode,
-                        PlanPct = profit.Allocation.Tp1,
+                        PlanPct = planPct,
+                    }));
+            }
+            // CIRCUIT BREAKER (Tp1PlanBreaker): an overdue plan-% review
+            // means the allocation is under review — do not arm further
+            // rungs until it is acted on or cleared. The row records the
+            // held near-miss once per ticket.
+            var tp1BreakerBlocked = tp1ArmEligible
+                && Tp1PlanReviewHold?.Invoke() == true;
+            if (tp1BreakerBlocked && _tp1BreakerSkippedTickets.Add(p.Ticket))
+            {
+                Journal("FX_PROFIT",
+                    $"TP1-HOLD: overdue plan-% review open — rung not armed for #{p.Ticket}",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = p.Ticket,
+                        Reason = "plan-review-overdue",
+                        PlanPct = planPct,
                     }));
             }
             if (tp1ArmEligible
                 && !tp1GateBlocked
+                && !tp1BreakerBlocked
                 && _venueSpec is { } tp1Spec)
             {
                 var tp1 = profit.Tp1;
@@ -1277,27 +1779,27 @@ public sealed class FxEngineHost : IDisposable
                     armed = first.Price;
                     Journal("FX_PROFIT",
                         $"TP1-ARM: rung {first.Kind} {first.Price:0.#####} ({first.R:+0.0;-0.0}R) " +
-                        $"armed for #{p.Ticket} ({profit.Allocation.Tp1:0}% plan) — executes when price crosses",
+                        $"armed for #{p.Ticket} ({planPct:0}% plan) — executes when price crosses",
                         System.Text.Json.JsonSerializer.Serialize(new
                         {
                             Ticket = p.Ticket,
                             Target = first.Kind,
                             TargetPrice = Core.Fx.FxJson.Sanitize(first.Price),
                             TargetR = Core.Fx.FxJson.Sanitize(first.R),
-                            PlanPct = profit.Allocation.Tp1,
+                            PlanPct = planPct,
                         }));
                 }
 
                 var crossed = st.Side == "buy" ? price >= armed : (armed > 0 && price <= armed);
                 if (armed > 0 && crossed && _tp1ExecutedTickets.Add(p.Ticket))
                 {
-                    var lots = SnapLots(p.Volume * profit.Allocation.Tp1 / 100.0);
+                    var lots = SnapLots(p.Volume * planPct / 100.0);
                     if (lots > 0 && lots < p.Volume)
                     {
                         var tp1Close = await _mt5.ClosePositionAsync(p.Ticket, lots).ConfigureAwait(true);
                         Journal("FX_PROFIT",
                             tp1Close.Ok
-                                ? $"TP1-EXEC: banked {lots:0.##} lots ({profit.Allocation.Tp1:0}% plan) of #{p.Ticket} at the armed rung " +
+                                ? $"TP1-EXEC: banked {lots:0.##} lots ({planPct:0}% plan) of #{p.Ticket} at the armed rung " +
                                   $"{armed:0.#####} — allocation graded live"
                                 : $"TP1-EXEC refused for #{p.Ticket}: {tp1Close.RetcodeName}",
                             System.Text.Json.JsonSerializer.Serialize(new
@@ -1305,7 +1807,7 @@ public sealed class FxEngineHost : IDisposable
                                 Ticket = p.Ticket,
                                 Executed = tp1Close.Ok,
                                 Lots = lots,
-                                PlanPct = profit.Allocation.Tp1,
+                                PlanPct = planPct,
                                 ArmedPrice = Core.Fx.FxJson.Sanitize(armed),
                                 tp1Close.Retcode,
                                 VenueSpec = new { tp1Spec.ContractSize, tp1Spec.VolumeStep },
@@ -1331,6 +1833,15 @@ public sealed class FxEngineHost : IDisposable
                     {
                         Ticket = p.Ticket,
                         Partial = lots.HasValue,
+                        // Settled R on a FULL close: the same ProfitR the
+                        // shadow ledger's `won` reads (decision-time price ≈
+                        // fill) — the measurement substrate for fx_win_rate
+                        // and the recent-tape feed. Partial/refused closes
+                        // have no settled outcome yet → never invented.
+                        RealizedR = close.Ok && !lots.HasValue
+                            ? Core.Fx.FxJson.Sanitize(decision.ProfitR)
+                            : (double?)null,
+                        OutcomeSource = close.Ok && !lots.HasValue ? "close-price" : "unknown",
                         Lots = lots,
                         close.Retcode,
                     }));
@@ -1342,11 +1853,28 @@ public sealed class FxEngineHost : IDisposable
                     // HWARANG's target-TP engine rides the same race at
                     // weight 0 — "extract at the target" is a hypothesis
                     // the same evidence bar must confirm or bury.
-                    var shadow = decision.Votes.Where(v => v.Weight == 0).ToList();
+                    // Drawdown rides at WEIGHT 2.0, so the weight-0 filter
+                    // below would drop it — and with it every drawdown
+                    // verdict on a full close (0 "full" rows across 11 full
+                    // closes: the engine graded nothing at the bar it is
+                    // measured by). Keep it in explicitly, the same shape
+                    // as the giveback add underneath.
+                    //
+                    // The giveback vote that rides IN the evaluation is
+                    // dropped here: the settled mirror below is the same
+                    // trade's giveback row, so keeping both wrote TWO
+                    // giveback rows per close (live: 14 rows for 11
+                    // tickets) — one trade counted twice toward the
+                    // promotion denominator. One row per engine per
+                    // settled close.
+                    var shadow = decision.Votes
+                        .Where(v => v.Engine == "drawdown"
+                                    || (v.Weight == 0 && v.Engine != "giveback"))
+                        .ToList();
                     shadow.Add(profit.TargetTpVote);
-                    // The giveback shadow voice rides the final evaluation
-                    // too, so a profit-floor SAVE can credit it (the plain
-                    // votes list above carries weight-0 engines only).
+                    // The settled giveback voice carries the drawdown
+                    // engine's peak→breach evidence, so a profit-floor
+                    // SAVE can credit it (Helped() rule 2).
                     shadow.Add(GivebackShadowVote(decision));
                     var won = decision.ProfitR > 0;
                     _shadowLedger?.Append(
@@ -1355,6 +1883,8 @@ public sealed class FxEngineHost : IDisposable
                         decision.Action, won, DateTimeOffset.UtcNow,
                         decision);
                     _exitStates.Remove(p.Ticket);
+                    RecordSettled(p.Ticket, Symbol, decision.ProfitR);
+                    _familiesByTicket.Remove(p.Ticket);
                     _entryRegimes.Remove(p.Ticket);
                     _profitFloors.Remove(p.Ticket);
                 }
@@ -1384,6 +1914,15 @@ public sealed class FxEngineHost : IDisposable
         // an empty read never shrinks the book. Cost: after a genuine
         // flatten the floor stays high until a non-empty read re-grounds
         // it — refusing trades is the safe direction.
+        //
+        // Reachability note (2026-10-08): `owned` derives from this cycle's
+        // own positions read — the same read the proven-flat prune above
+        // always runs first on a non-empty book — so this block's gone-set
+        // is normally already retired there. It fires only when the fresh
+        // confirm read below RACES the cycle read (position listed at cycle
+        // start, gone by the confirm fetch). Kept as the belt-and-suspenders
+        // twin with the same settled-R payload; its identical row shape was
+        // exercised via the proven-flat path's test.
         var confirm = await _mt5.GetPositionsAsync().ConfigureAwait(true);
         if (owned.Count > 0 && confirm.Count > 0
             && owned.Select(p => p.Ticket).ToHashSet()
@@ -1392,8 +1931,55 @@ public sealed class FxEngineHost : IDisposable
             var live = owned.Select(p => p.Ticket).ToHashSet();
             foreach (var gone in _exitStates.Keys.Where(k => !live.Contains(k)).ToList())
             {
+                // Snapshot the state BEFORE the removals below: the close
+                // row's snapshot R and the recent-tape feed need
+                // entry/side/stop after the book forgets the ticket.
+                var closedState = _exitStates.TryGetValue(gone, out var cs) ? cs : null;
+                // A submitted floor exit's close line belongs to the
+                // reconciliation below (it fires THIS cycle — confirm.Count
+                // > 0 gated this prune): deferring here keeps exactly one
+                // "closed #" row per ticket. Every other vanish (SL hit,
+                // refused-then-dropped close) has NO close line yet — write
+                // it now so the journal book retires the fill without the
+                // ops-layer reconcile.
+                var deferredToReconcile = _floorGuards.TryGetValue(gone, out var prunedGuard)
+                    && prunedGuard.State == Core.Fx.FxFloorState.ExitSubmitted;
                 _exitStates.Remove(gone);
                 _entryRegimes.Remove(gone);
+                _profitFloors.Remove(gone);
+                if (!deferredToReconcile)
+                {
+                    // Snapshot R: entry vs this cycle's mid over the sized
+                    // stop — SL hits and manual flattens retire here, so
+                    // their outcome feeds the recent tape too.
+                    var retireR = closedState is null
+                        ? (double?)null
+                        : Core.Fx.FxRealizedR.Compute(
+                            closedState.EntryPrice, mid,
+                            closedState.InitialStopDistance > 0
+                                ? closedState.InitialStopDistance
+                                : closedState.RiskPerLot,
+                            closedState.Side);
+                    if (retireR is { } retireRv)
+                    {
+                        RecordSettled(gone, Symbol, retireRv);
+                    }
+                    _familiesByTicket.Remove(gone);
+                    Journal("FX_EXIT",
+                        $"#{gone}: closed #{gone} — broker no longer holds the ticket; " +
+                        "stale tracking retired (healthy positions read)",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Ticket = gone,
+                            Partial = false,
+                            Lots = (double?)null,
+                            Retcode = 10009,
+                            Reconciled = true,
+                            Proof = "healthy positions read",
+                            RealizedR = retireR is { } rr4 ? Core.Fx.FxJson.Sanitize(rr4) : (double?)null,
+                            OutcomeSource = retireR is not null ? "profit-snapshot" : "unknown",
+                        }));
+                }
             }
         }
 
@@ -1449,15 +2035,66 @@ public sealed class FxEngineHost : IDisposable
                     // "floor-exit" tells FxExitShadow.Helped this was a
                     // save the giveback evidence itself drove home. Won:
                     // a save IS the win — the position closed with the
-                    // giveback prevented.
+                    // giveback prevented. The giveback MIRROR rides along
+                    // so the guard save credits giveback too — drawdown's
+                    // peak→breach evidence IS the giveback story, and
+                    // without the mirror every guard save starved the
+                    // giveback row (2026-09-30: 6 saves, 0 giveback rows).
+                    var guardEvidence =
+                        "hard profit floor save (guard-executed); peak " +
+                        g.PeakR.ToString("0.0") + "R → breach at " + g.BreachR.ToString("+0.0;-0.0") + "R";
                     _shadowLedger?.Append(
                         gone, Symbol,
-                        new[] { new Core.Fx.FxExitVote(
-                            "drawdown", 0.95, 0.0,
-                            "hard profit floor save (guard-executed); peak " +
-                            g.PeakR.ToString("0.0") + "R → breach at " + g.BreachR.ToString("+0.0;-0.0") + "R") },
+                        new[]
+                        {
+                            new Core.Fx.FxExitVote("drawdown", 0.95, 0.0, guardEvidence),
+                            new Core.Fx.FxExitVote("giveback", 0.95, 0.0,
+                                "giveback (shadow, guard save): mirror of the drawdown engine's evidence — " +
+                                guardEvidence),
+                        },
                         resolvedAction: "floor-exit", won: true,
                         DateTimeOffset.UtcNow);
+
+                    // THE CLOSE LINE: the floor's exit never wrote the
+                    // "closed #" row FxJournalBook parses, so the journal
+                    // book held the fill open — the exposure guard floored
+                    // at a stale book until the ops-layer reconcile +
+                    // restart (~2.5 min of refused trades after every floor
+                    // save). Same shape the ensemble's full close writes:
+                    // retire the ticket in the journal AND in the host's
+                    // own book, right here, no ops script in the loop.
+                    // Floor exits flatten AT the floor: entry vs this
+                    // cycle's mid over the sized stop — the honest snapshot
+                    // R (measurement + recent-tape feed).
+                    var floorR = _exitStates.TryGetValue(gone, out var fstate)
+                        ? Core.Fx.FxRealizedR.Compute(
+                            fstate.EntryPrice, mid,
+                            fstate.InitialStopDistance > 0 ? fstate.InitialStopDistance : fstate.RiskPerLot,
+                            fstate.Side)
+                        : (double?)null;
+                    if (floorR is { } floorRv)
+                    {
+                        RecordSettled(gone, Symbol, floorRv);
+                    }
+                    _familiesByTicket.Remove(gone);
+                    Journal("FX_EXIT",
+                        $"#{gone}: closed #{gone} — deal {g.ExitOrderId ?? "?"} " +
+                        "(profit floor exit confirmed by broker reconciliation)",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Ticket = gone,
+                            Partial = false,
+                            Lots = (double?)null,
+                            Retcode = 10009,
+                            Confirmed = true,
+                            RealizedR = floorR is { } fr2 ? Core.Fx.FxJson.Sanitize(fr2) : (double?)null,
+                            OutcomeSource = floorR is not null ? "profit-snapshot" : "unknown",
+                            EventId = g.EventId,
+                            ExitOrderId = g.ExitOrderId,
+                        }));
+                    _exitStates.Remove(gone);
+                    _entryRegimes.Remove(gone);
+                    _profitFloors.Remove(gone);
                 }
                 g.MarkReset();
                 _floorGuards.Remove(gone);
@@ -1495,6 +2132,46 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
+    /// <summary>Prove the venue is flat enough for this host to retire
+    /// stale tracking state — the in-app twin of the ops-layer
+    /// venue_is_flat gate (book_recovery.ps1: two empty /positions reads
+    /// AND equity == balance AND margin == 0). Returns the ticket set a
+    /// prune may trust as live, or null when flatness is NOT proven (never
+    /// prune — the safe direction is refusing trades, not freeing the
+    /// book). Two safe shapes:
+    /// (a) a NON-empty positions read — a degraded read degrades to EMPTY
+    ///     (never to a lie carrying rows), so absence from it is evidence;
+    /// (b) two agreeing EMPTY reads PLUS a settled account: equity ≈ balance
+    ///     AND margin == 0. The empty pair alone is the 2026-09-29
+    ///     congestion lie (/account probed fine while /positions degraded),
+    ///     so it only counts when the account independently says flat.
+    /// Missing account data or an absent margin field fails CLOSED.</summary>
+    private async Task<(HashSet<long>? Live, string Proof)> ProvenLiveTicketsAsync(
+        IReadOnlyList<Mt5Position> positions)
+    {
+        if (positions.Count > 0)
+        {
+            return (positions.Select(p => p.Ticket).ToHashSet(), "healthy positions read");
+        }
+
+        var second = await _mt5.GetPositionsAsync().ConfigureAwait(true);
+        if (second.Count > 0)
+        {
+            return (second.Select(p => p.Ticket).ToHashSet(), "healthy positions read");
+        }
+
+        var account = await _mt5.GetAccountAsync().ConfigureAwait(true);
+        if (account is not null
+            && account.Margin is { } margin && margin <= 1e-6
+            && Math.Abs(account.Equity - account.Balance) <= 0.01)
+        {
+            return (new HashSet<long>(),
+                "two agreeing empty reads + settled account (equity ≈ balance, margin 0)");
+        }
+
+        return (null, string.Empty);
+    }
+
     /// <summary>Snap an exit's lots to the venue's volume step (never below
     /// one step; /close validates the upper bound).</summary>
     private double SnapLots(double lots)
@@ -1521,10 +2198,147 @@ public sealed class FxEngineHost : IDisposable
     private static double PipSizeFor(double price) =>
         price >= 400 ? 0.1 : price >= 20 ? 0.01 : 0.0001;
 
+    /// <summary>The hard-floor breach handler: journal the command, then
+    /// the retry ladder; reconciliation and further retries continue on the
+    /// next cycle (or floor-watch tick). Shared by RunCycleAsync and
+    /// RunFloorWatchTickAsync so there is exactly ONE submit path.</summary>
+    private async Task SubmitFloorExitAsync(
+        long ticket, string symbol, string side, double riskPerLot,
+        Core.Fx.FxProfitFloorGuard guard, Core.Fx.FxFloorVerdict guardVerdict,
+        double executablePrice)
+    {
+        Journal("FX_FLOOR",
+            $"{symbol} #{ticket}: {guardVerdict.Reason}",
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Ticket = ticket,
+                Symbol = symbol,
+                Direction = side,
+                OriginalRisk = Core.Fx.FxJson.Sanitize(riskPerLot),
+                CurrentR = Core.Fx.FxJson.Sanitize(guardVerdict.ExecutableR),
+                PeakR = Core.Fx.FxJson.Sanitize(guardVerdict.PeakR),
+                ProtectedFloorR = Core.Fx.FxJson.Sanitize(guardVerdict.FloorR),
+                ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
+                FloorState = guardVerdict.State.ToString(),
+                EventId = guardVerdict.EventId,
+                ExitReason = "hard profit floor breach",
+            }));
+
+        // Submit with a retry ladder; reconciliation and any further
+        // retries continue on the next cycle/watch tick.
+        for (var attempt = 1; attempt <= Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts; attempt++)
+        {
+            var close = await _mt5.ClosePositionAsync(ticket, null).ConfigureAwait(true);
+            if (close.Ok)
+            {
+                guard.MarkSubmitted(close.Order?.ToString() ?? close.Deal?.ToString() ?? "?");
+                _webhook?.PostRiskRail(
+                    $"🚨 HARD PROFIT FLOOR BREACH — #{ticket}",
+                    $"{symbol} | Current: {guardVerdict.ExecutableR:+0.0;-0.0}R | Floor: {guardVerdict.FloorR:0.0}R " +
+                    $"(peak {guardVerdict.PeakR:0.0}R). Hard exit submitted (deal {close.Deal ?? close.Order}).");
+                Journal("FX_FLOOR",
+                    $"{symbol} #{ticket}: PROFIT FLOOR EXIT SUBMITTED — deal {close.Deal ?? close.Order} " +
+                    $"(event {guardVerdict.EventId}, attempt {attempt})",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = ticket,
+                        EventId = guardVerdict.EventId,
+                        ExitOrderId = close.Order,
+                        Deal = close.Deal,
+                        BrokerResponse = close.RetcodeName,
+                        Attempt = attempt,
+                        ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
+                    }));
+                break;
+            }
+
+            Journal("FX_FLOOR",
+                $"{symbol} #{ticket}: PROFIT FLOOR EXIT FAILED — {close.RetcodeName} " +
+                $"(attempt {attempt}/{Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts}); protection remains active, retrying",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Ticket = ticket,
+                    EventId = guardVerdict.EventId,
+                    BrokerResponse = close.RetcodeName,
+                    Attempt = attempt,
+                }));
+        }
+
+        if (guard.State != Core.Fx.FxFloorState.ExitSubmitted)
+        {
+            guard.MarkFailed();
+            _webhook?.PostRiskRail(
+                $"❌ PROFIT FLOOR EXIT FAILED — #{ticket}",
+                $"{symbol} | All {Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts} submit attempts refused. " +
+                $"Protection remains active at {guardVerdict.FloorR:0.0}R — retrying next cycle. NEVER reverting to HOLD.");
+        }
+    }
+
+    /// <summary>One floor-watch tick: advance every guard holding a locked
+    /// floor (or awaiting a retry) on a FRESH executable tick, WITHOUT
+    /// running a cycle. Defers while a cycle is running; skips guards with
+    /// an exit in flight (the guard's once-per-breach event keeps submit
+    /// idempotent). Returns when there is no locked floor to watch — the
+    /// common case costs zero bridge calls. Test seam: called directly.</summary>
+    internal async Task RunFloorWatchTickAsync()
+    {
+        if (_cycleRunning)
+        {
+            return;
+        }
+
+        List<long>? watchList = null;
+        foreach (var kv in _floorGuards)
+        {
+            var g = kv.Value;
+            var locked = g.FloorR > 0 || g.State == Core.Fx.FxFloorState.ExitFailed;
+            var inFlight = g.State is Core.Fx.FxFloorState.ExitPending
+                or Core.Fx.FxFloorState.ExitSubmitted;
+            if (locked && !inFlight)
+            {
+                (watchList ??= new List<long>()).Add(kv.Key);
+            }
+        }
+        if (watchList is null)
+        {
+            return;
+        }
+
+        foreach (var ticket in watchList)
+        {
+            if (!_exitStates.TryGetValue(ticket, out var st))
+            {
+                continue;   // first cycle hasn't seen it yet — the cycle owns it
+            }
+            var guard = _floorGuards[ticket];
+            var tick = await _mt5.GetTickAsync(st.Symbol).ConfigureAwait(true);
+            if (tick is not { } tk || tk.Bid <= 0 || tk.Ask <= 0)
+            {
+                continue;   // no fresh price, no opinion — next tick retries
+            }
+            var executablePrice = st.Side == "buy" ? tk.Bid : tk.Ask;
+            var executableR = st.Side == "buy"
+                ? (executablePrice - st.EntryPrice) / Math.Max(st.RiskPerLot, 1e-9)
+                : (st.EntryPrice - executablePrice) / Math.Max(st.RiskPerLot, 1e-9);
+            var guardVerdict = guard.Advance(executableR,
+                _profitFloors.TryGetValue(ticket, out var modelFloor) ? modelFloor : 0.0,
+                Math.Max(st.MfeR, executableR));
+            if (guardVerdict.Command == Core.Fx.FxFloorCommand.ExecuteExit)
+            {
+                await SubmitFloorExitAsync(ticket, st.Symbol, st.Side, st.RiskPerLot,
+                    guard, guardVerdict, executablePrice).ConfigureAwait(true);
+            }
+        }
+    }
+
     private void Journal(string category, string detail, string json) =>
         _journal.Log(Guid.Empty, category, detail, json);
 
     public FxDecision? LastDecision { get; private set; }
 
-    public void Dispose() => _timer.Stop();
+    public void Dispose()
+    {
+        _timer.Stop();
+        _floorWatchTimer.Stop();
+    }
 }

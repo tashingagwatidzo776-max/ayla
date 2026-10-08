@@ -5,13 +5,20 @@ namespace DongGfx.App.Services;
 
 /// <summary>
 /// The journal's own book: open lots derived ONLY from the local trade
-/// journal — every brain fill ("… fill … ticket N: …") opens a ticket,
-/// every close confirmation ("closed #N — deal …") retires one. The
-/// bridge's /positions read can degrade to an empty list under congestion
-/// (three cap failures on 2026-09-29 rode exactly that), but the journal
-/// is written locally before any venue round-trip can lie about it. Used
-/// as a FLOOR by the exposure guards: conservative by construction — the
-/// worst case is refusing a trade, never over-trading. Cached ~30 s.
+/// journal — every brain fill opens a ticket, every close confirmation
+/// ("closed #N — deal …") retires one. Two fill shapes exist and BOTH
+/// count: paper fills ("paper-exec fill (demo): buy 0.1 lots … — ticket
+/// N") and REAL fills ("buy 0.1 lots XAUUSD @ 4108.84 — ticket N",
+/// PaperExec:false — no "fill" substring at all). The real shape was
+/// originally missed (2026-10-07: 9 of 10 real fills journaled without a
+/// matching close row, none parsed), so this floor leg silently stood at
+/// zero exactly when the venue read degraded around a REAL position —
+/// the leak the journal book exists to survive. The bridge's /positions
+/// read can degrade to an empty list under congestion (three cap failures
+/// on 2026-09-29 rode exactly that), but the journal is written locally
+/// before any venue round-trip can lie about it. Used as a FLOOR by the
+/// exposure guards: conservative by construction — the worst case is
+/// refusing a trade, never over-trading. Cached ~30 s.
 /// </summary>
 public sealed class FxJournalBook
 {
@@ -52,6 +59,24 @@ public sealed class FxJournalBook
         }
     }
 
+    /// <summary>Every ticket the journal book still holds open, with its
+    /// lots — the reconciliation view: tickets the venue provably no
+    /// longer holds can be proof-closed against this set. Snapshot copy;
+    /// same cache and fail-silent contract as <see cref="OpenLots"/>.</summary>
+    public IReadOnlyDictionary<long, double> OpenTickets()
+    {
+        lock (_lock)
+        {
+            if (_cached < 0 || _clock() - _computedAt >= TimeSpan.FromSeconds(30))
+            {
+                _lotsByTicket.Clear();
+                _cached = Compute(_lotsByTicket);
+                _computedAt = _clock();
+            }
+            return new Dictionary<long, double>(_lotsByTicket);
+        }
+    }
+
     private double Compute(Dictionary<long, double> lots)
     {
         double open = 0;
@@ -63,10 +88,16 @@ public sealed class FxJournalBook
             }
 
             foreach (var file in Directory.GetFiles(_journalDir, "journal_*.jsonl").OrderBy(f => f))
-            {
-                foreach (var line in File.ReadLines(file))
+            {                    foreach (var line in DongGfx.Core.Logging.TradeJournal.ReadLinesShared(file))
                 {
-                    if (line.Contains("FX_ORDER") && line.Contains("fill"))
+                    // "fill" catches the paper rows; "ticket " catches the
+                    // real-exec rows, which carry no "fill" word (verified:
+                    // all FX_ORDER rows containing "ticket " are fills of
+                    // one of the two shapes — buy/sell N lots SYM @ P —
+                    // ticket N). ParseFill returns (0,0) for anything that
+                    // lacks a parsable ticket, so the wider gate is safe.
+                    if (line.Contains("FX_ORDER")
+                        && (line.Contains("fill") || line.Contains("ticket ")))
                     {
                         var (ticket, fillLots) = ParseFill(line);
                         if (ticket != 0 && fillLots > 0)

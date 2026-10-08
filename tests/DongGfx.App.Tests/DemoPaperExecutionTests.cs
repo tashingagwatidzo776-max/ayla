@@ -18,6 +18,7 @@ namespace DongGfx.App.Tests;
 /// load-bearing rules — verified-demo-only execution, the full order path
 /// still applies, and soak counting unchanged.
 /// </summary>
+[Trait("Category", "Unit")]
 [Collection("Shared-DataDir-Directory")]
 public class DemoPaperExecutionTests
 {
@@ -36,7 +37,20 @@ public class DemoPaperExecutionTests
         public bool AccountUnverified;
         public bool AccountReal;
         public bool AccountMissing;
+
+        /// <summary>The /account used-margin value the flat-proof gate reads
+        /// (book_recovery.ps1: margin == 0 is part of "flat"). null (the
+        /// default) serializes as JSON null → the client reads an absent
+        /// margin → every proven-flat prune fails CLOSED, exactly like an
+        /// older sidecar. Tests that want the prune to prove set it to 0.</summary>
+        public double? AccountMargin;
         public bool TicksDown;
+
+        /// <summary>The served tick — mutable so a test can move price
+        /// BETWEEN a cycle and a floor-watch tick (the between-cycle
+        /// shoot-through the watch exists for).</summary>
+        public double TickBid = 1.15000;
+        public double TickAsk = 1.15003;
         public object[] Positions = Array.Empty<object>();
         public int CloseCalls;
         public int ModifyCalls;
@@ -90,6 +104,7 @@ public class DemoPaperExecutionTests
                         balance = 2632.19,
                         equity = 2632.19,
                         margin_free = 2632.19,
+                        margin = AccountMargin,
                         leverage = 1000,
                         trade_mode = AccountReal ? 2 : AccountUnverified ? 1 : 0,
                     });
@@ -113,7 +128,7 @@ public class DemoPaperExecutionTests
             {
                 r = TicksDown
                     ? Json(new { error = "no tick" }, HttpStatusCode.NotFound)
-                    : Json(new { bid = 1.15000, ask = 1.15003, time = 1_700_000_000L + 120 * 60 });
+                    : Json(new { bid = TickBid, ask = TickAsk, time = 1_700_000_000L + 120 * 60 });
             }
             else if (path.EndsWith("/order"))
             {
@@ -156,7 +171,9 @@ public class DemoPaperExecutionTests
         }
     }
 
-    private static FxEngineHost NewHost(BridgeScript script, TradeJournal journal)
+    private static FxEngineHost NewHost(BridgeScript script, TradeJournal journal,
+                                        PaperSoakLedger? soakLedger = null,
+                                        string? shadowLedgerPath = null)
     {
         var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
         return new FxEngineHost(
@@ -164,7 +181,15 @@ public class DemoPaperExecutionTests
             killSwitchEngaged: () => false,
             lotsCap: () => 1.00m,
             realMoneyUnlocked: () => false,
-            clock: NySession);
+            shadowLedgerPath: shadowLedgerPath,
+            soakLedger: soakLedger,
+            clock: NySession)
+        {
+            // Synthetic tape: these fixtures stamp bars in 2023 against a
+            // pinned 2026 clock, which the feed-freshness guard would hold
+            // as stale. Freshness has its own dedicated tests.
+            StaleBarSeconds = 0,
+        };
     }
 
     /// <summary>A fixed mid-week, mid-session instant: Wednesday 18:00 UTC.
@@ -172,6 +197,120 @@ public class DemoPaperExecutionTests
     /// so a wall-clock-driven cycle would fail every evening — the clock is
     /// pinned where the rules say liquidity is deep.</summary>
     private static DateTimeOffset NySession() => new(2026, 9, 23, 18, 0, 0, TimeSpan.Zero);
+
+    // ── feed freshness (the weekend / closed-market guard) ────────────────
+    //
+    // The dead-tape ATR floor reads the FROZEN history of a stopped book,
+    // so a quiet-but-not-dead Friday close keeps clearing it forever. Bar
+    // AGE against wall clock is the only honest "is this tape live" test:
+    // observed 2026-10-03 (Saturday) when gold cleared the floor at ATR%
+    // 0.0248 and re-fired the same signal 55 times on a closed market.
+
+    /// <summary>Same tape read as fresh: wall clock sits 30s past the last
+    /// bar, exactly as a live forming M1 bar looks.</summary>
+    private static DateTimeOffset FreshClock()
+    {
+        var lastBarSeconds = 1_700_000_000L + 119 * 60;   // BridgeScript.Bars
+        return DateTimeOffset.FromUnixTimeSeconds(lastBarSeconds + 30);
+    }
+
+    /// <summary>A host with the feed-freshness guard ACTIVE, on the pinned
+    /// 2026 clock — its bars are stamped 2023, so the tape reads stale.
+    /// NewHost deliberately disables the guard for the synthetic fixtures
+    /// around it; this is the one that exercises it.</summary>
+    private static FxEngineHost NewGuardedHost(BridgeScript script, TradeJournal journal,
+                                                PaperSoakLedger? ledger = null)
+    {
+        var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
+        return new FxEngineHost(
+            client, journal, "XAUUSDmicro",
+            killSwitchEngaged: () => false,
+            lotsCap: () => 1.00m,
+            realMoneyUnlocked: () => false,
+            soakLedger: ledger,
+            clock: NySession);
+    }
+
+    [Fact]
+    public async Task Stale_Feed_Holds_Entries_And_Credits_No_Soak()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var ledger = new PaperSoakLedger(
+            Path.Combine(Path.GetTempPath(), "dg-fresh-" + Guid.NewGuid().ToString("N"), "soak.json"),
+            "test-scope");
+        var host = NewGuardedHost(script, journal, ledger);   // guard ON (300s)
+
+        await host.RunCycleAsync();
+        await host.RunCycleAsync();
+
+        // The brain never ran: no decision, no signal, no order.
+        Assert.Null(host.LastDecision);
+        Assert.Equal(0, script.OrderCalls);
+
+        // And the GO LIVE bar is untouched — a closed market is not
+        // evidence that anything behaved in paper.
+        Assert.Equal(0, host.PaperSignalsSeen);
+        Assert.Equal(0, ledger.Seen("XAUUSDmicro"));
+
+        journal.Flush();
+        var entries = journal.GetRecent(null, 200);
+        Assert.DoesNotContain(entries, e => e.Category == "FX_SIGNAL");
+        Assert.DoesNotContain(entries, e => e.Category == "FX_DECISION");
+
+        // Held once, not once per cycle — a frozen book must not spam.
+        Assert.Single(entries, e => e.Details.Contains("holding entries — feed stale"));
+    }
+
+    [Fact]
+    public async Task Fresh_Feed_Runs_And_Credits_Soak_As_Before()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var ledger = new PaperSoakLedger(
+            Path.Combine(Path.GetTempPath(), "dg-fresh-" + Guid.NewGuid().ToString("N"), "soak.json"),
+            "test-scope");
+        var client = new Mt5BridgeClient(script, new Uri("http://127.0.0.1:1/"));
+        var host = new FxEngineHost(
+            client, journal, "XAUUSDmicro",
+            killSwitchEngaged: () => false,
+            lotsCap: () => 1.00m,
+            realMoneyUnlocked: () => false,
+            soakLedger: ledger,
+            clock: FreshClock);   // bars 30s old: a live tape, guard ON
+
+        await host.RunCycleAsync();
+
+        // Fresh tape behaves exactly as it did before the guard existed.
+        Assert.NotNull(host.LastDecision);
+        Assert.Equal(1, script.OrderCalls);
+        Assert.True(host.PaperSignalsSeen >= 1);
+
+        journal.Flush();
+        var entries = journal.GetRecent(null, 200);
+        Assert.DoesNotContain(entries, e => e.Details.Contains("holding entries — feed stale"));
+    }
+
+    [Fact]
+    public async Task Feed_That_Freshens_Resume_Once()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewGuardedHost(script, journal);   // guard ON, tape is 2023
+
+        await host.RunCycleAsync();
+
+        // The venue starts publishing again (here: the operator disables the
+        // threshold to model bars catching up). One recovery line, then work.
+        host.StaleBarSeconds = 0;
+        await host.RunCycleAsync();
+
+        journal.Flush();
+        var entries = journal.GetRecent(null, 200);
+        Assert.Single(entries, e => e.Details.Contains("holding entries — feed stale"));
+        Assert.Single(entries, e => e.Details.Contains("feed fresh — newest"));
+        Assert.NotNull(host.LastDecision);
+    }
 
     [Fact]
     public void PaperExecutionAllowed_Requires_VerifiedDemo()
@@ -269,6 +408,63 @@ public class DemoPaperExecutionTests
         Assert.False(FxEngineHost.CountsTowardSoak(
             new FxDecision(0, null!, signal, FxDecisionAction.Ordered, 0.01, "live"),
             engineIsLive: true));
+    }
+
+    [Fact]
+    public async Task PaperSoak_Survives_A_Restart_And_Resets_On_A_New_Build()
+    {
+        // The GO LIVE bar counts per symbol and is all-or-nothing across the
+        // portfolio, so a session that closed at 9/10 on one symbol used to
+        // throw the whole book's evidence away. The counters now live in a
+        // ledger scoped to the build.
+        var dir = Path.Combine(Path.GetTempPath(), "dg-paper-soak",
+            Guid.NewGuid().ToString("N"));
+        var path = PaperSoakLedger.PathFor(dir);
+        var journal = NewJournal();
+        try
+        {
+            // Session one: a paper signal observed and persisted.
+            var first = NewHost(new BridgeScript(), journal,
+                new PaperSoakLedger(path, "build-a"));
+            await first.RunCycleAsync();
+            Assert.Equal(1, first.PaperSignalsSeen);
+            Assert.Equal(1, new PaperSoakLedger(path, "build-a").Seen("XAUUSDmicro"));
+
+            // Session two, as after an app restart: restored, then extended.
+            var second = NewHost(new BridgeScript(), journal,
+                new PaperSoakLedger(path, "build-a"));
+            Assert.Equal(1, second.PaperSignalsSeen);
+            await second.RunCycleAsync();
+            Assert.Equal(2, second.PaperSignalsSeen);
+
+            // The restore is visible in the journal, not just in the badge.
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 300), e =>
+                e.Category == "FX_MODE" && e.Details.Contains("paper soak restored 1/10"));
+
+            // A different build inherits nothing — the bar is evidence about
+            // THIS engine — and the drop is journaled rather than silent.
+            var rebuilt = NewHost(new BridgeScript(), journal,
+                new PaperSoakLedger(path, "build-b"));
+            Assert.Equal(0, rebuilt.PaperSignalsSeen);
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 300), e =>
+                e.Category == "FX_MODE" && e.Details.Contains("build changed since build-a"));
+
+            // No ledger at all (bare/headless hosts): counting is unchanged.
+            var bare = NewHost(new BridgeScript(), journal);
+            Assert.Equal(0, bare.PaperSignalsSeen);
+            await bare.RunCycleAsync();
+            Assert.Equal(1, bare.PaperSignalsSeen);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            }
+            catch { /* best effort */ }
+        }
     }
 
     [Fact]
@@ -371,6 +567,43 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Confidence_Gate_Refuses_Dispatch_But_Keeps_Signal_And_Soak()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+        try
+        {
+            // Floor above the fixture signal's conviction → the signal is
+            // observed (journaled + soaked) but never dispatched, and the
+            // refusal must NOT consume the per-symbol dispatch cooldown.
+            FxEngineHost.MinEntryConfidence = 0.99;
+            await host.RunCycleAsync();
+
+            Assert.Equal(0, script.OrderCalls);
+            Assert.Equal(1, host.PaperSignalsSeen);   // soak still counts
+
+            journal.Flush();
+            var entries = journal.GetRecent(null, 200);
+            Assert.Contains(entries, e => e.Category == "FX_SIGNAL");
+            Assert.Contains(entries, e =>
+                e.Category == "FX_ORDER" && e.Details.Contains("confidence gate"));
+            Assert.DoesNotContain(entries, e =>
+                e.Category == "FX_ORDER" && e.Details.Contains("dispatch throttled"));
+
+            // Gate off (the default) → the same fixture dispatches on the
+            // very next cycle: a gated refusal never armed the cooldown.
+            FxEngineHost.MinEntryConfidence = 0;
+            await host.RunCycleAsync();
+            Assert.Equal(1, script.OrderCalls);
+        }
+        finally
+        {
+            FxEngineHost.MinEntryConfidence = 0;   // never leak into other tests
+        }
+    }
+
+    [Fact]
     public async Task Cooldown_Counts_Refused_Attempts_Too()
     {
         // A refused attempt (AutoTrading off → client-disabled) must also
@@ -404,7 +637,10 @@ public class DemoPaperExecutionTests
             killSwitchEngaged: () => true,
             lotsCap: () => 1.00m,
             realMoneyUnlocked: () => false,
-            clock: NySession);
+            clock: NySession)
+        {
+            StaleBarSeconds = 0,
+        };   // synthetic tape — see NewHost
 
         await host.RunCycleAsync();
 
@@ -451,6 +687,114 @@ public class DemoPaperExecutionTests
         };
         await host.RunCycleAsync();
         Assert.Equal(0.1, host.LocalBookLots);
+    }
+
+    [Fact]
+    public async Task ProvenFlat_Prune_Retires_Stale_Book_And_Journals_The_Closed_Line()
+    {
+        // The host-book limitation (2026-10-06): the prune below needed
+        // owned.Count > 0, so after the venue dropped a ticket the tracking
+        // state stranded FOREVER while flat — LocalBookLots, and with it the
+        // exposure floor, pinned at a position nobody holds until the
+        // ops-layer reconcile + restart. On a PROVEN-flat venue (here: a
+        // healthy non-empty read lacking our ticket) the stale entry must
+        // retire AND the journal must get the "closed #" line FxJournalBook
+        // parses — no ops script in the loop.
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                // Near entry (mae ~0.1R): the brain HOLDs it, so cycle 1
+                // seeds the book without closing anything.
+                new { ticket = 111L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1475, profit = -5.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var host = NewHost(script, journal);
+        await host.RunCycleAsync();
+        Assert.True(host.LocalBookLots > 0, "the book must seed from a real read");
+
+        // Cycle 2: the ticket vanished (SL hit — no app-driven close, so no
+        // close line exists yet) while a SIBLING row keeps the read
+        // non-empty: absence from a healthy non-empty read IS proof (the
+        // same rule the confirmation loop uses), so the never-submitted
+        // guard and the tracking state retire TOGETHER and the journal
+        // gets its close line — in one cycle. (Before the 2026-10-07 fix
+        // the position's own guard blocked this very prune: tracking
+        // survived until a later flat cycle — and on a fully flat venue,
+        // forever: #8792100270, 35 minutes stranded until a restart.)
+        script.Positions = new object[]
+        {
+            new { ticket = 901L, symbol = "EURUSD", side = "buy", volume = 0.1,
+                  price_open = 1.1500, price_current = 1.1505, profit = 5.0,
+                  sl = 0.0, tp = 0.0, comment = "" },
+        };
+        await host.RunCycleAsync();
+        Assert.Equal(0.0, host.LocalBookLots);
+        journal.Flush();
+        var closed = journal.GetRecent(null, 400).Where(e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #111")).ToList();
+        Assert.Single(closed);
+        // Settled-R recording (spec §1): the retire carries entry vs this
+        // cycle's mid over the sized stop — never invented, never absent.
+        Assert.Contains("RealizedR", closed[0].Details);
+        Assert.Contains("profit-snapshot", closed[0].Details);
+
+        // Idempotent: further flat cycles must not duplicate the close row.
+        await host.RunCycleAsync();
+        journal.Flush();
+        Assert.Single(journal.GetRecent(null, 400).Where(e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #111")));
+    }
+
+    [Fact]
+    public async Task Flat_Prune_Fails_Closed_Without_A_Settled_Account()
+    {
+        // The empty-pair lie: two agreeing EMPTY position reads can still
+        // be the congestion degrade that the local book exists to survive
+        // (2026-09-29: /account probed fine while /positions degraded). So
+        // case (b) also demands the account independently say flat — equity
+        // ≈ balance AND margin == 0, the ops venue_is_flat gate. An absent
+        // or non-zero margin must NEVER prune; margin 0 (with equity ==
+        // balance) proves it.
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                new { ticket = 111L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1475, profit = -5.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var host = NewHost(script, journal);
+        await host.RunCycleAsync();
+        Assert.True(host.LocalBookLots > 0, "the book must seed");
+
+        // Two agreeing EMPTY reads — but the account reports a LIVE margin:
+        // the venue is not flat by the ops gate. The book must NOT wipe,
+        // and the position's own never-submitted guard must survive too
+        // (unproven = touch nothing — no removals, no close line).
+        script.Positions = Array.Empty<object>();
+        script.AccountMargin = 5.0;
+        await host.RunCycleAsync();
+        Assert.Equal(0.1, host.LocalBookLots);
+
+        // Margin 0 + equity == balance (the stub's account): proven flat.
+        // This is the #8792100270 deadlock shape (2026-10-07: a never-
+        // submitted guard blocked its own ticket's prune on a flat venue
+        // for 35 minutes — the guard blocked the flat branch while the
+        // confirmation loop only ever fired for submitted guards). Now
+        // the proven sweep clears the guard AND retires the stale entry,
+        // and the journal gets its close row.
+        script.AccountMargin = 0.0;
+        await host.RunCycleAsync();
+        Assert.Equal(0.0, host.LocalBookLots);
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #111"));
     }
 
     [Fact]
@@ -506,7 +850,10 @@ public class DemoPaperExecutionTests
             killSwitchEngaged: () => false,
             lotsCap: () => 1.00m,
             realMoneyUnlocked: () => false,
-            equityFloor: () => 0m);   // floor override silent
+            equityFloor: () => 0m)
+        {
+            StaleBarSeconds = 0,
+        };   // synthetic tape — see NewHost
 
         await host.RunCycleAsync();
 
@@ -552,7 +899,10 @@ public class DemoPaperExecutionTests
             client, journal, "XAUUSDmicro",
             killSwitchEngaged: () => false,
             lotsCap: () => 1.00m,
-            realMoneyUnlocked: () => false);
+            realMoneyUnlocked: () => false)
+        {
+            StaleBarSeconds = 0,
+        };   // synthetic tape — see NewHost
 
         await host.RunCycleAsync();
 
@@ -598,7 +948,10 @@ public class DemoPaperExecutionTests
             lotsCap: () => 1.00m,
             realMoneyUnlocked: () => false,
             equityFloor: () => 0m,
-            shadowLedgerPath: ledgerPath);
+            shadowLedgerPath: ledgerPath)
+        {
+            StaleBarSeconds = 0,
+        };   // synthetic tape — see NewHost
 
         await host.RunCycleAsync();
         Assert.Equal(1, script.CloseCalls);   // the override closed it
@@ -612,6 +965,24 @@ public class DemoPaperExecutionTests
         Assert.False(row.GetProperty("Won").GetBoolean());   // the crushed trade lost
         Assert.False(row.GetProperty("Helped").GetBoolean()); // losers rescue nobody
         Assert.Equal("full", row.GetProperty("ResolvedAction").GetString());
+
+        // FIX 3: drawdown rides at weight 2.0, so the old weight-0 filter
+        // dropped its settled verdict from EVERY full close — 0 "full"
+        // drawdown rows across 11 live closes. It is graded now: one row,
+        // same ticket, and a loser still credits nobody.
+        var drawdownRows = rows.Where(r => r.GetProperty("Engine").GetString() == "drawdown").ToList();
+        var dd = Assert.Single(drawdownRows);
+        Assert.Equal(555, dd.GetProperty("Ticket").GetInt64());
+        Assert.Equal("full", dd.GetProperty("ResolvedAction").GetString());
+        Assert.False(dd.GetProperty("Won").GetBoolean());
+        Assert.False(dd.GetProperty("Helped").GetBoolean());
+
+        // ONE row per engine per settled close: the in-evaluation giveback
+        // vote and its settled mirror used to BOTH land (live: 14 giveback
+        // rows for 11 tickets) — the same trade counted twice toward the
+        // promotion denominator.
+        Assert.Single(rows.Where(r => r.GetProperty("Engine").GetString() == "giveback"));
+        Assert.Single(rows.Where(r => r.GetProperty("Engine").GetString() == "counterfactual"));
     }
 
     [Fact]
@@ -672,7 +1043,10 @@ public class DemoPaperExecutionTests
                 killSwitchEngaged: () => false,
                 lotsCap: () => 1.00m,
                 realMoneyUnlocked: () => false,
-                webhook: webhook);
+                webhook: webhook)
+            {
+                StaleBarSeconds = 0,
+            };   // synthetic tape — see NewHost
 
             await host.RunCycleAsync();
 
@@ -701,6 +1075,67 @@ public class DemoPaperExecutionTests
             try { listener.Close(); } catch { /* best effort */ }
             GC.KeepAlive(capture);
         }
+    }
+
+    [Fact]
+    public async Task Floor_Watch_Tick_Detects_A_Breach_Between_Cycles()
+    {
+        // The 60s cycle is the source of truth, but a locked floor can be
+        // shot through inside one window (observed 2026-10-08: +0.71R
+        // sampled, next sample -0.46R straight THROUGH a 0.3R floor). The
+        // floor watch must catch the breach on a fresh tick WITHOUT a
+        // second cycle — and must not re-submit while one is in flight.
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 445L,
+            State = "PROFIT_PROTECTED",
+            PeakR = 1.0,
+            MaeR = 0.4,
+            FloorR = 0.5,          // locked by the restart reseed
+            GivebackPct = 10.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #445: prior — {prior}");
+        journal.Flush();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                new { ticket = 445L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1500, profit = 2.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+            // +0.667R with risk 0.003 — ABOVE the 0.5R floor: cycle 1 must
+            // NOT breach.
+            TickBid = 1.15000,
+            TickAsk = 1.15003,
+        };
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        journal.Flush();
+        Assert.Equal(0, script.CloseCalls);
+        Assert.DoesNotContain(journal.GetRecent(null, 200),
+            e => e.Category == "FX_FLOOR" && e.Details.Contains("EXIT SUBMITTED"));
+
+        // Price collapses BETWEEN cycles: -0.333R — straight through the
+        // 0.5R floor. The watch tick must catch it with no cycle involved.
+        script.TickBid = 1.14700;
+        script.TickAsk = 1.14703;
+        await host.RunFloorWatchTickAsync();
+
+        journal.Flush();
+        Assert.Equal(1, script.CloseCalls);
+        Assert.Equal("/close/445", script.LastClosePath);
+        Assert.Contains(journal.GetRecent(null, 200),
+            e => e.Category == "FX_FLOOR" && e.Details.Contains("EXIT SUBMITTED"));
+
+        // Idempotent: another tick while the exit is in flight does NOT
+        // re-submit (once-per-breach event + in-flight skip).
+        await host.RunFloorWatchTickAsync();
+        journal.Flush();
+        Assert.Equal(1, script.CloseCalls);
     }
 
     [Fact]
@@ -876,6 +1311,142 @@ public class DemoPaperExecutionTests
         }
     }
 
+    [Fact]
+    public async Task Tp1_Plan_Pct_Override_Replaces_The_Allocation_Leg()
+    {
+        // The dashboard's one-click arm persists a plan-% override the engine
+        // must actually HONOR: same hybrid walk as the bank test, but the
+        // armed 30% (in place of the allocation plan's 15% leg) drives the
+        // rung's eligibility, lot sizing and journaling.
+        var journal = NewJournal();
+        object[] At(double price, double profit) => new object[]
+        {
+            new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 1.0,
+                  price_open = 1.1480, price_current = price, profit = profit,
+                  sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+        };
+        var script = new BridgeScript { Positions = At(1.1550, 70.0) };
+        script.FlatTape();
+        var host = NewHost(script, journal);
+        host.OrderCooldown = TimeSpan.Zero;
+        try
+        {
+            FxEngineHost.ExecuteTp1Partials = true;
+            FxEngineHost.Tp1PlanPctOverride = 30;
+            await host.RunCycleAsync();
+            journal.Flush();
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
+            Assert.Contains(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("\"PlanPct\":30"));
+
+            // Crossed: the rung banks at the armed 30%, sized off that figure.
+            script.Positions = At(1.1700, 220.0);
+            await host.RunCycleAsync();
+            Assert.Equal(1, script.CloseCalls);
+            journal.Flush();
+            var recent = journal.GetRecent(null, 200).ToList();
+            Assert.Contains(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC: banked"));
+            Assert.Contains(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("(30% plan)"));
+            Assert.Contains(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("\"Lots\":0.3"));
+        }
+        finally
+        {
+            FxEngineHost.Tp1PlanPctOverride = null;   // never leak into other tests
+            FxEngineHost.ExecuteTp1Partials = false;
+        }
+    }
+
+    [Fact]
+    public async Task Tp1_Zero_Plan_Pct_Override_Makes_The_Rung_Ineligible()
+    {
+        // A 0% call is the fail-safe reading of "do not take a partial": the
+        // rung is below the 10% eligibility floor, so it never arms and the
+        // crossing banks nothing.
+        var journal = NewJournal();
+        object[] At(double price, double profit) => new object[]
+        {
+            new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 1.0,
+                  price_open = 1.1480, price_current = price, profit = profit,
+                  sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+        };
+        var script = new BridgeScript { Positions = At(1.1550, 70.0) };
+        script.FlatTape();
+        var host = NewHost(script, journal);
+        host.OrderCooldown = TimeSpan.Zero;
+        try
+        {
+            FxEngineHost.ExecuteTp1Partials = true;
+            FxEngineHost.Tp1PlanPctOverride = 0;
+            await host.RunCycleAsync();
+            script.Positions = At(1.1700, 220.0);
+            await host.RunCycleAsync();
+            Assert.Equal(0, script.CloseCalls);
+            journal.Flush();
+            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
+            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC"));
+        }
+        finally
+        {
+            FxEngineHost.Tp1PlanPctOverride = null;   // never leak into other tests
+            FxEngineHost.ExecuteTp1Partials = false;
+        }
+    }
+
+    [Fact]
+    public async Task Tp1_Rung_Is_Held_While_An_Overdue_Plan_Review_Is_Open()
+    {
+        // CIRCUIT BREAKER: an overdue plan-% review holds the rung. Same
+        // hybrid walk as the bank test — without the breaker the rung arms
+        // and banks; with it the arm is held (one TP1-HOLD row) and even the
+        // cross banks nothing, because the rung never armed.
+        var journal = NewJournal();
+        object[] At(double price, double profit) => new object[]
+        {
+            new { ticket = 444L, symbol = "XAUUSDmicro", side = "buy", volume = 1.0,
+                  price_open = 1.1480, price_current = price, profit = profit,
+                  sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+        };
+        var script = new BridgeScript { Positions = At(1.1550, 70.0) };
+        script.FlatTape();   // hybrid regime: the trailing-mode gate never fires
+        var host = NewHost(script, journal);
+        host.OrderCooldown = TimeSpan.Zero;
+        try
+        {
+            FxEngineHost.ExecuteTp1Partials = true;
+            FxEngineHost.Tp1PlanReviewHold = () => true;   // overdue review open
+
+            await host.RunCycleAsync();
+            Assert.Equal(0, script.CloseCalls);
+            journal.Flush();
+            var recent = journal.GetRecent(null, 200).ToList();
+            Assert.Contains(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-HOLD"));
+            Assert.Equal(1, recent.Count(e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-HOLD")));
+            Assert.DoesNotContain(recent, e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-ARM"));
+
+            // Crossed price: nothing banks, because the rung never armed.
+            script.Positions = At(1.1700, 220.0);
+            await host.RunCycleAsync();
+            Assert.Equal(0, script.CloseCalls);
+            journal.Flush();
+            Assert.DoesNotContain(journal.GetRecent(null, 200), e =>
+                e.Category == "FX_PROFIT" && e.Details.Contains("TP1-EXEC"));
+        }
+        finally
+        {
+            FxEngineHost.Tp1PlanReviewHold = null;   // never leak into other tests
+            FxEngineHost.ExecuteTp1Partials = false;
+        }
+    }
+
     // ── the HARD PROFIT FLOOR: the guard commands, the ensemble cannot veto ──
 
     /// <summary>A position deep past its restored floor (the screenshot
@@ -988,6 +1559,18 @@ public class DemoPaperExecutionTests
         journal.Flush();
         Assert.Contains(journal.GetRecent(null, 400), e =>
             e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+        // The floor's close now writes the "closed #" row FxJournalBook
+        // parses, and the host book retires WITH it — the exposure floor
+        // frees itself here, no ops-layer reconcile + restart needed.
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #555"));
+        // The floor's close carries its settled R too (spec §1): entry vs
+        // this cycle's mid over the sized stop, flagged as a snapshot.
+        var floorClose = journal.GetRecent(null, 400).Single(e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #555"));
+        Assert.Contains("RealizedR", floorClose.Details);
+        Assert.Contains("profit-snapshot", floorClose.Details);
+        Assert.Equal(0.0, host.LocalBookLots);
     }
 
     [Fact]
@@ -1118,6 +1701,61 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Guard_Save_Ledger_Appends_Drawdown_And_Its_Giveback_Mirror()
+    {
+        // FIX 2 (2026-10-07): the guard-save append carried ONLY drawdown's
+        // vote, and Helped()'s floor-exit rule named drawdown alone — so
+        // giveback was starved on every one of the 12 live guard saves
+        // even though the peak→breach evidence IS the giveback story.
+        // Both rows must land on confirmation, both credited.
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 555L, State = "PROFIT_PROTECTED", PeakR = 12.4,
+            MaeR = 0.4, FloorR = 8.2, GivebackPct = 33.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #555: prior — {prior}");
+        journal.Flush();
+        var ledgerPath = Path.Combine(
+            Path.GetTempPath(), $"dg-guard-save-{Guid.NewGuid():N}", "fx-shadow-XAUUSDmicro.jsonl");
+        var script = FloorBreachScript();
+        var host = NewHost(script, journal, shadowLedgerPath: ledgerPath);
+
+        // Cycle 1: breach → submit. The venue still holds the ticket, so
+        // nothing is settled and nothing may be graded yet.
+        await host.RunCycleAsync();
+        Assert.Equal(1, script.CloseCalls);
+        Assert.False(File.Exists(ledgerPath));
+
+        // Cycle 2: the broker no longer holds it → EXIT CONFIRMED is when
+        // the save settles and the ledger rows are written.
+        script.Positions = Array.Empty<object>();
+        await host.RunCycleAsync();
+        journal.Flush();
+        Assert.Contains(journal.GetRecent(null, 400), e =>
+            e.Category == "FX_FLOOR" && e.Details.Contains("EXIT CONFIRMED"));
+
+        var rows = File.ReadAllLines(ledgerPath)
+            .Select(l => System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(l))
+            .Where(r => r.GetProperty("ResolvedAction").GetString() == "floor-exit")
+            .ToList();
+        Assert.Equal(2, rows.Count);
+
+        var byEngine = rows.ToDictionary(r => r.GetProperty("Engine").GetString()!);
+        Assert.Equal(2, byEngine.Count);
+        Assert.Contains("drawdown", byEngine.Keys);
+        Assert.Contains("giveback", byEngine.Keys);
+        foreach (var r in rows)
+        {
+            Assert.Equal(555, r.GetProperty("Ticket").GetInt64());
+            Assert.Equal("floor-exit", r.GetProperty("ResolvedAction").GetString());
+            Assert.True(r.GetProperty("Won").GetBoolean());      // a save IS the win
+            Assert.True(r.GetProperty("Helped").GetBoolean());   // both engines credited
+            Assert.Equal(0.95, r.GetProperty("ExitAtClose").GetDouble(), 6);
+        }
+    }
+
+    [Fact]
     public void Profit_State_Reseeds_From_The_Journal_After_A_Restart()
     {
         // The restart defect (2026-09-29): peaks (16.9R) and established
@@ -1146,6 +1784,113 @@ public class DemoPaperExecutionTests
 
         // An unknown ticket is a cold start, never a crash.
         Assert.Null(host.LastProfitStateFromJournal(999L));
+    }
+
+    // ── recent-tape roster gate + settled-R recording ─────────────────
+    // docs/superpowers/specs/2026-10-08-fx-win-rate-design.md — the
+    // measurement substrate (RealizedR on closes) and the ROSTER-POLICY
+    // items 2-4 exclusion bar at the entry path.
+
+    [Fact]
+    public async Task Recent_Tape_Gate_Refuses_An_Excluded_Family_Before_Dispatch()
+    {
+        // The bar, exactly: every roster family on this symbol has failed
+        // two consecutive evaluations over a full window (n = WindowN + 1,
+        // mean −1.0R). The signal must still SPEAK (observed, counted
+        // toward the soak) but never dispatch — a journaled refusal instead.
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+        foreach (var name in FxFamilies.All().Select(a => a.Name))
+        {
+            for (var i = 0; i < FxRecentTape.WindowN + 1; i++)
+            {
+                host.RecentTape.Record("XAUUSDmicro", name, -1.0);
+            }
+        }
+
+        await host.RunCycleAsync();
+
+        Assert.NotNull(host.LastDecision);
+        Assert.Equal(0, script.OrderCalls);
+        journal.Flush();
+        var entries = journal.GetRecent(null, 400);
+        Assert.Contains(entries, e => e.Category == "FX_ORDER"
+            && e.Details.Contains("roster recent-tape excluded"));
+        // The window rides along in the payload for the audit trail.
+        Assert.Contains(entries, e => e.Category == "FX_ORDER"
+            && e.Details.Contains("WindowN"));
+    }
+
+    [Fact]
+    public async Task Ensemble_Full_Close_Journals_Settled_R_And_Feeds_The_Tape()
+    {
+        // Close-writer site 1: the ensemble's full close carries
+        // RealizedR = the same ProfitR the shadow ledger's `won` reads,
+        // and the settled R feeds the recent-tape cell — family from the
+        // fill row's Signal (no in-memory dispatch happened here: the
+        // restart path every real restart takes).
+        var journal = NewJournal();
+        var fill = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Side = "buy", Lots = 0.1, Sl = 1.1450, SizedStopDistance = 0.003,
+            PaperExec = false, Retcode = 10009, Order = 31337L, Deal = 31336L,
+            Price = 1.1480, Server = "Deriv-Demo", Signal = "vol-breakout",
+        });
+        journal.Log(Guid.Empty, "FX_ORDER",
+            $"buy 0.1 lots XAUUSDmicro @ 1.148 — ticket 31337: {fill}");
+        journal.Flush();
+
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                // Deep underwater: 1.1400 vs entry 1.1480 over the 0.003
+                // stop = −2.67R → the MAE emergency forces the full exit.
+                new { ticket = 31337L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1400, profit = -50.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+        };
+        var host = NewHost(script, journal);
+        await host.RunCycleAsync();
+        // The venue flattens after the fill — a position still listed next
+        // cycle would re-seed tracking and close a SECOND time (double-
+        // counting the tape cell; the one-close-per-ticket law keeps this
+        // impossible live).
+        script.Positions = Array.Empty<object>();
+        await host.RunCycleAsync();
+
+        Assert.True(script.CloseCalls >= 1,
+            "the MAE emergency must dispatch the full close");
+        journal.Flush();
+        var close = journal.GetRecent(null, 400).FirstOrDefault(e =>
+            e.Category == "FX_EXIT" && e.Details.Contains("closed #31337"));
+        Assert.NotNull(close);
+        Assert.Contains("RealizedR", close!.Details);
+        Assert.Contains("close-price", close.Details);
+        // Family attribution fell back to the fill row: exactly one
+        // settled sample landed in the (XAUUSDmicro, vol-breakout) cell.
+        Assert.Equal(1, host.RecentTape.WindowCount("XAUUSDmicro", "vol-breakout"));
+    }
+
+    [Fact]
+    public void FamilyFromJournal_Reads_The_Fill_Signal()
+    {
+        var journal = NewJournal();
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Side = "buy", Lots = 0.1, Sl = 4102.27, SizedStopDistance = 1.87,
+            PaperExec = false, Retcode = 10009, Order = 4242L, Deal = 4241L,
+            Price = 4104.51, Server = "Deriv-Demo", Signal = "vol-breakout",
+        });
+        journal.Log(Guid.Empty, "FX_ORDER",
+            $"buy 0.1 lots XAUUSDmicro @ 4104.51 — ticket 4242: {payload}");
+        journal.Flush();
+
+        Assert.Equal("vol-breakout", FxEngineHost.FamilyFromJournal(journal.JournalDir, 4242L));
+        // Unknown ticket: null — never guess a family.
+        Assert.Null(FxEngineHost.FamilyFromJournal(journal.JournalDir, 999999L));
     }
 
 }

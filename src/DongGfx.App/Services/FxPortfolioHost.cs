@@ -326,10 +326,22 @@ public sealed class FxNewsVeto
 public sealed class FxPortfolioHost : IDisposable
 {
     private readonly List<FxEngineHost> _hosts = new();
+    private readonly Mt5BridgeClient _mt5;
+    private readonly FxJournalBook _journalBook;
     private readonly Func<double> _journalBookLots;
     private readonly TradeJournal _journal;
     private readonly Func<decimal> _portfolioMaxLots;
     private readonly System.Threading.Timer? _exposureAudit;
+
+    /// <summary>Ticket → gone, remembered between reconcile passes: a
+    /// journal-book ticket must be venue-provably gone in TWO passes
+    /// (minutes apart) before its proof close is written. The window lets
+    /// a host's own prune claim a vanish it already tracks — its close row
+    /// lands first, the ticket leaves the open set, and the portfolio pass
+    /// never writes a second (double-retiring) close for the same ticket.
+    /// Restart-race strands have no host to claim them, so pass 2 writes.</summary>
+    private readonly HashSet<long> _reconcilePending = new();
+    private int _reconciling;
 
     public IReadOnlyList<FxEngineHost> Hosts => _hosts;
     public IReadOnlyList<string> Symbols { get; }
@@ -353,7 +365,9 @@ public sealed class FxPortfolioHost : IDisposable
         Func<string> newsCalendarPath,
         Func<TimeSpan> newsWindow,
         double riskFraction = 0.02,
-        string? shadowLedgerDir = null)
+        string? shadowLedgerDir = null,
+        PaperSoakLedger? soakLedger = null,
+        FxBrainMemory? memory = null)
     {
         Symbols = symbols;
         Supervisor = new FxSupervisor(journal, killSwitchEngaged, governorTripped,
@@ -367,6 +381,8 @@ public sealed class FxPortfolioHost : IDisposable
         // relaunch leak rode (1): fresh hosts + degraded reads = zero floor.
         // The journal book cannot forget what the venue claims is gone.
         var journalBook = new FxJournalBook(journal.JournalDir);
+        _mt5 = mt5;
+        _journalBook = journalBook;
         Func<double> floor = () => Math.Max(
             _hosts.Sum(h => h.LocalBookLots), journalBook.OpenLots());
 
@@ -376,8 +392,18 @@ public sealed class FxPortfolioHost : IDisposable
         _journalBookLots = journalBook.OpenLots;
         _journal = journal;
         _portfolioMaxLots = portfolioMaxLots;
+        // First tick at 30 s: the journal-book reconcile heals restart-race
+        // strands (a venue-side exit that landed while the app was down
+        // never gets a "closed #" row from any host — 9 of 10 real fills
+        // stranded that way before this existed), and the self-audit starts
+        // watching for over-cap books immediately instead of 5 minutes in.
+        // Reconcile's second pass rides the 5-minute cadence that follows.
         _exposureAudit = new System.Threading.Timer(
-            _ => AuditExposure(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+            _ =>
+            {
+                AuditExposure();
+                _ = ReconcileJournalBookAsync();
+            }, null, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(5));
         var exposure = new FxExposureGuard(mt5, portfolioMaxLots, symbols,
             localBookLots: floor);
         var news = new FxNewsVeto(newsCalendarPath, newsWindow);
@@ -409,7 +435,15 @@ public sealed class FxPortfolioHost : IDisposable
                 cycleOffset: TimeSpan.FromSeconds(15 * staggerIndex),
                 shadowLedgerPath: shadowLedgerDir is null
                     ? null
-                    : Path.Combine(shadowLedgerDir, $"fx-shadow-{symbol}.jsonl"));
+                    : Path.Combine(shadowLedgerDir, $"fx-shadow-{symbol}.jsonl"),
+                // One ledger, shared by every symbol: the GO LIVE bar counts
+                // per symbol and is all-or-nothing across the portfolio, so
+                // progress must survive restarts for the whole book at once.
+                soakLedger: soakLedger,
+                // One memory, shared by every symbol: measured training
+                // evidence for a (symbol, alpha) cell tilts that alpha's
+                // weight on that symbol's engine only. Research only.
+                memory: memory);
             staggerIndex++;
             host.StatusChanged += s => StatusChanged?.Invoke($"[{symbol}] {s}");
             _hosts.Add(host);
@@ -421,6 +455,25 @@ public sealed class FxPortfolioHost : IDisposable
     public bool IsLiveEngine => _hosts.Any(h => h.IsLiveEngine);
 
     public int PaperSignalsSeen => _hosts.Sum(h => h.PaperSignalsSeen);
+
+    /// <summary>Paper signals the book carried over from the ledger when the
+    /// brain last started (0 on a cold start) — surfaced in the account bar's
+    /// soak pill, so a resumed bar is visible rather than implied.</summary>
+    public int PaperSoakRestored => _hosts.Sum(h => h.PaperSoakRestored);
+
+    /// <summary>The build stamp whose counters were dropped for any symbol
+    /// (null when none): a build change restarts the bar on purpose, and the
+    /// pill says so instead of appearing to have lost progress.</summary>
+    public string? PaperSoakInvalidatedBuild => _hosts
+        .Select(h => h.PaperSoakInvalidatedBuild)
+        .FirstOrDefault(b => b is not null);
+
+    /// <summary>The MT5 login whose counters were dropped for any symbol
+    /// (null when none): an account switch restarts the bar on purpose, and
+    /// the pill says so instead of appearing to have lost progress.</summary>
+    public string? PaperSoakInvalidatedAccount => _hosts
+        .Select(h => h.PaperSoakInvalidatedAccount)
+        .FirstOrDefault(a => a is not null);
 
     public int PaperSoakSignalsRequired => _hosts.Sum(h => h.PaperSoakSignalsRequired);
 
@@ -455,6 +508,151 @@ public sealed class FxPortfolioHost : IDisposable
         }
     }
 
+    /// <summary>Prove which tickets the venue still holds, fail-closed —
+    /// the portfolio-level twin of FxEngineHost.ProvenLiveTicketsAsync.
+    /// Returns null when flatness is NOT proven (never let a reconcile
+    /// close anything on unknown exposure). Two safe shapes:
+    /// (a) a NON-empty positions read — a degraded read degrades to EMPTY,
+    ///     so absence from it is evidence;
+    /// (b) two agreeing EMPTY reads PLUS a settled account (margin 0,
+    ///     equity ≈ balance) — the empty pair alone is the 2026-09-29
+    ///     congestion lie. Missing account data or a null Margin fails
+    ///     CLOSED. Proof string rides along for the journal row.</summary>
+    internal static async Task<(HashSet<long>? Live, string Proof)> ProvenVenueTicketsAsync(
+        Func<Task<IReadOnlyList<Mt5Position>>> getPositions,
+        Func<Task<Mt5Account?>> getAccount)
+    {
+        var first = await getPositions().ConfigureAwait(false);
+        if (first.Count > 0)
+        {
+            return (first.Select(p => p.Ticket).ToHashSet(), "healthy positions read");
+        }
+
+        var second = await getPositions().ConfigureAwait(false);
+        if (second.Count > 0)
+        {
+            return (second.Select(p => p.Ticket).ToHashSet(), "healthy positions read");
+        }
+
+        var account = await getAccount().ConfigureAwait(false);
+        if (account is not null
+            && account.Margin is { } margin && margin <= 1e-6
+            && Math.Abs(account.Equity - account.Balance) <= 0.01)
+        {
+            return (new HashSet<long>(),
+                "two agreeing empty reads + settled account (equity ≈ balance, margin 0)");
+        }
+
+        return (null, string.Empty);
+    }
+
+    /// <summary>One reconcile pass: the journal-book tickets that are
+    /// neither venue-held nor tracked by any host, remembered in
+    /// <paramref name="pending"/>. Pass 1 only records; pass 2 (next tick,
+    /// with the ticket STILL gone from journal, venue, and hosts) returns
+    /// them for a proof close. Two passes are what keep this from ever
+    /// writing a second close for a ticket a host is about to retire with
+    /// its own row — a double close would retire 0.01 lots the fill never
+    /// opened. Returns the tickets to proof-close, empty when flatness is
+    /// not proven (pending is left untouched in that case).</summary>
+    internal static async Task<List<long>> ReconcilePassAsync(
+        IReadOnlyDictionary<long, double> journalOpen,
+        IReadOnlyCollection<long> tracked,
+        Func<Task<IReadOnlyList<Mt5Position>>> getPositions,
+        Func<Task<Mt5Account?>> getAccount,
+        ISet<long> pending)
+    {
+        var goneNow = journalOpen.Keys
+            .Where(t => !tracked.Contains(t))
+            .ToHashSet();
+
+        // A ticket no longer journal-open (host close row landed, or ops
+        // reconciled it) leaves the pending set — nothing to write.
+        pending.IntersectWith(goneNow);
+
+        var (live, _) = await ProvenVenueTicketsAsync(getPositions, getAccount)
+            .ConfigureAwait(false);
+        if (live is null)
+        {
+            // Unproven exposure: write nothing, and do NOT count this as
+            // a pass — only proven observations age a ticket toward its
+            // proof close.
+            return new List<long>();
+        }
+
+        goneNow.ExceptWith(live);
+        var result = goneNow.Where(pending.Contains).ToList();
+        // Written tickets must NOT stay pending (they would be written a
+        // second time next pass); everything else gone waits its turn.
+        pending.Clear();
+        pending.UnionWith(goneNow);
+        pending.ExceptWith(result);
+        return result;
+    }
+
+    /// <summary>The journal-book reconcile: retire journal-book fills the
+    /// venue provably no longer holds and no host still tracks — with a
+    /// normal "closed #N" row, so every downstream parser (FxJournalBook,
+    /// trade_lifecycle, watch_profit_floor, reconcile_journal_book.py) sees
+    /// an ordinary close. This is the in-app replacement for waiting on
+    /// the ops-layer reconcile + restart: a venue-side exit that lands
+    /// while the app is down (restart race) used to strand the fill
+    /// forever — the exposure guard then floored at a phantom book and
+    /// refused every trade until a human ran the script.</summary>
+    internal async Task ReconcileJournalBookAsync()
+    {
+        if (Interlocked.Exchange(ref _reconciling, 1) == 1)
+        {
+            return;   // a slow pass defers to the next tick, never overlaps
+        }
+        try
+        {
+            var open = _journalBook.OpenTickets();
+            if (open.Count == 0)
+            {
+                _reconcilePending.Clear();
+                return;
+            }
+
+            var tracked = _hosts.SelectMany(h => h.TrackedTickets).ToHashSet();
+            var gone = await ReconcilePassAsync(
+                open, tracked,
+                () => _mt5.GetPositionsAsync(),
+                () => _mt5.GetAccountAsync(),
+                _reconcilePending).ConfigureAwait(false);
+
+            foreach (var ticket in gone)
+            {
+                _journal.Log(Guid.Empty, "FX_EXIT",
+                    $"#{ticket}: closed #{ticket} — broker no longer holds the ticket; " +
+                    "journal book reconcile (two-pass, portfolio)",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = ticket,
+                        Partial = false,
+                        Lots = (double?)null,
+                        Retcode = 10009,
+                        Reconciled = true,
+                        Proof = "portfolio journal-book reconcile",
+                        // No entry/side in scope at the portfolio layer —
+                        // the outcome is NOT invented: fx_win_rate resolves
+                        // it tier-2 from the last hold-row R for the ticket.
+                        RealizedR = (double?)null,
+                        OutcomeSource = "unknown",
+                    }));
+            }
+        }
+        catch
+        {
+            // The reconcile must never crash its timer — an unreadable
+            // book or bridge hiccup just defers to the next pass.
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _reconciling, 0);
+        }
+    }
+
     /// <summary>Self-audit: when the book (venue-derived hosts, or the
     /// journal's own — whichever reads higher) sits ABOVE the portfolio
     /// cap, that is the exact signature of the three 2026-09-29 leaks.
@@ -472,7 +670,14 @@ public sealed class FxPortfolioHost : IDisposable
             var hostLots = _hosts.Sum(h => h.LocalBookLots);
             var journalLots = _journalBookLots();
             var worst = Math.Max(hostLots, journalLots);
-            if (worst > cap)
+            // 2026-10-06: epsilon like FxExposureGuard's. A full-cap book
+            // carries representation noise — venue float32 serializes 0.1 as
+            // 0.1000000015, and the journal book's fills-minus-closes sum
+            // leaves ~1e-16 of residue (51 adds / 50 subtracts of 0.1) — and
+            // an exact-cap book then warned on every audit tick. Real leaks
+            // are >= one volume step (0.01 lots), so 1e-7 silences
+            // representation noise without hiding a genuine breach.
+            if (worst > cap + 1e-7)
             {
                 _journal.Log(Guid.Empty, "FX_RISK",
                     $"exposure audit: book {worst:0.00} lots exceeds the {cap:0.00} cap " +

@@ -53,6 +53,95 @@ public class JournalViewModelTests : IDisposable
 
     private JournalViewModel CreateVm() => new(_journal, () => false);
 
+    [Fact]
+    public void MaxEntries_Caps_The_Rendered_List()
+    {
+        // The cap is the journal viewer's bound list size; it was exposed but
+        // never exercised. Four entries, a cap of two.
+        for (var i = 0; i < 4; i++)
+        {
+            WriteEntry(DateTimeOffset.UtcNow.AddSeconds(i), "FX_DECISION", new { i });
+        }
+
+        var vm = CreateVm();
+        vm.MaxEntries = 2;
+        vm.RefreshCommand.Execute(null);
+
+        Assert.Equal(2, vm.Entries.Count);
+    }
+
+    [Fact]
+    public void ExportJournalCommand_Is_Bound_And_Enabled()
+    {
+        // The journal's Export button binds JournalViewModel.ExportJournalCommand.
+        // The command itself opens a SaveFileDialog, so this pins the surface
+        // (present + enabled) without driving the dialog.
+        var vm = CreateVm();
+
+        Assert.NotNull(vm.ExportJournalCommand);
+        Assert.True(vm.ExportJournalCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void ShowCategory_Filters_And_Is_A_Selectable_Category()
+    {
+        // The dashboard's fault notice jumps here with APP_FAULT selected, so
+        // the category must both exist in the picker AND filter immediately.
+        var now = DateTimeOffset.UtcNow;
+        WriteEntry(now.AddMinutes(-1), "APP_FAULT", new { Message = "boom" });
+        WriteEntry(now.AddMinutes(-2), "FX_MODE", new { Message = "normal" });
+
+        var vm = CreateVm();
+        Assert.Contains("APP_FAULT", vm.Categories);
+
+        vm.ShowCategory("APP_FAULT");
+
+        Assert.Equal("APP_FAULT", vm.FilterCategory);
+        Assert.Single(vm.Entries);
+        Assert.Equal("APP_FAULT", vm.Entries[0].Category);
+
+        // Blank falls back to ALL.
+        vm.ShowCategory("");
+        Assert.Equal("ALL", vm.FilterCategory);
+        Assert.Equal(2, vm.Entries.Count);
+    }
+
+    [Fact]
+    public void ShowCategory_Arrives_On_The_Newest_Row_And_Copy_Uses_The_Seam()
+    {
+        var now = DateTimeOffset.UtcNow;
+        WriteEntry(now.AddMinutes(-5), "APP_FAULT", new { Message = "older" });
+        WriteEntry(now.AddMinutes(-1), "APP_FAULT", new { Message = "newest" });
+
+        var vm = CreateVm();
+        vm.ShowCategory("APP_FAULT");
+
+        // Newest-first, so the jump lands on the newest fault row.
+        Assert.NotNull(vm.SelectedEntry);
+        Assert.Equal("APP_FAULT", vm.SelectedEntry!.Category);
+        Assert.Contains("newest", vm.SelectedEntry.Details);
+
+        string? copied = null;
+        vm.ClipboardWriter = text => { copied = text; return true; };
+        vm.CopySelectedDetailsCommand.Execute(null);
+
+        Assert.NotNull(copied);
+        Assert.Contains("newest", copied);
+        Assert.Contains("copied", vm.CopyStatus);
+
+        // No selection: the command is inert (no clipboard write at all).
+        vm.SelectedEntry = null;
+        copied = null;
+        vm.CopySelectedDetailsCommand.Execute(null);
+        Assert.Null(copied);
+
+        // A clipboard that throws is reported, never propagated.
+        vm.SelectedEntry = vm.Entries.First();
+        vm.ClipboardWriter = _ => throw new InvalidOperationException("clipboard busy");
+        vm.CopySelectedDetailsCommand.Execute(null);
+        Assert.Contains("copy failed", vm.CopyStatus);
+    }
+
     // ─── Date range filtering ─────────────────────────────
 
     [Fact]

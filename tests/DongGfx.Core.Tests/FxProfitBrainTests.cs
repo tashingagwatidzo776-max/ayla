@@ -13,6 +13,7 @@ namespace DongGfx.Core.Tests;
 /// regime floor — ±0.6 wicks on a price of 1.08 read as a huge relative
 /// ATR, so builders must scale wicks to the price under test).
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxProfitBrainTests
 {
     /// <summary>M1 bars around a price with sub-ATR wicks: open-to-close
@@ -169,6 +170,47 @@ public class FxProfitBrainTests
     public void Floor_Is_Zero_Below_The_Activation_Threshold()
     {
         Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, 0.8, 0.1, 0, FxProfitBrainOptions.Default));
+    }
+
+    [Fact]
+    public void Floor_Adaptive_Tighten_Reachable_Below_The_First_Schedule_Rung()
+    {
+        // The 2026-10-08 giveback gap: peaks under the first rung (1.0R)
+        // used to early-return with floor 0 no matter how strong the
+        // reversal confluence. High-confidence evidence (> 0.55) must now
+        // open a floor at current - 0.1, still capped by the peak.
+        var floor = FxProfitBrain.ProfitFloor(0.8, currentR: 0.7, reversalP: 0.60,
+            prevFloorR: 0, FxProfitBrainOptions.Default);
+        Assert.Equal(0.6, floor, 6);
+        Assert.True(floor <= 0.8 * FxProfitBrain.FloorCapOfPeak + 1e-9,
+            "the peak cap still binds below the rung");
+    }
+
+    [Fact]
+    public void Floor_Below_The_First_Rung_Moderate_Reversal_Stays_Zero()
+    {
+        // Pre-tighten stays schedule-only: below the rung, moderate
+        // (0.40-0.55) evidence must not lock a noise floor on a sliver of
+        // profit — its `currentR > floor * 1.25` guard degenerates at 0.
+        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, currentR: 0.7, reversalP: 0.45,
+            prevFloorR: 0, FxProfitBrainOptions.Default));
+        // High confidence with a profit sliver smaller than 0.1R cannot
+        // produce a floor either (current - 0.1 <= 0).
+        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, currentR: 0.05, reversalP: 0.60,
+            prevFloorR: 0, FxProfitBrainOptions.Default));
+    }
+
+    [Fact]
+    public void Floor_Below_The_First_Rung_Never_Floors_A_Losing_Position_And_Keeps_The_Ratchet()
+    {
+        // No floor may be minted out of a losing position, ever.
+        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, currentR: -0.5, reversalP: 0.9,
+            prevFloorR: 0, FxProfitBrainOptions.Default));
+        // An established 0.7R floor survives a later sub-rung evaluation
+        // whose tighten would compute less (0.5R): never-down still holds.
+        var kept = FxProfitBrain.ProfitFloor(0.8, currentR: 0.6, reversalP: 0.6,
+            prevFloorR: 0.7, FxProfitBrainOptions.Default);
+        Assert.Equal(0.7, kept, 6);
     }
 
     [Fact]

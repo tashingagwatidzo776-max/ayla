@@ -87,6 +87,11 @@ jobs:
         # locally. (Step level, not job level: the `runner` context is
         # unavailable in job-level env and its use fails the whole file.)
         TF_DATA_DIR: ${{ runner.temp }}\tf-data-unit
+        # The whole-shell XAML binding guard drops its resolved/skipped
+        # coverage here; "Report XAML binding-guard coverage" folds it into
+        # the run summary so a drop is visible run over run, not only when
+        # the in-test floor finally trips.
+        XAML_BINDING_GUARD_REPORT: ${{ runner.temp }}\xaml-binding-guard.txt
       run: |
         dotnet test --no-build --configuration Release --verbosity normal --filter "Category=Unit" --collect:"XPlat Code Coverage" --results-directory ./coverage --blame-hang --blame-hang-timeout 8m --blame-crash
         if ($LASTEXITCODE -ne 0) {
@@ -109,6 +114,28 @@ jobs:
         name: coverage-unit
         path: ./coverage/**/coverage.cobertura.xml
         if-no-files-found: warn
+
+    # The binding guard silently covers every Command/DataTrigger binding in
+    # the shell. Surface its count in the run summary so a creeping coverage
+    # drop is visible at a glance (compare across runs), not only when the
+    # guard's own floor assertion finally fails.
+    - name: Report XAML binding-guard coverage
+      if: ${{ !cancelled() }}
+      shell: pwsh
+      run: |
+        $report = Join-Path $env:RUNNER_TEMP 'xaml-binding-guard.txt'
+        if (-not (Test-Path $report)) {
+          Write-Host '::warning::XAML binding-guard report was not produced (guard did not run?)'
+          exit 0
+        }
+        $values = @{}
+        foreach ($line in Get-Content $report) {
+          $parts = $line -split '=', 2
+          if ($parts.Count -eq 2) { $values[$parts[0]] = $parts[1] }
+        }
+        $summary = "resolved $($values['resolved']) binding(s), skipped $($values['skipped']), across $($values['surfaces']) surface(s)"
+        Write-Host "XAML binding guard: $summary"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### XAML binding guard`n`n$summary" -Encoding utf8
 
   # The order path moves real money, so its Python transport gets its own
   # gate here: the bridge sidecar's contract tests (bad action/type pairs,
@@ -173,6 +200,12 @@ jobs:
     - name: Test the trade-lifecycle query tool
       run: python scripts/test_trade_lifecycle.py
 
+    # The trait guard protects CI's own selection filter: a test class with no
+    # Category trait runs in NO job while every job stays green, so the guard
+    # is the thing that keeps its companion test honest.
+    - name: Test the test-trait guard (every class names a CI lane)
+      run: python scripts/test_check_test_traits.py
+
     - name: Lint script hygiene (subprocess-decode + UTF-16-log classes stay dead)
       run: python scripts/check_script_hygiene.py
 
@@ -192,11 +225,15 @@ jobs:
       run: python scripts/flake_tracker.py --runs 3 --threshold 3 --update-issue --notify-webhook --dry-run
 
   # End-to-end UI smoke: launches the real WPF shell on the runner's
-  # interactive desktop and asserts via UI Automation that the Terminal
-  # tab renders (bridge online → live rows; offline → degradation text).
-  # UIA-only by design — no synthetic mouse, no focus stealing — so it is
-  # safe on CI and skipped (not failed) when a developer's own instance is
-  # running locally. Windows-only: the app is a WPF exe.
+  # interactive desktop and asserts via UI Automation that the Terminal tab
+  # renders (bridge online → live rows; offline → degradation text) and that
+  # a seeded journal row copies through the right-click context menu and
+  # Ctrl+C. The journal-copy smoke drives synthetic mouse/keyboard input and
+  # the real clipboard, so this job MUST stay on windows-latest (x64): its
+  # image has an interactive desktop session. The windows-11-arm image is
+  # headless (actions/runner-images#14049) and would fail the preflight.
+  # Both smokes vacuous-pass when a developer's own instance is running
+  # locally. Windows-only: the app is a WPF exe.
   uia-smoke:
     runs-on: windows-latest
     timeout-minutes: 15
@@ -602,6 +639,11 @@ jobs:
       run: python3 scripts/check_safety_audit.py
     - name: Check rail-test trait coverage (gate drill selects by trait)
       run: python3 scripts/check_rail_traits.py
+    # CI selects tests by Category trait, so a class without one runs in NO
+    # job while every job stays green (DashboardAndSettingsCoverageTests did
+    # exactly that). Every class with tests must name a lane CI filters on.
+    - name: Check every test class names a CI lane (Category trait)
+      run: python3 scripts/check_test_traits.py
     # A {StaticResource Key} that no scanned file declares cannot fail the
     # C# build — it throws XamlParseException on first window load, i.e. on
     # the user's machine (PR #77 shipped exactly that). Guard it here.
@@ -695,6 +737,73 @@ jobs:
         if [ -n "$comment_id" ]; then
           gh api -X PATCH "repos/$repo/issues/comments/$comment_id" -F body=@comment.md > /dev/null
           echo "Updated safety-audit comment $comment_id"
+        else
+          gh pr comment "$number" --repo "$repo" --body-file comment.md
+        fi
+
+  # On PRs: diff the shell's binding inventory against main so a change in the
+  # UNTESTED surface area is visible in-thread before merge — the same
+  # update-in-place marker-comment pattern the coverage and safety-audit diffs
+  # use. Flags are a name-reference heuristic (a member the shell exposes is
+  # "flagged" when no desktop-free test names it), so a rising count is a
+  # prompt to look, not a failure; this job never blocks. Pushes to main skip
+  # it (nothing to diff against).
+  binding-inventory-diff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Inventory the PR's shell
+      id: pr
+      run: python3 scripts/xaml_binding_inventory.py --summary | tee pr.txt
+
+    - name: Inventory main's shell
+      id: main
+      run: |
+        git fetch --no-tags --depth=1 origin main
+        rm -rf /tmp/main-tree && mkdir -p /tmp/main-tree
+        git archive origin/main | tar -x -C /tmp/main-tree
+        python3 scripts/xaml_binding_inventory.py --root /tmp/main-tree --summary | tee main.txt
+
+    - name: Post the binding-inventory comment on the PR
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        pr_total=$(sed -n 's/^total=\([0-9]*\).*/\1/p' pr.txt)
+        pr_flagged=$(sed -n 's/.*flagged=\([0-9]*\).*/\1/p' pr.txt)
+        main_total=$(sed -n 's/^total=\([0-9]*\).*/\1/p' main.txt)
+        main_flagged=$(sed -n 's/.*flagged=\([0-9]*\).*/\1/p' main.txt)
+        [ -n "$main_flagged" ] || main_flagged="?"
+        [ -n "$main_total" ] || main_total="?"
+
+        {
+          echo "## 🧩 XAML binding inventory"
+          echo ""
+          echo "| | Distinct bindings | Flagged (no test ref) |"
+          echo "|---|---:|---:|"
+          echo "| This PR | ${pr_total} | **${pr_flagged}** |"
+          echo "| main | ${main_total} | ${main_flagged} |"
+          echo ""
+          if [ "$pr_flagged" = "$main_flagged" ]; then
+            echo "Unchanged vs main (\`${pr_flagged}\` flagged)."
+          elif [ "$main_flagged" = "?" ]; then
+            echo "No baseline on main yet — this PR flags \`${pr_flagged}\`."
+          else
+            echo "**Flagged count changed vs main: \`${main_flagged}\` → \`${pr_flagged}\`.**"
+          fi
+          echo ""
+          echo "A flag is a view-model member MainWindow.xaml exposes that no desktop-free test names — the surface most likely to be renamed or unwired without the unit gate noticing. Name-reference heuristic; see [docs/xaml-binding-inventory.md](https://github.com/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha }}/docs/xaml-binding-inventory.md). Regenerate locally with \`python scripts/xaml_binding_inventory.py --write\`."
+          echo "<!-- binding-inventory-diff -->"
+        } > comment.md
+        cat comment.md
+        number="${{ github.event.pull_request.number }}"
+        repo="${{ github.repository }}"
+        comment_id=$(gh api "repos/$repo/issues/$number/comments" \
+          --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("binding-inventory-diff")) | .id' | tail -1)
+        if [ -n "$comment_id" ]; then
+          gh api -X PATCH "repos/$repo/issues/comments/$comment_id" -F body=@comment.md > /dev/null
+          echo "Updated binding-inventory comment $comment_id"
         else
           gh pr comment "$number" --repo "$repo" --body-file comment.md
         fi

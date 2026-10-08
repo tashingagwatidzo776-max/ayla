@@ -48,7 +48,10 @@ public partial class JournalViewModel : ObservableObject
     {
         "ALL", "FX_ORDER", "FX_RISK", "FX_MODE", "FX_SCORECARD",
         "MT5_ORDER", "TRADE_SETTLEMENT",
-        "REAL_MONEY_UNLOCK_ARMED", "REAL_MONEY_UNLOCK_STALE"
+        "REAL_MONEY_UNLOCK_ARMED", "REAL_MONEY_UNLOCK_STALE",
+        // Crash-guard faults and the safe-mode notice they can trigger
+        // (dashboard fault notice → View faults).
+        "APP_FAULT", "APP_SAFE_MODE"
     };
 
     public JournalViewModel(TradeJournal journal, Func<bool> killSwitch)
@@ -104,6 +107,77 @@ public partial class JournalViewModel : ObservableObject
         FilterCategory = "ALL";
         SelectedAccountId = null;
         Refresh();
+    }
+
+    /// <summary>Jump the journal to a category and reload — the dashboard's
+    /// fault notice uses it to show the rows behind a fault count. The
+    /// ComboBox binding follows, so the filter the operator sees matches the
+    /// rows shown. Blank falls back to ALL.</summary>
+    public void ShowCategory(string category)
+    {
+        FilterCategory = string.IsNullOrWhiteSpace(category) ? "ALL" : category;
+        SelectedAccountId = null;
+        CopyStatus = "";
+        Refresh();
+
+        // Entries are newest-first, so land the operator on the newest row of
+        // the category they jumped to (the dashboard's fault triage should not
+        // make them hunt for the row the notice was about).
+        SelectedEntry = Entries.FirstOrDefault();
+    }
+
+    /// <summary>The row the operator is looking at — the copy target. Bound to
+    /// the grid's SelectedItem, so clicking a row also updates it.</summary>
+    [ObservableProperty]
+    private JournalEntryViewModel? selectedEntry;
+
+    /// <summary>One-line outcome of the last copy ("copied 184 chars").</summary>
+    [ObservableProperty]
+    private string copyStatus = "";
+
+    /// <summary>Clipboard writer seam: production writes the WPF clipboard;
+    /// tests inject a sink (the real clipboard needs a STA message pump).
+    /// Returns true on success.</summary>
+    public Func<string, bool> ClipboardWriter { get; set; } = DefaultClipboardWriter;
+
+    private static bool DefaultClipboardWriter(string text)
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(text);
+            return true;
+        }
+        catch
+        {
+            return false;   // clipboard busy / not STA — never a crash
+        }
+    }
+
+    /// <summary>One-click copy of the selected row's details — the fault
+    /// triage action behind the dashboard notice. Inert with no selection.</summary>
+    [RelayCommand]
+    private void CopySelectedDetails()
+    {
+        var entry = SelectedEntry;
+        if (entry is null)
+        {
+            return;
+        }
+
+        var details = entry.Details ?? "";
+        var ok = false;
+        try
+        {
+            ok = ClipboardWriter(details);
+        }
+        catch
+        {
+            ok = false;
+        }
+
+        CopyStatus = ok
+            ? $"copied {details.Length} chars"
+            : "copy failed — clipboard unavailable";
     }
 
     [RelayCommand]

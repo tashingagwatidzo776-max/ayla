@@ -26,6 +26,7 @@ namespace DongGfx.App.Tests;
 /// fills the ConcurrentDictionary caches, then awaits RefreshAsync back on
 /// the dispatcher.
 /// </summary>
+[Trait("Category", "Unit")]
 public class MapsDispatcherSmokeTests
 {
     /// <summary>Runs `action` on a fresh STA dispatcher thread with a

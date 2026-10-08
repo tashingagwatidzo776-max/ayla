@@ -114,7 +114,8 @@
         </Border>
 
         <!-- ═══════════ Tabs ═══════════ -->
-        <TabControl Margin="0,0,0,0" x:Name="MainTabs">
+        <TabControl Margin="0,0,0,0" x:Name="MainTabs"
+                    SelectionChanged="OnMainTabChanged">
             <TabItem Header="Dashboard">
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
@@ -188,6 +189,320 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+
+                            <!-- The watcher's latest gate recommendation, read
+                                 from the plan-review ledger: the candidate plan
+                                 % and its evidence, visible without a terminal. -->
+                            <Border Margin="0,6,0,0" CornerRadius="4" Padding="8,3"
+                                    Background="#22FFB020" BorderBrush="#66FFB020"
+                                    BorderThickness="1">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Dashboard.HasTp1Recommendation}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Dashboard.Tp1RecommendationText}"
+                                               FontFamily="Consolas" FontSize="11"
+                                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Margin="8,0,0,0" Padding="8,1"
+                                            Content="{Binding Dashboard.Tp1RecommendationArmLabel}"
+                                            Command="{Binding Dashboard.ArmTp1RecommendationCommand}"
+                                            ToolTip="Arm the recommended plan % (confirms first, then writes the acted review and the plan)" />
+                                </Grid>
+                            </Border>
+
+                            <!-- The armed plan-% override: the engine is using the
+                                 operator's plan instead of the brain's own leg. -->
+                            <Border Margin="0,6,0,0" CornerRadius="4" Padding="8,3"
+                                    Background="#2200D4AA" BorderBrush="#5500D4AA"
+                                    BorderThickness="1">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Dashboard.HasTp1PlanOverride}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0"
+                                               Text="{Binding Dashboard.Tp1PlanOverrideText}"
+                                               FontFamily="Consolas" FontSize="11"
+                                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    <!-- The watcher's verdict on that override:
+                                         did it actually reach a rung? Shown only
+                                         while the file names THIS plan %. -->
+                                    <TextBlock Grid.Row="1"
+                                               Text="{Binding Dashboard.Tp1PlanOverrideCheckText}"
+                                               FontFamily="Consolas" FontSize="11"
+                                               TextWrapping="Wrap" Margin="0,1,0,0"
+                                               Foreground="{StaticResource TextSecondaryBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Dashboard.HasTp1PlanOverrideCheck}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <!-- Stands in for the action button
+                                         when the reason has no in-app
+                                         fix: the absence is explained,
+                                         not left blank. -->
+                                    <TextBlock Grid.Row="0" Grid.RowSpan="2" Grid.Column="1"
+                                               Margin="8,0,0,0"
+                                               VerticalAlignment="Center"
+                                               TextWrapping="Wrap"
+                                               FontFamily="Consolas" FontSize="11"
+                                               FontStyle="Italic"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Text="{Binding Dashboard.Tp1PlanActionHint}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Dashboard.HasTp1PlanActionHint}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <!-- Does what the verdict says the
+                                         blocker needs; collapsed when the
+                                         reason has no in-app fix. -->
+                                    <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="1"
+                                            Margin="8,0,0,0" Padding="8,1"
+                                            VerticalAlignment="Center"
+                                            Content="{Binding Dashboard.Tp1PlanActionLabel}"
+                                            Command="{Binding Dashboard.TakeTp1PlanActionCommand}"
+                                            ToolTip="Do what this override's blocker needs">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Dashboard.HasTp1PlanAction}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+                                    <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="2"
+                                            Margin="8,0,0,0" Padding="8,1"
+                                            VerticalAlignment="Center"
+                                            Content="Revert"
+                                            Command="{Binding Dashboard.RevertTp1PlanOverrideCommand}"
+                                            ToolTip="Release the plan-% override (back to the allocation plan)" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Recommendation history: the advice-to-action
+                                 trail, so the effect of acting is visible. -->
+                            <ItemsControl ItemsSource="{Binding Dashboard.Tp1ReviewHistory}"
+                                          Margin="0,4,0,0">
+                                <ItemsControl.Style>
+                                    <Style TargetType="ItemsControl">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Dashboard.HasTp1ReviewHistory}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ItemsControl.Style>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,1,0,1">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Summary}" FontFamily="Consolas"
+                                                       FontSize="10" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Outcome}"
+                                                       FontSize="10" Margin="8,0,0,0"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- TP1 plan-% review hold: an always-visible banner so an
+                                 operator sees the rung is paused without opening Settings. -->
+                            <Border Margin="0,6,0,0" CornerRadius="4" Padding="8,3"
+                                    Background="#33FFB020" BorderBrush="{StaticResource WarningBrush}"
+                                    BorderThickness="1">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Dashboard.IsTp1PlanHeld}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock Text="{Binding Dashboard.Tp1PlanHoldText}" TextWrapping="Wrap"
+                                           Foreground="{StaticResource WarningBrush}" />
+                            </Border>
+
+                            <!-- Contained-fault notice: crash-guard faults are
+                                 contained on purpose, so say one happened — and
+                                 when the shell held the engine loop back, offer
+                                 the explicit resume instead of auto-restarting
+                                 into a fault loop. -->
+                            <Border Padding="8,4" Margin="0,0,0,6">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Dashboard.HasFaultNotice}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Dashboard.FaultNoticeText}"
+                                               FontFamily="Consolas" FontSize="11"
+                                               Foreground="{StaticResource WarningBrush}"
+                                               TextWrapping="Wrap" />
+                                    <Button Content="View faults in the journal"
+                                            Command="{Binding Dashboard.ViewFaultsCommand}"
+                                            HorizontalAlignment="Left" Margin="0,4,0,0"
+                                            Padding="8,2" FontSize="11" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Dashboard.IsSafeMode}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <Button Content="Resume engine loop anyway"
+                                                Command="{Binding Dashboard.ResumeFromSafeModeCommand}"
+                                                Padding="8,2" FontSize="11" />
+                                        <TextBlock Text="{Binding Dashboard.FaultStatus}"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center"
+                                                   FontSize="11"
+                                                   Foreground="{StaticResource TextSecondaryBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Paper-soak progress and WHERE it came from: the
+                                 account bar's pill is clipped first when that
+                                 row is full, and a resumed bar is not the same
+                                 evidence as one earned since this brain started. -->
+                            <Border Padding="8,4" Margin="0,6,0,0">
+                                <Border.Style>
+                                    <Style TargetType="Border" BasedOn="{StaticResource Card}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Dashboard.HasFxSoakNote}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Dashboard.FxSoakNote}"
+                                               FontFamily="Consolas" FontSize="11"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap" />
+                                    <!-- Per-symbol bar: seen/required for every
+                                         symbol, so the whole book is readable
+                                         without opening the soak ledger. -->
+                                    <ItemsControl ItemsSource="{Binding Dashboard.FxSoakSymbols}"
+                                                  Margin="0,3,0,0">
+                                        <ItemsControl.Style>
+                                            <Style TargetType="ItemsControl">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Dashboard.HasFxSoakSymbols}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ItemsControl.Style>
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Margin="0,0,6,2" Padding="4,1"
+                                                        CornerRadius="3"
+                                                        Background="{StaticResource PanelBrush}">
+                                                    <TextBlock Text="{Binding Display}"
+                                                               FontFamily="Consolas" FontSize="10"
+                                                               Foreground="{StaticResource TextSecondaryBrush}" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <!-- The audit trail behind the line: every
+                                         restore/restart the engine journaled,
+                                         newest first. -->
+                                    <ItemsControl ItemsSource="{Binding Dashboard.FxSoakTimeline}"
+                                                  Margin="0,3,0,0">
+                                        <ItemsControl.Style>
+                                            <Style TargetType="ItemsControl">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Dashboard.HasFxSoakTimeline}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ItemsControl.Style>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
+                                                    <TextBlock Text="{Binding When}"
+                                                               FontFamily="Consolas" FontSize="10"
+                                                               Width="78"
+                                                               Foreground="{StaticResource TextSecondaryBrush}" />
+                                                    <TextBlock Text="{Binding Text}"
+                                                               FontFamily="Consolas" FontSize="10"
+                                                               TextWrapping="Wrap"
+                                                               Foreground="{StaticResource TextSecondaryBrush}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
 
                             <!-- Shadow-engine promotion card: the giveback engine's road to weight -->
                             <Border Background="#2200D4AA" BorderBrush="#5500D4AA" BorderThickness="1"
@@ -352,7 +667,91 @@
                                       IsChecked="{Binding SettingsVm.FxExecuteTp1Partials}"
                                       ToolTip="When armed: once per trade, if the trade banked at least 1R and price crosses the Profit Brain's first target, the allocation plan's percentage of the position is closed through the Exit Brain's path. Requires confirmation. Places real demo orders." />
                             <TextBlock Text="{Binding SettingsVm.Tp1ToggleHint}" FontSize="11"
-                                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                                       TextWrapping="Wrap">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SettingsVm.Tp1BreakerHold}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                <Setter Property="FontWeight" Value="SemiBold" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <!-- Actionable review list: only shown when the breaker
+                                 holds the rung, so the operator can act/clear in-app
+                                 instead of opening a terminal. -->
+                            <ItemsControl ItemsSource="{Binding SettingsVm.OpenTp1Reviews}" Margin="0,4,0,0">
+                                <ItemsControl.Style>
+                                    <Style TargetType="ItemsControl">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SettingsVm.Tp1BreakerHold}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ItemsControl.Style>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                            <TextBlock Text="{Binding Label}" FontFamily="Consolas" FontSize="11"
+                                                       VerticalAlignment="Center" Margin="0,0,8,0"
+                                                       Foreground="{StaticResource WarningBrush}" />
+                                            <Button Content="Mark acted" FontSize="10" Padding="6,1" Margin="0,0,4,0"
+                                                    ToolTip="Appends the same 'acted' event the CLI runbook writes, then releases the TP1 hold"
+                                                    Command="{Binding DataContext.SettingsVm.ActTp1ReviewCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="Clear" FontSize="10" Padding="6,1"
+                                                    ToolTip="Appends a 'cleared' event (the condition resolved without a change) and releases the TP1 hold"
+                                                    Command="{Binding DataContext.SettingsVm.ClearTp1ReviewCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Shared gate/breaker tunables: the SAME file the
+                                 watcher reads (config/tp1-plan-gate.json), so
+                                 retuning never needs hand-edited JSON. -->
+                            <TextBlock Text="Plan-% gate tunables (shared with the watcher)"
+                                       FontSize="11" Margin="0,12,0,2"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ItemsControl ItemsSource="{Binding SettingsVm.Tp1Tunables}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,1,0,1">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Label}" FontSize="11"
+                                                       VerticalAlignment="Center"
+                                                       ToolTip="{Binding Hint}" />
+                                            <TextBox Grid.Column="1" FontSize="11" Padding="3,1"
+                                                     Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="{Binding Hint}" />
+                                            <TextBlock Grid.Column="2" Text="{Binding Hint}" FontSize="10"
+                                                       Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                <Button Content="Save tunables" FontSize="11" Padding="8,2"
+                                        Command="{Binding SettingsVm.SaveTp1TunablesCommand}"
+                                        ToolTip="Validates and writes config/tp1-plan-gate.json — the file the watcher and the app both read" />
+                                <Button Content="Revert" FontSize="11" Padding="8,2" Margin="6,0,0,0"
+                                        Command="{Binding SettingsVm.RevertTp1TunablesCommand}"
+                                        ToolTip="Discards unsaved edits by re-reading the shared config" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding SettingsVm.Tp1TunablesStatus}" FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource WarningBrush}" />
                         </StackPanel>
 
                         <TextBlock Grid.Row="24" Grid.ColumnSpan="2" Text="LOGGING" Style="{StaticResource SectionTitle}" Margin="0,14,0,8" />
@@ -470,7 +869,7 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                 <!-- per-symbol paper soak: laggard symbol first, so the
                                      one holding GO LIVE back is always the visible one -->
                                 <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
-                                        ToolTip="Per-symbol paper-soak progress (n/m signals). GO LIVE needs EVERY symbol at its bar — the laggard is shown first.">
+                                        ToolTip="{Binding FxSoakTooltip}">
                                     <TextBlock Text="{Binding FxSoakBadge}" FontFamily="Consolas" FontSize="11"
                                                Foreground="{StaticResource TextSecondaryBrush}" />
                                 </Border>
@@ -482,6 +881,32 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                 <Button Content="RE-ARM" Style="{StaticResource GhostButton}"
                                         Command="{Binding FxReArmCommand}" Margin="0,0,6,0"
                                         ToolTip="After a supervisor loss stop: clear the halt and re-anchor the session loss baseline to the live MT5 balance." />
+                                <!-- Real-money session unlock: the typed confirmation
+                                     the real-money gate demands. On a demo account the
+                                     gate passes through, so this is inert here — it only
+                                     matters once the venue reports a real account. -->
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,6,0"
+                                        ToolTip="Real-money session unlock. Type the exact confirmation phrase and press Arm. Session-scoped: reset on account switch and app close.">
+                                    <TextBlock FontSize="11" FontFamily="Consolas">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="🔒 REAL MONEY LOCKED" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding RealMoneyUnlockArmed}" Value="True">
+                                                        <Setter Property="Text" Value="🔓 REAL MONEY ARMED" />
+                                                        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+                                <TextBox Text="{Binding RealMoneyUnlockPhrase, UpdateSourceTrigger=PropertyChanged}"
+                                         Width="150" Margin="0,0,6,0" FontSize="11"
+                                         ToolTip="Type TRADE REAL MONEY to arm real-money trading for this session." />
+                                <Button Content="ARM" Style="{StaticResource GhostButton}" Margin="0,0,6,0"
+                                        Command="{Binding ArmRealMoneyUnlockCommand}"
+                                        ToolTip="Arm the real-money session unlock (exact phrase required)." />
                                 <Button Content="LAB RUN" Style="{StaticResource GhostButton}"
                                         Command="{Binding FxLabRunCommand}" Margin="0,0,12,0"
                                         ToolTip="Genetic lab walk-forward over the journal's own decision bars — evidence for a human, never an auto-promotion. Needs FX_DECISION entries to replay." />
@@ -890,6 +1315,10 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                 <Button Content="Refresh" Command="{Binding JournalVm.RefreshCommand}" />
                                 <Button Content="Clear filter" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding JournalVm.ClearFilterCommand}" />
                                 <Button Content="Export" Style="{StaticResource GhostButton}" Margin="8,0,0,0" Command="{Binding JournalVm.ExportJournalCommand}" />
+                                <Button Content="Copy details" Style="{StaticResource GhostButton}" Margin="8,0,0,0"
+                                        Command="{Binding JournalVm.CopySelectedDetailsCommand}" />
+                                <TextBlock Text="{Binding JournalVm.CopyStatus}" Margin="8,0,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding JournalVm.StatsText}" Margin="12,0,0,0"
                                            Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" TextWrapping="Wrap" />
                             </StackPanel>
@@ -897,8 +1326,25 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                     </Border>
 
                     <!-- Journal entries -->
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding JournalVm.Entries}" AutoGenerateColumns="False"
-                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True">
+                    <DataGrid Grid.Row="2" x:Name="JournalEntriesGrid"
+                              ItemsSource="{Binding JournalVm.Entries}" AutoGenerateColumns="False"
+                              SelectedItem="{Binding JournalVm.SelectedEntry}"
+                              HeadersVisibility="Column" CanUserAddRows="False" IsReadOnly="True"
+                              ClipboardCopyMode="None"
+                              PreviewMouseRightButtonDown="OnJournalRowRightClick">
+                        <!-- The grid's own Ctrl+C is replaced by "copy details":
+                             triage needs the whole row's text, not the single
+                             focused cell. -->
+                        <DataGrid.InputBindings>
+                            <KeyBinding Key="C" Modifiers="Control"
+                                        Command="{Binding JournalVm.CopySelectedDetailsCommand}" />
+                        </DataGrid.InputBindings>
+                        <DataGrid.ContextMenu>
+                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                <MenuItem Header="Copy details"
+                                          Command="{Binding JournalVm.CopySelectedDetailsCommand}" />
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Time" Width="90" Binding="{Binding Timestamp}" />
                             <DataGridTextColumn Header="Account" Width="80" Binding="{Binding AccountId}" />

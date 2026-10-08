@@ -16,6 +16,7 @@ namespace DongGfx.App.Tests;
 /// engines' promotion ledger, and the settings round-trip of the brain's
 /// persisted running state. Journal-only by construction.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxExitDigestTests
 {
     /// <summary>An FX_EXIT payload shaped exactly like the engine host
@@ -543,7 +544,191 @@ public class FxExitDigestTests
         Assert.Equal(string.Empty, bare);
     }
 
-    // ── The promotion ledger ─────────────────────────────────────────
+    [Fact]
+    public void Tp1Capture_Appends_The_Graded_Verdict_And_Vs_Giveback()
+    {
+        // The watcher's ledger supplies the verdict; the digest reports it
+        // verbatim beside the capture line. A ticket with no ledger row
+        // still renders, just without the suffix.
+        var t = new DateTimeOffset(2026, 9, 30, 12, 0, 0, TimeSpan.Zero);
+        var entries = new List<JournalEntry>
+        {
+            new()
+            {
+                Timestamp = t, Category = "FX_PROFIT",
+                Details = "XAUUSDmicro #601: TP1-EXEC: banked 0.25 lots — "
+                    + JsonSerializer.Serialize(new { Ticket = 601L, Executed = true, Lots = 0.25 }),
+            },
+            new()
+            {
+                Timestamp = t.AddMinutes(10), Category = "FX_EXIT",
+                Details = "XAUUSDmicro #601: full score 61 — "
+                    + JsonSerializer.Serialize(new
+                    {
+                        Ticket = 601L, Action = "full", Override = (string?)null,
+                        MfeR = 4.0, MaeR = 0.3, ProfitR = 3.0,
+                    }),
+            },
+        };
+
+        var md = FxExitWeeklyDigest.Tp1CaptureMarkdown(entries,
+            new Dictionary<long, FxExitWeeklyDigest.Tp1GradedVerdict>
+            {
+                [601] = new("beat", 0.75, 75.0),
+            });
+        Assert.Contains("(75% capture) — beat (+0.75R vs giveback)", md);
+
+        var trailed = FxExitWeeklyDigest.Tp1CaptureMarkdown(entries,
+            new Dictionary<long, FxExitWeeklyDigest.Tp1GradedVerdict>
+            {
+                [601] = new("trailed", -1.90, 40.0),
+            });
+        Assert.Contains("— trailed (-1.90R vs giveback)", trailed);
+
+        // No ledger → the bare capture line, unchanged.
+        Assert.DoesNotContain("vs giveback", FxExitWeeklyDigest.Tp1CaptureMarkdown(entries));
+    }
+
+    [Fact]
+    public void Tp1Verdicts_Read_From_The_Ledger_And_Skip_Malformed_Lines()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "dg-tp1-verdicts",
+            Guid.NewGuid().ToString("N") + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllLines(path,
+        [
+            "{\"ticket\": 601, \"verdict\": \"beat\", \"vs_giveback_r\": 0.75, \"capture_pct\": 75.0}",
+            "{not json",
+            "{\"ticket\": 602, \"verdict\": \"pending\", \"vs_giveback_r\": null}",
+        ]);
+
+        var parsed = FxExitWeeklyDigest.ReadVerdicts(path);
+        Assert.Equal(2, parsed.Count);
+        Assert.Equal("beat", parsed[601].Verdict);
+        Assert.Equal(0.75, parsed[601].VsGivebackR!.Value);
+        Assert.Equal("pending", parsed[602].Verdict);
+        Assert.Null(parsed[602].VsGivebackR);
+    }
+
+    [Fact]
+    public void WeeklyTp1Graded_Counts_Banked_Tickets_And_Outlines_The_Week()
+    {
+        // Only banked rungs count (a refused EXEC banks nothing), and the
+        // week they land in gets a blue outline plus the legend.
+        var w40 = new DateTimeOffset(2026, 9, 30, 12, 0, 0, TimeSpan.Zero);
+        var entries = new List<JournalEntry>
+        {
+            new()
+            {
+                Timestamp = w40, Category = "FX_PROFIT",
+                Details = "XAUUSDmicro #601: TP1-EXEC: banked — "
+                    + JsonSerializer.Serialize(new { Ticket = 601L, Executed = true }),
+            },
+            new()
+            {
+                Timestamp = w40, Category = "FX_PROFIT",
+                Details = "XAUUSDmicro #602: TP1-EXEC refused — "
+                    + JsonSerializer.Serialize(new { Ticket = 602L, Executed = false }),
+            },
+            ExitAt(w40, "full", null, 0.2, 3.0, 1.0),
+        };
+
+        var weeks = FxExitWeeklyDigest.WeeklyCaptureSeries(entries);
+        var tp1 = FxExitWeeklyDigest.WeeklyTp1Graded(entries, weeks);
+        Assert.Single(tp1);
+        Assert.Equal(1, tp1[0]);
+
+        var svg = FxExitWeeklyDigest.CaptureTrendSvg(weeks, savesPerWeek: null, tp1PerWeek: tp1);
+        Assert.Contains("stroke=\"#1565c0\"", svg);
+        Assert.Contains("blue outline = TP1 rung graded", svg);
+
+        // A week with no banked rung renders no outline and no legend.
+        var bare = FxExitWeeklyDigest.CaptureTrendSvg(weeks);
+        Assert.DoesNotContain("#1565c0", bare);
+    }
+
+    [Fact]
+    public void PlanReviewSummary_Rolls_Up_Open_Cleared_Acted_Since_The_Last_Post()
+    {
+        var now = new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+        var reviews = new List<FxExitWeeklyDigest.PlanReview>
+        {
+            new("r1", "down", now.AddDays(-2), 25, 15, -5.93, "open", null, null, ""),
+            new("r2", "up", now.AddDays(-3), 25, 30, 2.33, "acted", null, now.AddDays(-1), "raised to 30"),
+            new("r3", "down", now.AddDays(-10), 25, 15, -4.0, "open", null, null, ""),   // outside window
+        };
+
+        var (message, markdown) = FxExitWeeklyDigest.PlanReviewSummary(reviews, now);
+
+        Assert.Contains("since the last post: 2", message);
+        Assert.Contains("1 open, 0 cleared, 1 acted", message);
+        Assert.Contains("### TP1 plan-% reviews (auto)", markdown);
+        Assert.Contains("25%→15%", markdown);
+        Assert.Contains("— acted (raised to 30)", markdown);
+        Assert.DoesNotContain("r3", markdown);
+
+        // Nothing recent → the whole section is silent.
+        var bare = FxExitWeeklyDigest.PlanReviewSummary(reviews, now.AddDays(30));
+        Assert.Equal(string.Empty, bare.Markdown);
+        Assert.Equal(string.Empty, bare.Message);
+    }
+
+    [Fact]
+    public void PlanReviewEvents_Fold_From_The_Ledger_And_Skip_Malformed()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "dg-plan-reviews",
+            Guid.NewGuid().ToString("N") + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllLines(path,
+        [
+            "{\"event\": \"recommended\", \"id\": \"r1\", \"ts\": \"2026-10-01T10:00:00+00:00\", \"direction\": \"down\", \"baseline_pct\": 25, \"candidate_pct\": 15, \"net_r\": -5.93}",
+            "{not json",
+            "{\"event\": \"cleared\", \"id\": \"r1\", \"ts\": \"2026-10-02T10:00:00+00:00\"}",
+            "{\"event\": \"recommended\", \"id\": \"r2\", \"ts\": \"2026-10-03T10:00:00+00:00\", \"direction\": \"up\", \"baseline_pct\": 25, \"candidate_pct\": 30}",
+            "{\"event\": \"acted\", \"id\": \"r2\", \"ts\": \"2026-10-04T10:00:00+00:00\", \"note\": \"raised to 30\"}",
+        ]);
+
+        var reviews = FxExitWeeklyDigest.ReadPlanReviewEvents(path);
+        Assert.Equal(2, reviews.Count);
+        Assert.Equal("cleared", reviews[0].Status);
+        Assert.Equal("acted", reviews[1].Status);
+        Assert.Equal("raised to 30", reviews[1].ActedNote);
+        Assert.Equal(30d, reviews[1].CandidatePct!.Value);
+    }
+
+    [Fact]
+    public void Tp1PlanBreaker_Holds_Only_For_An_Old_Open_Review()
+    {
+        var now = new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+        var path = Path.Combine(Path.GetTempPath(), "dg-breaker",
+            Guid.NewGuid().ToString("N") + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+        static string Line(object rec) => JsonSerializer.Serialize(rec);
+
+        // A fresh open review does not hold yet.
+        File.WriteAllLines(path,
+            [Line(new { @event = "recommended", id = "r1", ts = now.AddDays(-1) })]);
+        Assert.False(Tp1PlanBreaker.IsHeldAt(path, now));
+
+        // An OPEN review past the threshold holds.
+        File.WriteAllLines(path,
+            [Line(new { @event = "recommended", id = "r1", ts = now.AddDays(-10) })]);
+        Assert.True(Tp1PlanBreaker.IsHeldAt(path, now));
+
+        // Acted: the breaker resumes.
+        File.WriteAllLines(path,
+        [
+            Line(new { @event = "recommended", id = "r1", ts = now.AddDays(-10) }),
+            Line(new { @event = "acted", id = "r1", ts = now.AddDays(-9) }),
+        ]);
+        Assert.False(Tp1PlanBreaker.IsHeldAt(path, now));
+
+        // Missing ledger never trips.
+        Assert.False(Tp1PlanBreaker.IsHeldAt(path + ".missing", now));
+    }
+
+    // ── The promotion ledger ────────────────────────────────────────
 
     [Fact]
     public void Ledger_Appends_One_Line_Per_Shadow_Vote_And_Rolls_Up()

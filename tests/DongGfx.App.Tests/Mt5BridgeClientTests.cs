@@ -69,6 +69,30 @@ public class Mt5BridgeClientTests
     private static string Json(params string[] fields) => "{" + string.Join(",", fields) + "}";
 
     [Fact]
+    public async Task LastLogin_Tracks_The_Live_Account_Across_Reads()
+    {
+        // The soak ledger scopes on this value, so it must reflect the account
+        // actually attached — refreshed by any successful health/account read,
+        // not a login captured when settings were last saved.
+        var (client, fake) = NewClient();
+        using (client)
+        {
+            Assert.Null(client.LastLogin);   // nothing read yet
+
+            fake.Route("health", Json("\"ok\": true", "\"login\": 32353037", "\"server\": \"Deriv-Demo\""));
+            await client.HealthAsync();
+            Assert.Equal("32353037", client.LastLogin);
+
+            fake.Route("account", Json(
+                "\"login\": 111222", "\"server\": \"Deriv-Demo\"", "\"currency\": \"USD\"",
+                "\"balance\": 1.0", "\"equity\": 1.0", "\"margin_free\": 1.0",
+                "\"leverage\": 1000", "\"trade_mode\": 0"));
+            await client.GetAccountAsync();
+            Assert.Equal("111222", client.LastLogin);
+        }
+    }
+
+    [Fact]
     public void Constructor_Refuses_Non_Loopback_But_Accepts_Loopback()
     {
         var fake = new FakeBridge();

@@ -222,6 +222,24 @@ public sealed class TradeJournal : IDisposable
         });
     }
 
+    /// <summary>Read a journal file's lines with a share mode that
+    /// TOLERATES the flush writer (FileShare.ReadWrite). The default
+    /// File.ReadLines opens with FileShare.Read — which DENIES writes — so
+    /// any scanner overlapping the 5-second flush timer made the appender's
+    /// open fail with a sharing violation and killed the flush thread
+    /// (APP_FAULT: 10-06 ×3, 10-07 ×3, 10-08). Reader side is the durable
+    /// fix: an open reader must never block a write. Lazy like
+    /// File.ReadLines; fails soft (callers already wrap scans in try).</summary>
+    public static IEnumerable<string> ReadLinesShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line)
+        {
+            yield return line;
+        }
+    }
+
     /// <summary>Get recent journal entries for an account.</summary>
     public IReadOnlyList<JournalEntry> GetRecent(Guid? accountId = null, int count = 100)
     {
@@ -348,19 +366,50 @@ public sealed class TradeJournal : IDisposable
 
             if (batch.Count == 0) return;
 
-            try
+            // Never drop, never throw: the flush timer is a thread-pool
+            // callback, and an escaping IOException killed it (the chronic
+            // APP_FAULT of 2026-10-06/07/08 — a reader holding the file
+            // made this appender's open fail with a sharing violation, and
+            // only DirectoryNotFoundException was caught). Journaling is
+            // best-effort by law: retry the short window (readers are
+            // short-lived), then put the batch back for the next flush.
+            void Requeue()
             {
-                using var writer = new StreamWriter(filePath, append: true);
-                foreach (var entry in batch)
-                {
-                    writer.WriteLine(JsonSerializer.Serialize(entry));
-                }
+                foreach (var e in batch) _pending.Enqueue(e);
             }
-            catch (DirectoryNotFoundException)
+
+            for (var attempt = 0; ; attempt++)
             {
-                // The journal directory vanished (e.g. cleaned up while a
-                // flush timer was still in flight). Journaling is best-effort:
-                // never let the background flush kill the process.
+                try
+                {
+                    using var writer = new StreamWriter(filePath, append: true);
+                    foreach (var entry in batch)
+                    {
+                        writer.WriteLine(JsonSerializer.Serialize(entry));
+                    }
+                    return;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // The journal directory vanished (e.g. cleaned up while
+                    // a flush timer was still in flight). Drop the batch —
+                    // the contract since the first flush — never crash.
+                    return;
+                }
+                catch (IOException) when (attempt < 4)
+                {
+                    // Sharing violation or transient lock (external reader,
+                    // AV scan): back off briefly and retry.
+                    System.Threading.Thread.Sleep(40);
+                }
+                catch (Exception)
+                {
+                    // Still locked (or anything unexpected): the rows go
+                    // back on the queue — retried next timer tick, in order
+                    // relative to each other, each carrying its Timestamp.
+                    Requeue();
+                    return;
+                }
             }
         }
     }

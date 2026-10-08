@@ -9,6 +9,7 @@ namespace DongGfx.Core.Tests;
 /// the executable price against the original risk — immune to HOLD votes,
 /// partial closes, and restarts. Every case the spec names is pinned here.
 /// </summary>
+[Trait("Category", "Unit")]
 public class FxProfitFloorGuardTests
 {
     private static FxFloorVerdict Step(

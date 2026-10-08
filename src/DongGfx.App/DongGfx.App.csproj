@@ -14,6 +14,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The shared TP1 plan-% gate tunables: shipped beside the exe so a
+         published build (with no checkout above it) still reads the same file
+         the watcher reads. A checkout resolves to the repo-root config
+         instead, so an in-app edit and a watcher run share one file. -->
+    <None Include="..\..\config\tp1-plan-gate.json"
+          Link="config\tp1-plan-gate.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
