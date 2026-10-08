@@ -292,3 +292,223 @@ PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9
 PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
 
 ![profit-capture trend](fx-capture-trend.svg)
+
+
+## FX exit weekly digest — 2026-09-30
+
+- evaluations: 4497 (override 4 / consensus 4493)
+- close confirmations (no evaluation): 3
+- overrides: profit-floor ×4
+- consensus bands: hold ×4492, monitor ×1
+- exit reasons (decisive): profit-floor ×4
+- MAE at exit: <0.5R ×4, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×0
+- round-trips (MFE ≥1R, closed ≤0.2R): 0/4 (0%)
+- profit capture (realized/MFE, decisive ≥0.5R MFE): 22%
+
+### Profit-capture trend
+
+- weekly capture: ISO 2026-W40 22% (15.44R of 70.23R, 4 trade(s))
+- spark: █
+
+### Profit brain (FX_PROFIT telemetry)
+
+- reports: 2942; floor breaches: 744; avg score: 66
+- states: PROFIT_PROTECTED ×1703, PROFIT_EXIT_READY ×744, PROFIT_GIVEBACK_WARNING ×484, PROFIT_DETERIORATING ×10, PROFIT_CRITICAL ×1
+
+### Giveback engine — promotion review triggered
+
+PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
+
+![profit-capture trend](fx-capture-trend.svg)
+
+
+## FX exit weekly digest — 2026-10-01
+
+- evaluations: 4369 (override 4 / consensus 4365)
+- close confirmations (no evaluation): 3
+- overrides: profit-floor ×4
+- consensus bands: hold ×4364, monitor ×1
+- exit reasons (decisive): profit-floor ×4
+- MAE at exit: <0.5R ×4, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×0
+- round-trips (MFE ≥1R, closed ≤0.2R): 0/4 (0%)
+- profit capture (realized/MFE, decisive ≥0.5R MFE): 22%
+
+### Profit-capture trend
+
+- weekly capture: ISO 2026-W40 22% (15.44R of 70.23R, 4 trade(s))
+- spark: █
+
+### Profit brain (FX_PROFIT telemetry)
+
+- reports: 2942; floor breaches: 744; avg score: 66
+- states: PROFIT_PROTECTED ×1703, PROFIT_EXIT_READY ×744, PROFIT_GIVEBACK_WARNING ×484, PROFIT_DETERIORATING ×10, PROFIT_CRITICAL ×1
+
+### Evidence index
+
+- promotion cases, incidents, and week summaries: docs/soak/README.md
+
+### Giveback engine — promotion review triggered
+
+PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
+
+![profit-capture trend](fx-capture-trend.svg)
+
+
+## FX exit weekly digest — 2026-10-01
+
+- evaluations: 4089 (override 4 / consensus 4085)
+- close confirmations (no evaluation): 3
+- overrides: profit-floor ×4
+- consensus bands: hold ×4084, monitor ×1
+- exit reasons (decisive): profit-floor ×4
+- MAE at exit: <0.5R ×4, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×0
+- round-trips (MFE ≥1R, closed ≤0.2R): 0/4 (0%)
+- profit capture (realized/MFE, decisive ≥0.5R MFE): 22%
+
+### Profit-capture trend
+
+- weekly capture: ISO 2026-W40 22% (15.44R of 70.23R, 4 trade(s))
+- spark: █
+
+### Profit brain (FX_PROFIT telemetry)
+
+- reports: 2942; floor breaches: 744; avg score: 66
+- states: PROFIT_PROTECTED ×1703, PROFIT_EXIT_READY ×744, PROFIT_GIVEBACK_WARNING ×484, PROFIT_DETERIORATING ×10, PROFIT_CRITICAL ×1
+
+### Evidence index
+
+- promotion cases, incidents, and week summaries: docs/soak/README.md
+
+### Giveback engine — promotion review triggered
+
+PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
+
+![profit-capture trend](fx-capture-trend.svg)
+
+
+## FX exit weekly digest — 2026-10-03
+
+- evaluations: 3438 (override 4 / consensus 3434)
+- close confirmations (no evaluation): 3
+- overrides: profit-floor ×4
+- consensus bands: hold ×3433, monitor ×1
+- exit reasons (decisive): profit-floor ×4
+- MAE at exit: <0.5R ×4, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×0
+- round-trips (MFE ≥1R, closed ≤0.2R): 0/4 (0%)
+- profit capture (realized/MFE, decisive ≥0.5R MFE): 22%
+
+### Profit-capture trend
+
+- weekly capture: ISO 2026-W40 22% (15.44R of 70.23R, 4 trade(s))
+- spark: █
+
+### Profit brain (FX_PROFIT telemetry)
+
+- reports: 2942; floor breaches: 744; avg score: 66
+- states: PROFIT_PROTECTED ×1703, PROFIT_EXIT_READY ×744, PROFIT_GIVEBACK_WARNING ×484, PROFIT_DETERIORATING ×10, PROFIT_CRITICAL ×1
+
+### Evidence index
+
+- promotion cases, incidents, and week summaries: docs/soak/README.md
+
+### Giveback engine — promotion review triggered
+
+PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
+
+![profit-capture trend](fx-capture-trend.svg)
+
+
+## FX exit weekly digest — 2026-10-03
+
+- evaluations: 3315 (override 4 / consensus 3311)
+- close confirmations (no evaluation): 3
+- overrides: profit-floor ×4
+- consensus bands: hold ×3310, monitor ×1
+- exit reasons (decisive): profit-floor ×4
+- MAE at exit: <0.5R ×4, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×0
+- round-trips (MFE ≥1R, closed ≤0.2R): 0/4 (0%)
+- profit capture (realized/MFE, decisive ≥0.5R MFE): 22%
+
+### Profit-capture trend
+
+- weekly capture: ISO 2026-W40 22% (15.44R of 70.23R, 4 trade(s))
+- spark: █
+
+### Profit brain (FX_PROFIT telemetry)
+
+- reports: 2942; floor breaches: 744; avg score: 66
+- states: PROFIT_PROTECTED ×1703, PROFIT_EXIT_READY ×744, PROFIT_GIVEBACK_WARNING ×484, PROFIT_DETERIORATING ×10, PROFIT_CRITICAL ×1
+
+### Evidence index
+
+- promotion cases, incidents, and week summaries: docs/soak/README.md
+
+### Giveback engine — promotion review triggered
+
+PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
+
+![profit-capture trend](fx-capture-trend.svg)
+
+
+## FX exit weekly digest — 2026-10-03
+
+- evaluations: 3273 (override 4 / consensus 3269)
+- close confirmations (no evaluation): 3
+- overrides: profit-floor ×4
+- consensus bands: hold ×3268, monitor ×1
+- exit reasons (decisive): profit-floor ×4
+- MAE at exit: <0.5R ×4, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×0
+- round-trips (MFE ≥1R, closed ≤0.2R): 0/4 (0%)
+- profit capture (realized/MFE, decisive ≥0.5R MFE): 22%
+
+### Profit-capture trend
+
+- weekly capture: ISO 2026-W40 22% (15.44R of 70.23R, 4 trade(s))
+- spark: █
+
+### Profit brain (FX_PROFIT telemetry)
+
+- reports: 2942; floor breaches: 744; avg score: 66
+- states: PROFIT_PROTECTED ×1703, PROFIT_EXIT_READY ×744, PROFIT_GIVEBACK_WARNING ×484, PROFIT_DETERIORATING ×10, PROFIT_CRITICAL ×1
+
+### Evidence index
+
+- promotion cases, incidents, and week summaries: docs/soak/README.md
+
+### Giveback engine — promotion review triggered
+
+PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
+
+![profit-capture trend](fx-capture-trend.svg)
+
+
+## FX exit weekly digest — 2026-10-05
+
+- evaluations: 3032 (override 4 / consensus 3028)
+- close confirmations (no evaluation): 3
+- overrides: profit-floor ×4
+- consensus bands: hold ×3028
+- exit reasons (decisive): profit-floor ×4
+- MAE at exit: <0.5R ×4, 0.5–1R ×0, 1–1.6R ×0, ≥1.6R ×0
+- round-trips (MFE ≥1R, closed ≤0.2R): 0/4 (0%)
+- profit capture (realized/MFE, decisive ≥0.5R MFE): 22%
+
+### Profit-capture trend
+
+- weekly capture: ISO 2026-W40 22% (15.44R of 70.23R, 4 trade(s))
+- spark: █
+
+### Profit brain (FX_PROFIT telemetry)
+
+- reports: 2942; floor breaches: 744; avg score: 66
+- states: PROFIT_PROTECTED ×1703, PROFIT_EXIT_READY ×744, PROFIT_GIVEBACK_WARNING ×484, PROFIT_DETERIORATING ×10, PROFIT_CRITICAL ×1
+
+### Evidence index
+
+- promotion cases, incidents, and week summaries: docs/soak/README.md
+
+### Giveback engine — promotion review triggered
+
+PROMOTION REVIEW — decisive settled exits 4/100, first verified save: ticket 9820781127 (profit-floor override). Reassess docs/soak/GIVEBACK-PROMOTION-CASE.md (giveback engine: weight 0 until 100 trades @ 60% hit, Monte-Carlo STABLE).
+
+![profit-capture trend](fx-capture-trend.svg)

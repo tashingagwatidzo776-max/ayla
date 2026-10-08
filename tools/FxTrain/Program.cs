@@ -29,6 +29,40 @@ using DongGfx.Core.Fx;
 var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
 var sweep = args.Contains("--sweep");
 var diag = args.Contains("--diag");
+
+// Measurement flags (evidence passes, default off):
+//   --min-conf X   gate entries below this confidence (the live entry filter)
+//   --roster N     force one roster mode for every symbol (1 = positive-record
+//                  families only — the playbook filter's production candidate)
+//   --symbols A,B  restrict the run to these tape symbols
+// All three are stripped from the positional args before the normal parse.
+double minConfidence = 0.0;
+int? rosterOverride = null;
+var symbolFilter = (string?)null;
+var kept = new List<string>();
+for (var i = 0; i < args.Length; i++)
+{
+    switch (args[i])
+    {
+        case "--min-conf" when i + 1 < args.Length
+            && double.TryParse(args[++i], NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var mc):
+            minConfidence = mc;
+            break;
+        case "--roster" when i + 1 < args.Length
+            && int.TryParse(args[++i], NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var ro):
+            rosterOverride = ro;
+            break;
+        case "--symbols" when i + 1 < args.Length:
+            symbolFilter = args[++i];
+            break;
+        default:
+            kept.Add(args[i]);
+            break;
+    }
+}
+args = kept.ToArray();
 var pos = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
 var dataDir = pos.Length > 1 ? pos[1] : Path.Combine(appData, "tf", "data");
 var tapeDir = pos.Length > 0 ? pos[0] : Path.Combine(dataDir, "train-history");
@@ -46,7 +80,8 @@ var config = new FxTrainingConfig(
     WindowBars: 120,
     HoldBars: 60,
     StopAtrMult: 3.0,
-    RewardRisk: 3.0);
+    RewardRisk: 3.0,
+    MinConfidence: minConfidence);
 
 var memory = FxBrainMemory.Load(dataDir);
 Console.WriteLine(memory.SummaryLine());
@@ -139,7 +174,7 @@ IReadOnlyList<IFxAlpha>? RosterFor(string symbol, int mode)
     return roster.Count > 0 ? roster : null;
 }
 
-int RosterModeFor(string symbol) => symbol.ToUpperInvariant() switch
+int RosterModeFor(string symbol) => rosterOverride ?? symbol.ToUpperInvariant() switch
 {
     // EURUSD: the playbook filter's only verified win on this tape
     // (win40/rr3 · pos, $88k in the final run) — keeps it.
@@ -177,6 +212,17 @@ else
     var tickDir = Path.Combine(dataDir, "ticks", "mt5");
     barsBySymbol = LoadBarsBySymbol(tickDir);
     Console.WriteLine($"tick archive: {tickDir}");
+}
+
+if (symbolFilter is not null)
+{
+    var wanted = new HashSet<string>(
+        symbolFilter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+        StringComparer.OrdinalIgnoreCase);
+    barsBySymbol = barsBySymbol
+        .Where(kv => wanted.Contains(kv.Key))
+        .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+    Console.WriteLine($"symbol filter: {string.Join(",", wanted)}");
 }
 
 Console.WriteLine($"symbols with archived bars: {barsBySymbol.Count}");
