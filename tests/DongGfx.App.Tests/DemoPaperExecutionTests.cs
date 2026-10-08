@@ -145,7 +145,7 @@ public class DemoPaperExecutionTests
                 CloseCalls++;
                 LastClosePath = path;
                 r = CloseOk
-                    ? Json(new { ok = true, retcode = 10009, retcode_name = "TRADE_RETCODE_DONE", deal = 777 })
+                    ? Json(new { ok = true, retcode = 10009, retcode_name = "TRADE_RETCODE_DONE", deal = 777, price = 1.1579 })
                     : Json(new { ok = false, retcode = 10019, retcode_name = "TRADE_RETCODE_NO_MONEY", deal = (long?)null });
             }
             else if (path.EndsWith("/modify"))
@@ -1694,6 +1694,10 @@ public class DemoPaperExecutionTests
         // guard did not.
         Assert.Contains("\"OutcomeSource\":\"close-price\"", close.Details);
         Assert.DoesNotContain("\"RealizedR\":null", close.Details);
+        // The fill, not the mid: the guard captured the accepted close's
+        // price at submit time, and the settled row journals it verbatim
+        // (2026-10-08: backfilled rows had to guess from executable price).
+        Assert.Contains("\"ExitPrice\":1.1579", close.Details);
     }
 
     [Fact]

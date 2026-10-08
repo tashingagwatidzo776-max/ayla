@@ -182,7 +182,8 @@ class FakeMT5:
     def history_deals_get(self, frm, to):
         self.deal_ranges.append((frm, to))
         return [
-            SimpleNamespace(ticket=551, order=551, symbol="XAUUSDmicro", type=0,
+            SimpleNamespace(ticket=551, order=551, position_id=111,
+                            symbol="XAUUSDmicro", type=0,
                             volume=0.5, price=4310.0, profit=-12.5,
                             commission=-0.5, swap=0.0, time=1790001000, entry=1),
         ]
@@ -519,6 +520,10 @@ def test_reads_shape():
     assert positions[0]["side"] == "buy"
     deals = h.deals(7)
     assert len(deals) == 1 and deals[0]["profit"] == -12.5
+    # The position link rides along: Deal.ticket is the deal's own id,
+    # position_id is what matches a journal close row (2026-10-08
+    # backfill matching could not be done exactly without it).
+    assert deals[0]["position_id"] == 111
 
 
 # ── pending orders / cancel / modify / partial close / deals range ────
@@ -847,7 +852,12 @@ def test_loopback_round_trip():
             assert json.loads(r.read())["ok"] is True
         req = urllib.request.Request(f"{base}/close/111?lots=0.2", data=b"{}", method="POST")
         with urllib.request.urlopen(req, timeout=5) as r:
-            assert json.loads(r.read())["closed_volume"] == 0.2
+            body = json.loads(r.read())
+            assert body["closed_volume"] == 0.2
+            # The venue's real fill for the close flows through — dropping
+            # it forced outcome backfills onto executable-price proxies.
+            assert body["price"] == 4347.88
+            assert isinstance(body["deal"], int) and body["deal"] > 0
         with urllib.request.urlopen(f"{base}/deals?from=2026-09-01&to=2026-09-15", timeout=5) as r:
             assert len(json.loads(r.read())["deals"]) == 1
 

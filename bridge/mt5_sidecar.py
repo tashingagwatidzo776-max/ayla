@@ -547,6 +547,10 @@ class BridgeHandlers:
                 "order": d.order,                    "symbol": d.symbol,
                     "side": "buy" if d.type == self._m.DEAL_TYPE_BUY else "sell",
                     "volume": _venue_lots(d.volume),
+                # Deal.ticket is the deal's OWN id; the position it opened
+                # or closed is position_id — the only reliable link when
+                # matching exit deals to journal close rows.
+                "position_id": getattr(d, "position_id", None),
                 "price": d.price,
                 "profit": d.profit,
                 "commission": d.commission,
@@ -776,6 +780,13 @@ class BridgeHandlers:
             "ok": retcode == 10009,
             "closed_ticket": int(ticket),
             "closed_volume": _venue_lots(p.volume if lots is None else lots),
+            # The venue's ACTUAL fill price and deal ticket for this close.
+            # Both were dropped before, so close rows could not journal the
+            # fill and outcome backfills had to approximate from breach-time
+            # executable prices (2026-10-08). Mt5OrderResult carries them
+            # straight into the close rows' ExitPrice payload.
+            "deal": getattr(result, "deal", 0) or None,
+            "price": getattr(result, "price", 0) or None,
         }
 
 
