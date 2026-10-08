@@ -757,7 +757,14 @@ class BridgeHandlers:
             "price": tick.bid if p.type == self._m.POSITION_TYPE_BUY else tick.ask,
             "type_filling": _filling_mode(info),
             "deviation": 20,
-            "comment": "donggfx-close",
+            # MT5 overwrites the POSITION's comment with the last applied
+            # deal's comment, so a close-specific stamp silently un-owns a
+            # partial-closed position for the exit brain (2026-10-08
+            # #8792846716: donggfx-brain -> donggfx-close at the TP1 rung,
+            # snapshots and profit floor dropped). Echo the position's own
+            # comment so a partial close preserves ownership; an unstamped
+            # (manual) position keeps a non-owning comment.
+            "comment": getattr(p, "comment", "") or "",
         }
         result = self._m.order_send(request)
         if result is None:

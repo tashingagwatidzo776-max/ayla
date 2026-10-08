@@ -53,6 +53,17 @@ public static class FxExitBrain
 {
     public const string OwnershipComment = "donggfx-brain";
 
+    /// <summary>The sidecar's close-order comment. MT5 overwrites the
+    /// POSITION's comment with the last applied deal's comment, so every
+    /// partial close re-stamped brain-owned positions to "donggfx-close"
+    /// — after which a narrower Owns() silently dropped a still-open,
+    /// floor-armed position (observed 2026-10-08: #8792846716 lost its
+    /// FX_EXIT/FX_PROFIT rows and profit floor the moment the TP1 rung
+    /// fired). Only this system writes either stamp, so ownership
+    /// recognizes the whole donggfx- family; manual positions without a
+    /// stamp are never owned, never touched.</summary>
+    public const string CloseComment = "donggfx-close";
+
     // Resolver bands (score 0..100).
     public const double FullExitScore = 85.0;
     public const double PartialExitScore = 70.0;
@@ -88,9 +99,14 @@ public static class FxExitBrain
     /// <summary>Structure engine: bars scanned back for the swing.</summary>
     public const int SwingLookback = 12;
 
-    /// <summary>True when the brain owns this position (by order comment).</summary>
+    /// <summary>True when the brain owns this position (by order comment).
+    /// The close stamp counts too: a partial close re-stamps the position
+    /// comment on MT5's side, and losing ownership mid-trade would drop
+    /// the exit brain, the snapshots and the profit floor exactly when
+    /// the trade is at a rung.</summary>
     public static bool Owns(string positionComment) =>
-        positionComment.Contains(OwnershipComment, StringComparison.OrdinalIgnoreCase);
+        positionComment.Contains(OwnershipComment, StringComparison.OrdinalIgnoreCase)
+        || positionComment.Contains(CloseComment, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Approximate pip size by price scale — mirrors the engine's
     /// own heuristic (FxEngine.PipSizeOf). Used only to keep fallback risk

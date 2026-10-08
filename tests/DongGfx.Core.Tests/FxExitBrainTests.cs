@@ -37,8 +37,15 @@ public class FxExitBrainTests
     {
         Assert.True(FxExitBrain.Owns("donggfx-brain"));
         Assert.True(FxExitBrain.Owns("donggfx-brain v2"));
+        // MT5 re-stamps the POSITION comment with the partial-close
+        // deal's comment — the TP1 rung flipped #8792846716 to
+        // "donggfx-close" on 2026-10-08 and the brain dropped a
+        // still-open, floor-armed position (no snapshots, no floor).
+        Assert.True(FxExitBrain.Owns("donggfx-close"));
+        Assert.True(FxExitBrain.Owns("DONGGFX-CLOSE"));
         Assert.False(FxExitBrain.Owns(""));
         Assert.False(FxExitBrain.Owns("manual entry"));
+        Assert.False(FxExitBrain.Owns("manual close"));
     }
 
     [Fact]

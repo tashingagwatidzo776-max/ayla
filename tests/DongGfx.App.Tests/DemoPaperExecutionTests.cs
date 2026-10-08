@@ -1139,6 +1139,38 @@ public class DemoPaperExecutionTests
     }
 
     [Fact]
+    public async Task Ownership_Survives_The_Partial_Close_Comment_Flip()
+    {
+        // MT5 overwrites the POSITION comment with the partial-close
+        // deal's comment: the TP1 rung re-stamped the live #8792846716
+        // to "donggfx-close" on 2026-10-08 and Owns() then returned
+        // false — the brain dropped a still-open, floor-armed position
+        // (no FX_EXIT/FX_PROFIT rows, guard never re-created after the
+        // restart). The close stamp is written only by this system, so
+        // such a position must stay managed.
+        var journal = NewJournal();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                new { ticket = 446L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1500, profit = 2.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-close" },
+            },
+        };
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        journal.Flush();
+        var recent = journal.GetRecent(null, 200);
+        Assert.Contains(recent,
+            e => e.Category == "FX_EXIT" && e.Details.Contains("#446"));
+        Assert.Contains(recent,
+            e => e.Category == "FX_PROFIT" && e.Details.Contains("#446"));
+    }
+
+    [Fact]
     public void Shadow_Ledger_Credits_The_Giveback_Evidence_On_A_Verified_Save()
     {
         var path = Path.Combine(Path.GetTempPath(), "dg-shadow", Guid.NewGuid().ToString("N") + ".jsonl");

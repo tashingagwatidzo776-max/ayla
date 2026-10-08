@@ -592,6 +592,31 @@ def test_close_partial_sends_volume_and_full_close_omits_it():
             pass
 
 
+def test_partial_close_echoes_position_comment_for_ownership():
+    """MT5 overwrites the POSITION comment with the partial-close deal's
+    comment, so the close order must echo the position's own comment —
+    a close-specific stamp silently un-owns the position for the exit
+    brain (2026-10-08 #8792846716: donggfx-brain -> donggfx-close at the
+    TP1 rung, snapshots and profit floor dropped mid-trade)."""
+    h = make_handlers()
+    base_get = h._m.positions_get
+
+    def stamped(ticket=None, comment="donggfx-brain"):
+        rows = list(base_get(ticket=ticket))
+        for r in rows:
+            r.comment = comment
+        return rows
+
+    h._m.positions_get = lambda ticket=None: stamped(ticket=ticket)
+    h.close(111, 0.2)
+    assert h._m.sent[-1]["comment"] == "donggfx-brain"
+
+    # An unstamped (manual) position must NOT gain an owning comment.
+    h._m.positions_get = lambda ticket=None: stamped(ticket=ticket, comment="")
+    h.close(111, 0.2)
+    assert h._m.sent[-1]["comment"] == ""
+
+
 def test_venue_float32_volumes_are_quantized():
     """MT5 volumes are float32: a 0.1-lot fill arrives as
     0.10000000149011612. The app's AuditExposure compares book lots
