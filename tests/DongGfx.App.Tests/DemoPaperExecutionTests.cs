@@ -45,6 +45,12 @@ public class DemoPaperExecutionTests
         /// older sidecar. Tests that want the prune to prove set it to 0.</summary>
         public double? AccountMargin;
         public bool TicksDown;
+
+        /// <summary>The served tick — mutable so a test can move price
+        /// BETWEEN a cycle and a floor-watch tick (the between-cycle
+        /// shoot-through the watch exists for).</summary>
+        public double TickBid = 1.15000;
+        public double TickAsk = 1.15003;
         public object[] Positions = Array.Empty<object>();
         public int CloseCalls;
         public int ModifyCalls;
@@ -122,7 +128,7 @@ public class DemoPaperExecutionTests
             {
                 r = TicksDown
                     ? Json(new { error = "no tick" }, HttpStatusCode.NotFound)
-                    : Json(new { bid = 1.15000, ask = 1.15003, time = 1_700_000_000L + 120 * 60 });
+                    : Json(new { bid = TickBid, ask = TickAsk, time = 1_700_000_000L + 120 * 60 });
             }
             else if (path.EndsWith("/order"))
             {
@@ -1069,6 +1075,67 @@ public class DemoPaperExecutionTests
             try { listener.Close(); } catch { /* best effort */ }
             GC.KeepAlive(capture);
         }
+    }
+
+    [Fact]
+    public async Task Floor_Watch_Tick_Detects_A_Breach_Between_Cycles()
+    {
+        // The 60s cycle is the source of truth, but a locked floor can be
+        // shot through inside one window (observed 2026-10-08: +0.71R
+        // sampled, next sample -0.46R straight THROUGH a 0.3R floor). The
+        // floor watch must catch the breach on a fresh tick WITHOUT a
+        // second cycle — and must not re-submit while one is in flight.
+        var journal = NewJournal();
+        var prior = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Ticket = 445L,
+            State = "PROFIT_PROTECTED",
+            PeakR = 1.0,
+            MaeR = 0.4,
+            FloorR = 0.5,          // locked by the restart reseed
+            GivebackPct = 10.0,
+        });
+        journal.Log(Guid.Empty, "FX_PROFIT", $"XAUUSDmicro #445: prior — {prior}");
+        journal.Flush();
+        var script = new BridgeScript
+        {
+            Positions = new object[]
+            {
+                new { ticket = 445L, symbol = "XAUUSDmicro", side = "buy", volume = 0.1,
+                      price_open = 1.1480, price_current = 1.1500, profit = 2.0,
+                      sl = 1.1450, tp = 0.0, comment = "donggfx-brain" },
+            },
+            // +0.667R with risk 0.003 — ABOVE the 0.5R floor: cycle 1 must
+            // NOT breach.
+            TickBid = 1.15000,
+            TickAsk = 1.15003,
+        };
+        var host = NewHost(script, journal);
+
+        await host.RunCycleAsync();
+
+        journal.Flush();
+        Assert.Equal(0, script.CloseCalls);
+        Assert.DoesNotContain(journal.GetRecent(null, 200),
+            e => e.Category == "FX_FLOOR" && e.Details.Contains("EXIT SUBMITTED"));
+
+        // Price collapses BETWEEN cycles: -0.333R — straight through the
+        // 0.5R floor. The watch tick must catch it with no cycle involved.
+        script.TickBid = 1.14700;
+        script.TickAsk = 1.14703;
+        await host.RunFloorWatchTickAsync();
+
+        journal.Flush();
+        Assert.Equal(1, script.CloseCalls);
+        Assert.Equal("/close/445", script.LastClosePath);
+        Assert.Contains(journal.GetRecent(null, 200),
+            e => e.Category == "FX_FLOOR" && e.Details.Contains("EXIT SUBMITTED"));
+
+        // Idempotent: another tick while the exit is in flight does NOT
+        // re-submit (once-per-breach event + in-flight skip).
+        await host.RunFloorWatchTickAsync();
+        journal.Flush();
+        Assert.Equal(1, script.CloseCalls);
     }
 
     [Fact]

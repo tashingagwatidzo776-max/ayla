@@ -22,6 +22,15 @@ public sealed class FxEngineHost : IDisposable
     private readonly Func<decimal> _equityFloorFloor;
     private readonly Func<bool> _realMoneyUnlocked;
     private readonly System.Windows.Threading.DispatcherTimer _timer;
+
+    /// <summary>Between-cycle breach detection: a locked profit floor must
+    /// not wait up to 60s for the next cycle (observed 2026-10-08 —
+    /// +0.71R sampled, the next sample -0.46R straight THROUGH a 0.3R
+    /// floor). The watch advances every locked-floor guard on a fresh tick
+    /// every FloorWatchIntervalSeconds; see RunFloorWatchTickAsync.</summary>
+    internal const int FloorWatchIntervalSeconds = 5;
+    private readonly System.Windows.Threading.DispatcherTimer _floorWatchTimer;
+    private string? _floorWatchLastError;
     private readonly TimeSpan _cycleOffset;
     private bool _firstCycle = true;
     private bool _cycleRunning;
@@ -503,6 +512,38 @@ public sealed class FxEngineHost : IDisposable
                 _cycleRunning = false;
             }
         };
+
+        // ── THE FLOOR WATCH (between cycles) ───────────────────────────
+        // The 60s cycle above is the source of truth, but a locked floor
+        // can be shot through inside one window. This secondary timer
+        // never runs a cycle and never journals the profit snapshot — it
+        // only feeds a FRESH tick to guards that hold a locked floor, and
+        // defers entirely while a cycle is running.
+        _floorWatchTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(FloorWatchIntervalSeconds),
+        };
+        _floorWatchTimer.Tick += async (_, _) =>
+        {
+            try
+            {
+                await RunFloorWatchTickAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                // Opportunistic accelerator: the 60s cycle still owns the
+                // position. Journal only when the failure CHANGES so a
+                // persistent fault cannot flood the log every 5 seconds.
+                var msg = ex.GetBaseException().Message;
+                if (msg != _floorWatchLastError)
+                {
+                    _floorWatchLastError = msg;
+                    Journal("FX_FLOOR",
+                        $"floor watch tick failed (cycle still owns protection): {msg}",
+                        System.Text.Json.JsonSerializer.Serialize(new { Error = msg }));
+                }
+            }
+        };
     }
 
     public void Start()
@@ -513,6 +554,7 @@ public sealed class FxEngineHost : IDisposable
         }
 
         _timer.Start();
+        _floorWatchTimer.Start();
         if (Supervisor.SessionStartBalance is null)
         {
             _ = AnchorSupervisorAsync();   // first host to start anchors; siblings share
@@ -573,7 +615,11 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
-    public void Stop() => _timer.Stop();
+    public void Stop()
+    {
+        _timer.Stop();
+        _floorWatchTimer.Stop();
+    }
 
     public void GoLive()
     {
@@ -1520,71 +1566,8 @@ public sealed class FxEngineHost : IDisposable
 
             if (guardVerdict.Command == Core.Fx.FxFloorCommand.ExecuteExit)
             {
-                Journal("FX_FLOOR",
-                    $"{p.Symbol} #{p.Ticket}: {guardVerdict.Reason}",
-                    System.Text.Json.JsonSerializer.Serialize(new
-                    {
-                        Ticket = p.Ticket,
-                        Symbol = p.Symbol,
-                        Direction = p.Side,
-                        OriginalRisk = Core.Fx.FxJson.Sanitize(st.RiskPerLot),
-                        CurrentR = Core.Fx.FxJson.Sanitize(guardVerdict.ExecutableR),
-                        PeakR = Core.Fx.FxJson.Sanitize(guardVerdict.PeakR),
-                        ProtectedFloorR = Core.Fx.FxJson.Sanitize(guardVerdict.FloorR),
-                        ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
-                        FloorState = guardVerdict.State.ToString(),
-                        EventId = guardVerdict.EventId,
-                        ExitReason = "hard profit floor breach",
-                    }));
-
-                // Submit with an in-cycle retry ladder; reconciliation and
-                // any further retries continue on the next cycle.
-                for (var attempt = 1; attempt <= Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts; attempt++)
-                {
-                    var close = await _mt5.ClosePositionAsync(p.Ticket, null).ConfigureAwait(true);
-                    if (close.Ok)
-                    {
-                        guard.MarkSubmitted(close.Order?.ToString() ?? close.Deal?.ToString() ?? "?");
-                        _webhook?.PostRiskRail(
-                            $"🚨 HARD PROFIT FLOOR BREACH — #{p.Ticket}",
-                            $"{p.Symbol} | Current: {guardVerdict.ExecutableR:+0.0;-0.0}R | Floor: {guardVerdict.FloorR:0.0}R " +
-                            $"(peak {guardVerdict.PeakR:0.0}R). Hard exit submitted (deal {close.Deal ?? close.Order}).");
-                        Journal("FX_FLOOR",
-                            $"{p.Symbol} #{p.Ticket}: PROFIT FLOOR EXIT SUBMITTED — deal {close.Deal ?? close.Order} " +
-                            $"(event {guardVerdict.EventId}, attempt {attempt})",
-                            System.Text.Json.JsonSerializer.Serialize(new
-                            {
-                                Ticket = p.Ticket,
-                                EventId = guardVerdict.EventId,
-                                ExitOrderId = close.Order,
-                                Deal = close.Deal,
-                                BrokerResponse = close.RetcodeName,
-                                Attempt = attempt,
-                                ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
-                            }));
-                        break;
-                    }
-
-                    Journal("FX_FLOOR",
-                        $"{p.Symbol} #{p.Ticket}: PROFIT FLOOR EXIT FAILED — {close.RetcodeName} " +
-                        $"(attempt {attempt}/{Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts}); protection remains active, retrying",
-                        System.Text.Json.JsonSerializer.Serialize(new
-                        {
-                            Ticket = p.Ticket,
-                            EventId = guardVerdict.EventId,
-                            BrokerResponse = close.RetcodeName,
-                            Attempt = attempt,
-                        }));
-                }
-
-                if (guard.State != Core.Fx.FxFloorState.ExitSubmitted)
-                {
-                    guard.MarkFailed();
-                    _webhook?.PostRiskRail(
-                        $"❌ PROFIT FLOOR EXIT FAILED — #{p.Ticket}",
-                        $"{p.Symbol} | All {Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts} submit attempts refused. " +
-                        $"Protection remains active at {guardVerdict.FloorR:0.0}R — retrying next cycle. NEVER reverting to HOLD.");
-                }
+                await SubmitFloorExitAsync(p.Ticket, p.Symbol, p.Side, st.RiskPerLot,
+                    guard, guardVerdict, executablePrice).ConfigureAwait(true);
             }
 
 
@@ -2215,10 +2198,147 @@ public sealed class FxEngineHost : IDisposable
     private static double PipSizeFor(double price) =>
         price >= 400 ? 0.1 : price >= 20 ? 0.01 : 0.0001;
 
+    /// <summary>The hard-floor breach handler: journal the command, then
+    /// the retry ladder; reconciliation and further retries continue on the
+    /// next cycle (or floor-watch tick). Shared by RunCycleAsync and
+    /// RunFloorWatchTickAsync so there is exactly ONE submit path.</summary>
+    private async Task SubmitFloorExitAsync(
+        long ticket, string symbol, string side, double riskPerLot,
+        Core.Fx.FxProfitFloorGuard guard, Core.Fx.FxFloorVerdict guardVerdict,
+        double executablePrice)
+    {
+        Journal("FX_FLOOR",
+            $"{symbol} #{ticket}: {guardVerdict.Reason}",
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Ticket = ticket,
+                Symbol = symbol,
+                Direction = side,
+                OriginalRisk = Core.Fx.FxJson.Sanitize(riskPerLot),
+                CurrentR = Core.Fx.FxJson.Sanitize(guardVerdict.ExecutableR),
+                PeakR = Core.Fx.FxJson.Sanitize(guardVerdict.PeakR),
+                ProtectedFloorR = Core.Fx.FxJson.Sanitize(guardVerdict.FloorR),
+                ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
+                FloorState = guardVerdict.State.ToString(),
+                EventId = guardVerdict.EventId,
+                ExitReason = "hard profit floor breach",
+            }));
+
+        // Submit with a retry ladder; reconciliation and any further
+        // retries continue on the next cycle/watch tick.
+        for (var attempt = 1; attempt <= Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts; attempt++)
+        {
+            var close = await _mt5.ClosePositionAsync(ticket, null).ConfigureAwait(true);
+            if (close.Ok)
+            {
+                guard.MarkSubmitted(close.Order?.ToString() ?? close.Deal?.ToString() ?? "?");
+                _webhook?.PostRiskRail(
+                    $"🚨 HARD PROFIT FLOOR BREACH — #{ticket}",
+                    $"{symbol} | Current: {guardVerdict.ExecutableR:+0.0;-0.0}R | Floor: {guardVerdict.FloorR:0.0}R " +
+                    $"(peak {guardVerdict.PeakR:0.0}R). Hard exit submitted (deal {close.Deal ?? close.Order}).");
+                Journal("FX_FLOOR",
+                    $"{symbol} #{ticket}: PROFIT FLOOR EXIT SUBMITTED — deal {close.Deal ?? close.Order} " +
+                    $"(event {guardVerdict.EventId}, attempt {attempt})",
+                    System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Ticket = ticket,
+                        EventId = guardVerdict.EventId,
+                        ExitOrderId = close.Order,
+                        Deal = close.Deal,
+                        BrokerResponse = close.RetcodeName,
+                        Attempt = attempt,
+                        ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
+                    }));
+                break;
+            }
+
+            Journal("FX_FLOOR",
+                $"{symbol} #{ticket}: PROFIT FLOOR EXIT FAILED — {close.RetcodeName} " +
+                $"(attempt {attempt}/{Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts}); protection remains active, retrying",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Ticket = ticket,
+                    EventId = guardVerdict.EventId,
+                    BrokerResponse = close.RetcodeName,
+                    Attempt = attempt,
+                }));
+        }
+
+        if (guard.State != Core.Fx.FxFloorState.ExitSubmitted)
+        {
+            guard.MarkFailed();
+            _webhook?.PostRiskRail(
+                $"❌ PROFIT FLOOR EXIT FAILED — #{ticket}",
+                $"{symbol} | All {Core.Fx.FxProfitFloorGuard.MaxSubmitAttempts} submit attempts refused. " +
+                $"Protection remains active at {guardVerdict.FloorR:0.0}R — retrying next cycle. NEVER reverting to HOLD.");
+        }
+    }
+
+    /// <summary>One floor-watch tick: advance every guard holding a locked
+    /// floor (or awaiting a retry) on a FRESH executable tick, WITHOUT
+    /// running a cycle. Defers while a cycle is running; skips guards with
+    /// an exit in flight (the guard's once-per-breach event keeps submit
+    /// idempotent). Returns when there is no locked floor to watch — the
+    /// common case costs zero bridge calls. Test seam: called directly.</summary>
+    internal async Task RunFloorWatchTickAsync()
+    {
+        if (_cycleRunning)
+        {
+            return;
+        }
+
+        List<long>? watchList = null;
+        foreach (var kv in _floorGuards)
+        {
+            var g = kv.Value;
+            var locked = g.FloorR > 0 || g.State == Core.Fx.FxFloorState.ExitFailed;
+            var inFlight = g.State is Core.Fx.FxFloorState.ExitPending
+                or Core.Fx.FxFloorState.ExitSubmitted;
+            if (locked && !inFlight)
+            {
+                (watchList ??= new List<long>()).Add(kv.Key);
+            }
+        }
+        if (watchList is null)
+        {
+            return;
+        }
+
+        foreach (var ticket in watchList)
+        {
+            if (!_exitStates.TryGetValue(ticket, out var st))
+            {
+                continue;   // first cycle hasn't seen it yet — the cycle owns it
+            }
+            var guard = _floorGuards[ticket];
+            var tick = await _mt5.GetTickAsync(st.Symbol).ConfigureAwait(true);
+            if (tick is not { } tk || tk.Bid <= 0 || tk.Ask <= 0)
+            {
+                continue;   // no fresh price, no opinion — next tick retries
+            }
+            var executablePrice = st.Side == "buy" ? tk.Bid : tk.Ask;
+            var executableR = st.Side == "buy"
+                ? (executablePrice - st.EntryPrice) / Math.Max(st.RiskPerLot, 1e-9)
+                : (st.EntryPrice - executablePrice) / Math.Max(st.RiskPerLot, 1e-9);
+            var guardVerdict = guard.Advance(executableR,
+                _profitFloors.TryGetValue(ticket, out var modelFloor) ? modelFloor : 0.0,
+                Math.Max(st.MfeR, executableR));
+            if (guardVerdict.Command == Core.Fx.FxFloorCommand.ExecuteExit)
+            {
+                await SubmitFloorExitAsync(ticket, st.Symbol, st.Side, st.RiskPerLot,
+                    guard, guardVerdict, executablePrice).ConfigureAwait(true);
+            }
+        }
+    }
+
     private void Journal(string category, string detail, string json) =>
         _journal.Log(Guid.Empty, category, detail, json);
 
     public FxDecision? LastDecision { get; private set; }
 
-    public void Dispose() => _timer.Stop();
+    public void Dispose()
+    {
+        _timer.Stop();
+        _floorWatchTimer.Stop();
+    }
 }
