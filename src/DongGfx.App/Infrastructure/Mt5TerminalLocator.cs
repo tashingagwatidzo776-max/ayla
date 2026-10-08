@@ -26,13 +26,27 @@ public static class Mt5TerminalLocator
     /// <summary>Config file the watchdog reads (terminal path + sidecar port).</summary>
     public static string ConfigPath => Path.Combine(SettingsService.DataDir, "mt5-bridge.json");
 
-    /// <summary>The pinned path when it exists; otherwise the first known
-    /// install with a terminal64.exe; null when MT5 is not installed.</summary>
+    /// <summary>The pinned path when it exists; otherwise the install of the
+    /// currently-running terminal64 process; otherwise the first known install
+    /// with a terminal64.exe; null when MT5 is not installed.
+    ///
+    /// The running terminal wins over the known-install probe because the
+    /// operator commonly runs a portable install (e.g.
+    /// Desktop\...\mt5_portable) while a Program Files install also exists on
+    /// disk but is not signed in. Publishing the on-disk-but-idle path makes
+    /// the sidecar attach to the wrong terminal, which fails loudly with
+    /// "-6 Terminal: Authorization failed" and takes the whole bridge down.</summary>
     public static string? Find(string? configured)
     {
         if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
         {
             return configured;
+        }
+
+        var running = RunningTerminalPath();
+        if (running is not null)
+        {
+            return running;
         }
 
         foreach (var dir in KnownInstallDirs)
@@ -42,6 +56,38 @@ public static class Mt5TerminalLocator
             {
                 return exe;
             }
+        }
+
+        return null;
+    }
+
+    /// <summary>Executable path of a live terminal64 process, or null when
+    /// none is running (or its image cannot be read — a terminal owned by
+    /// another user/elevation level). This is the terminal the sidecar can
+    /// actually attach to, so it is preferred over a merely-present install.</summary>
+    public static string? RunningTerminalPath()
+    {
+        try
+        {
+            foreach (var proc in Process.GetProcessesByName("terminal64"))
+            {
+                try
+                {
+                    var path = proc.MainModule?.FileName;
+                    if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                    {
+                        return path;
+                    }
+                }
+                catch
+                {
+                    // access denied for this particular process — try the next
+                }
+            }
+        }
+        catch
+        {
+            // no process API / enumeration failure — treat as not running
         }
 
         return null;

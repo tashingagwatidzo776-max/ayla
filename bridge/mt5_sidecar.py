@@ -11,6 +11,9 @@ one) and serves a small JSON API on 127.0.0.1 only:
     GET  /ticks/{symbol}         last bid/ask/time
     GET  /book/{symbol}          DOM levels (Deriv streams none -> client falls back)
     GET  /candles/{symbol}?tf=M1&n=120   OHLC series
+    GET  /history/{symbol}?tf=M1&n=50000&start=0   deep paged OHLC
+                                 (offline trainer only — the live route
+                                 stays capped at 500)
     GET  /orders                 open (pending) orders
     POST /order                  market/limit/stop/stoplimit with SL/TP
     GET  /positions              open positions with live P/L
@@ -29,9 +32,11 @@ Run:  python bridge/mt5_sidecar.py [port]
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -94,12 +99,35 @@ class OrderError(ValueError):
     """A request the sidecar refuses without touching the terminal."""
 
 
-def attach(retries: int = 6, delay: float = 2.0,
+def _venue_lots(v):
+    """Quantize a venue volume to a clean decimal lot count.
+
+    MT5 volumes are float32, so a 0.1-lot fill comes back as
+    0.10000000149011612. The app compares book lots against a double
+    cap EXACTLY (FxPortfolioHost.AuditExposure), so a full-cap book of
+    float32-noisy 0.1s tripped a spurious FX_RISK "exceeds the cap"
+    WARN on every audit tick. Lot steps are >= 0.01, so 6 decimal
+    places removes representation noise without touching real volume;
+    None passes through unchanged (order results can omit it)."""
+    if v is None:
+        return None
+    return round(float(v), 6)
+
+
+def attach(retries: int = 20, delay: float = 3.0,
            terminal_path: str | None = None) -> bool:
     """initialize() with retries — IPC timeouts (-10005) are transient when
     several MT5 terminals are running. With --terminal the given
     terminal64.exe install is targeted (and started when it is not running),
-    so a second MT5 install can never be attached by accident."""
+    so a second MT5 install can never be attached by accident.
+
+    The startup window is generous (default ~60 s) on purpose: a freshly
+    launched terminal needs tens of seconds to boot and authorize, and a
+    sidecar that gives up early exits without serving - which makes the
+    external watchdog spawn ANOTHER sidecar (and another terminal) on its
+    next tick, piling up duplicate terminals. Waiting instead absorbs the
+    boot; the terminal process is already running, so repeated initialize()
+    calls attach rather than launch more."""
     for _ in range(retries):
         if terminal_path:
             if mt5.initialize(path=terminal_path):
@@ -125,6 +153,14 @@ class BridgeHandlers:
     # /health re-attaches at most this often (the app polls every few
     # seconds; mt5.initialize is a heavyweight IPC handshake, not a poll).
     REATTACH_COOLDOWN_S = 30.0
+    # /symbols serves a cached snapshot this long (stale-while-revalidate
+    # rebuilds in the background). The full-catalog scan held the MT5 lock
+    # 25-31s under load — every other route queued past the client's 15 s
+    # timeout and the app journaled "MT5 bridge unreachable" flaps every
+    # minute (2026-10-06). The fields the app sizes on (contract size,
+    # volume steps, stops, point) are static intraday; bid/ask in this
+    # payload is informational — the engine reads /ticks for quotes.
+    SYMBOL_CACHE_TTL_S = 20.0
 
     def __init__(self, facade: Any, reattach: Any = None) -> None:
         self._m = facade
@@ -132,6 +168,16 @@ class BridgeHandlers:
         # the old behavior — reads only, never re-attaches.
         self._reattach = reattach
         self._last_attach_try = 0.0
+        # /symbols snapshot cache (symbols_cached). Its own lock — never
+        # the MT5 lock: the refresh thread takes the MT5 lock one chunk at
+        # a time so concurrent routes keep flowing during a rebuild.
+        self._sym_guard = threading.Lock()
+        self._sym_ready = threading.Condition(self._sym_guard)
+        self._sym_payload: dict | None = None
+        self._sym_ts = 0.0
+        self._sym_refresh: threading.Thread | None = None
+        self._route_lock: Any = None   # bound by SidecarServer
+        self._sym_last_diag: dict = {}
 
     # ── reads ──────────────────────────────────────────────────────
 
@@ -240,38 +286,134 @@ class BridgeHandlers:
             raise OrderError(f"symbol {symbol} not available on this account")
         return info
 
-    def symbols(self) -> dict:
-        """Tradable catalog with live quotes: symbol_select every visible
-        symbol once, then snapshot bid/ask/spread/digits + trade mode. The
-        Terminal's Market Watch is fed from this (MT5-native, not Deriv)."""
-        out = []
-        for info in (self._m.symbols_get() or []):
-            if not getattr(info, "visible", False):
-                continue
-            tick = self._m.symbol_info_tick(info.name)
-            out.append({
-                "symbol": info.name,
-                "description": info.description,
-                "bid": tick.bid if tick else None,
-                "ask": tick.ask if tick else None,
-                "spread_points": info.spread,
-                "digits": info.digits,
-                "trade_mode": int(info.trade_mode),
-                # Sizing ground truth: the engine must size in venue lots
-                # (contract size), not guessed units. E.g. XAUUSDmicro is
-                # "1 lot = 1 unit" with 0.1 step — 100× smaller than the
-                # standard-gold contract the old price heuristic assumed.
-                "volume_min": float(info.volume_min),
-                "volume_step": float(info.volume_step),
-                "volume_max": float(info.volume_max),
-                "contract_size": float(info.trade_contract_size),
-                # Stop geometry: the app floors its stop distances at the
-                # venue's stops_level (an SL inside the band is rejected
-                # outright by order_send). point converts points → price.
-                "stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
-                "point": float(getattr(info, "point", 0.0) or 0.00001),
-            })
+    def symbols(self, lock: Any = None, chunk: int = 10) -> dict:
+        """Tradable catalog with live quotes: snapshot bid/ask/spread/digits
+        + trade mode for every visible symbol. The Terminal's Market Watch
+        is fed from this (MT5-native, not Deriv).
+
+        ``lock`` (the server's MT5 lock) is taken ONE CHUNK AT A TIME and
+        released between chunks — a monolithic hold ran 25-31s under load,
+        queueing every other route past the app's 15 s timeout and producing
+        the 2026-10-06 BridgeDown flaps. Between chunks the lock is free and
+        time.sleep yields the GIL, so queued routes and the accept loop run.
+        Tests call this directly with lock=None (single-threaded).
+        """
+        t0 = time.monotonic()
+        held = lock is not None
+        if held:
+            lock.acquire()
+        try:
+            infos = [i for i in (self._m.symbols_get() or [])
+                     if getattr(i, "visible", False)]
+        finally:
+            if held:
+                lock.release()
+        get_ms = int((time.monotonic() - t0) * 1000)
+
+        out: list[dict] = []
+        t1 = time.monotonic()
+        for start in range(0, len(infos), chunk):
+            if held:
+                lock.acquire()
+            try:
+                for info in infos[start:start + chunk]:
+                    tick = self._m.symbol_info_tick(info.name)
+                    out.append(self._symbol_row(info, tick))
+            finally:
+                if held:
+                    lock.release()
+            time.sleep(0.002)   # yield: interleave queued routes + accept loop
+        self._sym_last_diag = {"n": len(out), "get_ms": get_ms,
+                               "ticks_ms": int((time.monotonic() - t1) * 1000)}
         return {"symbols": out}
+
+    @staticmethod
+    def _symbol_row(info: Any, tick: Any) -> dict:
+        return {
+            "symbol": info.name,
+            "description": info.description,
+            "bid": tick.bid if tick else None,
+            "ask": tick.ask if tick else None,
+            "spread_points": info.spread,
+            "digits": info.digits,
+            "trade_mode": int(info.trade_mode),
+            # Sizing ground truth: the engine must size in venue lots
+            # (contract size), not guessed units. E.g. XAUUSDmicro is
+            # "1 lot = 1 unit" with 0.1 step — 100× smaller than the
+            # standard-gold contract the old price heuristic assumed.
+            "volume_min": float(info.volume_min),
+            "volume_step": float(info.volume_step),
+            "volume_max": float(info.volume_max),
+            "contract_size": float(info.trade_contract_size),
+            # Stop geometry: the app floors its stop distances at the
+            # venue's stops_level (an SL inside the band is rejected
+            # outright by order_send). point converts points → price.
+            "stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+            "point": float(getattr(info, "point", 0.0) or 0.00001),
+        }
+
+    # ── /symbols snapshot cache ─────────────────────────────────────────
+
+    def symbols_cached(self) -> dict:
+        """Serve the catalog snapshot from cache (TTL SYMBOL_CACHE_TTL_S)
+        with stale-while-revalidate: a stale snapshot returns instantly while
+        a background thread rebuilds it chunked under the MT5 lock. Only the
+        FIRST-ever call blocks (cold start, bounded below the client's 15 s
+        timeout); after that no /symbols request can hold a lock long enough
+        to starve another route."""
+        now = time.monotonic()
+        with self._sym_guard:
+            payload = self._sym_payload
+            if (payload is not None
+                    and now - self._sym_ts < self.SYMBOL_CACHE_TTL_S):
+                return payload
+            self._start_sym_refresh_locked()
+            if payload is not None:
+                # stale-while-revalidate: warm paths never wait on a rebuild
+                return payload
+        # Cold start: wait (bounded) for the first snapshot. A miss raises
+        # OrderError → 422 → GetJson reads null → the app retries next cycle.
+        with self._sym_ready:
+            self._sym_ready.wait_for(
+                lambda: self._sym_payload is not None, timeout=14)
+            if self._sym_payload is None:
+                raise OrderError("symbol snapshot is still building — retry")
+            return self._sym_payload
+
+    def prewarm_symbols(self) -> None:
+        """Kick the first snapshot build at startup so the app's first
+        /symbols lands on a warm cache instead of paying the cold scan."""
+        with self._sym_guard:
+            self._start_sym_refresh_locked()
+
+    def _start_sym_refresh_locked(self) -> None:
+        # caller holds self._sym_guard
+        if self._sym_refresh is not None and self._sym_refresh.is_alive():
+            return
+        self._sym_refresh = threading.Thread(
+            target=self._symbols_refresh, name="sym-refresh", daemon=True)
+        self._sym_refresh.start()
+
+    def _symbols_refresh(self) -> None:
+        try:
+            t0 = time.monotonic()
+            payload = self.symbols(lock=self._route_lock)
+            took = int((time.monotonic() - t0) * 1000)
+            with self._sym_guard:
+                self._sym_payload = payload
+                self._sym_ts = time.monotonic()
+            diag = dict(self._sym_last_diag)
+            req_log_write("%s SYSCACHE refresh ok n=%s get_ms=%s "
+                          "ticks_ms=%s total_ms=%s" %
+                          (_req_log_ts(), diag.get("n"), diag.get("get_ms"),
+                           diag.get("ticks_ms"), took))
+        except Exception:  # noqa: BLE001 — log, then the next call retries
+            req_log_write("%s SYSCACHE refresh FAIL %s" %
+                          (_req_log_ts(),
+                           traceback.format_exc().replace("\n", " | ")))
+        finally:
+            with self._sym_ready:
+                self._sym_ready.notify_all()
 
     def ticks(self, symbol: str) -> dict:
         self._symbol_or_404(symbol)
@@ -324,6 +466,35 @@ class BridgeHandlers:
             for r in rates
         ]
 
+    # One page of deep history the offline training tape is built from.
+    # The live /candles route deliberately caps at 500 bars; the trainer
+    # needs up to MaxBars (100000) per timeframe, which MUST arrive in
+    # bounded pages — one unbounded call holds the request lock long
+    # enough for the external watchdog's /account probe (45 s) to give up
+    # and kill this process mid-fetch.
+    HISTORY_PAGE_MAX = 50000
+
+    def history(self, symbol: str, tf: str, n: int, start: int = 0) -> list:
+        if tf not in TIMEFRAMES:
+            raise OrderError(f"unsupported timeframe {tf!r} (use M1..MN1)")
+        n = max(1, min(int(n), self.HISTORY_PAGE_MAX))
+        start = max(0, int(start))
+        self._symbol_or_404(symbol)
+        rates = self._m.copy_rates_from_pos(symbol, TIMEFRAMES[tf], start, n)
+        if rates is None:
+            return []
+        return [
+            {
+                "time": int(r["time"]),
+                "open": float(r["open"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "close": float(r["close"]),
+                "volume": int(r["tick_volume"]),
+            }
+            for r in rates
+        ]
+
     def positions(self) -> list:
         rows = self._m.positions_get() or []
         out = []
@@ -332,7 +503,7 @@ class BridgeHandlers:
                 "ticket": p.ticket,
                 "symbol": p.symbol,
                 "side": "buy" if p.type == self._m.POSITION_TYPE_BUY else "sell",
-                "volume": p.volume,
+                "volume": _venue_lots(p.volume),
                 "price_open": p.price_open,
                 "price_current": p.price_current,
                 "profit": p.profit,
@@ -373,10 +544,9 @@ class BridgeHandlers:
                 pass
             out.append({
                 "ticket": d.ticket,
-                "order": d.order,
-                "symbol": d.symbol,
-                "side": "buy" if d.type == self._m.DEAL_TYPE_BUY else "sell",
-                "volume": d.volume,
+                "order": d.order,                    "symbol": d.symbol,
+                    "side": "buy" if d.type == self._m.DEAL_TYPE_BUY else "sell",
+                    "volume": _venue_lots(d.volume),
                 "price": d.price,
                 "profit": d.profit,
                 "commission": d.commission,
@@ -406,7 +576,7 @@ class BridgeHandlers:
                          self._m.ORDER_TYPE_SELL_STOP: "stop",
                          self._m.ORDER_TYPE_BUY_STOP_LIMIT: "stoplimit",
                          self._m.ORDER_TYPE_SELL_STOP_LIMIT: "stoplimit"}.get(o.type, "pending"),
-                "volume": o.volume_current,
+                "volume": _venue_lots(o.volume_current),
                 "price": o.price_open,
                 "sl": o.sl,
                 "tp": o.tp,
@@ -553,7 +723,7 @@ class BridgeHandlers:
             "deal": getattr(result, "deal", 0) or None,
             "order": getattr(result, "order", 0) or None,
             "price": getattr(result, "price", 0) or None,
-            "volume": getattr(result, "volume", None),
+            "volume": _venue_lots(getattr(result, "volume", None)),
             "comment": getattr(result, "comment", ""),
         }
 
@@ -571,7 +741,7 @@ class BridgeHandlers:
                 raise OrderError(f"lots {lots} outside 0..{p.volume}")
             if abs(round(lots / step) * step - lots) > 1e-9:
                 raise OrderError(f"lots {lots} not a multiple of {step}")
-            if abs(lots - p.volume) < 1e-9:
+            if abs(lots - _venue_lots(p.volume)) < 1e-9:
                 lots = None  # closing exactly the remaining volume = full close
         tick = self._m.symbol_info_tick(p.symbol)
         if tick is None:
@@ -581,7 +751,7 @@ class BridgeHandlers:
             "action": self._m.TRADE_ACTION_DEAL,
             "position": int(ticket),
             "symbol": p.symbol,
-            "volume": p.volume if lots is None else lots,
+            "volume": _venue_lots(p.volume) if lots is None else lots,
             "type": self._m.ORDER_TYPE_SELL if p.type == self._m.POSITION_TYPE_BUY
             else self._m.ORDER_TYPE_BUY,
             "price": tick.bid if p.type == self._m.POSITION_TYPE_BUY else tick.ask,
@@ -598,8 +768,37 @@ class BridgeHandlers:
             "retcode_name": RETCODE_NAMES.get(retcode, f"retcode-{retcode}"),
             "ok": retcode == 10009,
             "closed_ticket": int(ticket),
-            "closed_volume": p.volume if lots is None else lots,
+            "closed_volume": _venue_lots(p.volume if lots is None else lots),
         }
+
+
+# Shared connection/request journal for the BridgeDown-flap diagnosis:
+# every ACCEPTED socket and every ANSWERED request (status + duration)
+# lands here, so an app-side fetch failure can be told apart from a
+# request that never reached the handler at all. Size-capped rotate.
+REQ_LOG = os.path.join(os.environ.get("APPDATA", ""), "tf", "data",
+                       "logs", "sidecar-requests.log")
+
+
+def _req_log_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3] + "Z"
+
+
+# Serialize appends: the :18 heartbeat burst has a dozen threads logging at
+# once, and unlocked concurrent appends on Windows can drop or interleave
+# lines — which would hide exactly the request the flap diagnosis is after.
+_req_log_lock = threading.Lock()
+
+
+def req_log_write(line: str) -> None:
+    try:
+        with _req_log_lock:
+            if os.path.exists(REQ_LOG) and os.path.getsize(REQ_LOG) > 1_000_000:
+                os.replace(REQ_LOG, REQ_LOG + ".1")
+            with open(REQ_LOG, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+    except OSError:
+        pass
 
 
 class ExclusiveHTTPServer(ThreadingHTTPServer):
@@ -608,9 +807,38 @@ class ExclusiveHTTPServer(ThreadingHTTPServer):
     port already in use on Windows — four double-bound sidecars meant
     connections landed on a random one (transient 'bridge unreachable',
     split-brain health, 2026-09-28). With reuse disabled the second bind
-    fails loudly here, and main() exits gracefully instead."""
+    fails loudly here, and main() exits gracefully instead.
+
+    request_queue_size: socketserver's default listen backlog is 5, and
+    the app's per-minute heartbeat bursts (candles + tick + account +
+    deals for four staggered engines, plus the trade feed) arrive within
+    milliseconds — SYNs beyond the backlog are REFUSED, the heartbeat's
+    account read fails, and the supervisor flaps BridgeDown <-> cleared
+    every minute (journal 2026-10-05/06: ~58-16 events/day while a probe
+    at 150 ms cadence saw zero slow responses — the burst refused, the
+    probe never collided). A deep backlog makes the burst queue instead
+    of refuse.
+    """
 
     allow_reuse_address = False
+    request_queue_size = 256
+
+    def get_request(self):
+        # Log the ACCEPT itself: a client fetch that fails with no matching
+        # request line never reached the handler (kernel refused the SYN or
+        # the client aborted before sending) — the distinction the
+        # BridgeDown-flap diagnosis needs.
+        conn, addr = super().get_request()
+        req_log_write("%s ACCEPT peer=%s:%s" %
+                      (_req_log_ts(), addr[0], addr[1]))
+        return conn, addr
+
+    def handle_error(self, request, client_address) -> None:
+        # Handler-thread crashes used to vanish into a hidden stderr; keep
+        # them where the diagnosis can see them.
+        req_log_write("%s ERROR peer=%s:%s %s" % (
+            _req_log_ts(), client_address[0], client_address[1],
+            traceback.format_exc().replace("\n", " | ")))
 
 
 class SidecarServer:
@@ -619,11 +847,65 @@ class SidecarServer:
     def __init__(self, handlers: BridgeHandlers, port: int = DEFAULT_PORT) -> None:
         self._handlers = handlers
         self._mt5_lock = threading.Lock()  # MT5 API is not thread-safe
+        # The /symbols background rebuild takes the SAME MT5 lock — but only
+        # one chunk at a time (see BridgeHandlers.symbols).
+        handlers._route_lock = self._mt5_lock
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
+            # HTTP/1.1 + keep-alive (2026-10-06 BridgeDown fix, part 2).
+            # With the HTTP/1.0 default (close per response) EVERY request
+            # paid a fresh TCP handshake: ~6 conn/s churned 20k TIME_WAITs,
+            # and ~0.04% of clients got their connection RST mid-response
+            # ("connection was forcibly closed by the remote host") with
+            # zero ACCEPT logged — the app's per-minute GetJson null →
+            # "MT5 bridge unreachable" halt. A 20k-probe against an HTTP/1.1
+            # mirror: 1 connection, 0 failures (vs 8 failures / 20k
+            # connections on HTTP/1.0). _send always emits Content-Length,
+            # which HTTP/1.1 keep-alive requires.
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, *args: Any) -> None:  # quiet
                 pass
+
+            def log_request(self, code: Any = '-', size: Any = '-') -> None:
+                # Called from send_response (after the MT5 lock is released),
+                # so dt = route + lock wait - exactly the latency that can
+                # eat the client's 15 s timeout. The status code matters: a
+                # 4xx/5xx looks like a logged fetch but reads null app-side
+                # (Mt5BridgeClient.GetJson rejects non-2xx) — the 422 from
+                # account_info() is None would otherwise be invisible.
+                # The peer port pairs this line with its ACCEPT exactly —
+                # adjacency lies when several connections interleave.
+                dt_ms = int((time.monotonic()
+                             - getattr(self, "_t0", time.monotonic())) * 1000)
+                try:
+                    peer = "%s:%s" % self.connection.getpeername()[:2]
+                except OSError:
+                    peer = "?"
+                req_log_write("%s %s %s peer=%s status=%s dt=%dms" % (
+                    _req_log_ts(),
+                    self.command or "?",
+                    (self.path or "?").split("?")[0],
+                    peer,
+                    code, dt_ms))
+
+            def handle_one_request(self) -> None:
+                # A connection that is accepted but never yields a request
+                # line (client vanished mid-handshake or sent nothing) used
+                # to be indistinguishable from a request we never saw at
+                # all — pin it down for the flap diagnosis. With keep-alive,
+                # an EMPTY line after ≥1 served request is just the client
+                # closing an idle pool connection — log the orphan only.
+                super().handle_one_request()
+                if (not getattr(self, "raw_requestline", b"")
+                        and not hasattr(self, "_t0")):
+                    try:
+                        peer = "%s:%s" % self.connection.getpeername()[:2]
+                    except OSError:
+                        peer = "?"
+                    req_log_write("%s EOF peer=%s (accepted, no request)" %
+                                  (_req_log_ts(), peer))
 
             def _send(self, code: int, payload: dict) -> None:
                 raw = json.dumps(payload).encode()
@@ -635,11 +917,36 @@ class SidecarServer:
                     self.wfile.write(raw)
                 except OSError:
                     # Client went away mid-response (its own timeout aborts
-                    # the socket) — not a server fault; drop it quietly.
+                    # the socket) — not a server fault; drop it quietly...
+                    # but SAY SO: a logged status=200 whose write failed
+                    # reads null app-side (GetJson) and halts the supervisor
+                    # while looking like a served fetch. Flap diagnosis.
+                    try:
+                        peer = "%s:%s" % self.connection.getpeername()[:2]
+                    except OSError:
+                        peer = "?"
+                    req_log_write("%s WRITEFAIL peer=%s %s %s" %
+                                  (_req_log_ts(), peer,
+                                   self.command or "?",
+                                   (self.path or "?").split("?")[0]))
                     self.close_connection = True
 
             def _route_get(self, path: str, qs: dict) -> None:
                 h = outer._handlers
+                if path == "/symbols":
+                    # NOT under the MT5 lock: the full-catalog scan used to
+                    # hold it 25-31s (2026-10-06 BridgeDown flaps), queueing
+                    # every route past the app's 15 s timeout. The cached
+                    # path only ever blocks on a cold start; rebuilds run
+                    # chunked in the background (stale-while-revalidate).
+                    try:
+                        payload, code = h.symbols_cached(), 200
+                    except OrderError as e:
+                        payload, code = {"error": str(e)}, 422
+                    except Exception as e:  # noqa: BLE001
+                        payload, code = {"error": f"{type(e).__name__}: {e}"}, 500
+                    self._send(code, payload)
+                    return
                 # The MetaTrader5 API is not thread-safe: the data fetch runs
                 # under one lock, but the socket write happens OUTSIDE it —
                 # a slow or aborted client write must never stall other
@@ -650,8 +957,6 @@ class SidecarServer:
                             payload, code = h.health(), 200
                         elif path == "/account":
                             payload, code = h.account(), 200
-                        elif path == "/symbols":
-                            payload, code = h.symbols(), 200
                         elif path.startswith("/ticks/"):
                             payload, code = h.ticks(path.split("/", 2)[2]), 200
                         elif path.startswith("/book/"):
@@ -660,6 +965,12 @@ class SidecarServer:
                             sym = path.split("/", 2)[2]
                             payload, code = {"candles": h.candles(
                                 sym, (qs.get("tf") or ["M1"])[0], (qs.get("n") or ["120"])[0])}, 200
+                        elif path.startswith("/history/"):
+                            sym = path.split("/", 2)[2]
+                            payload, code = {"bars": h.history(
+                                sym, (qs.get("tf") or ["M1"])[0],
+                                (qs.get("n") or ["50000"])[0],
+                                (qs.get("start") or ["0"])[0])}, 200
                         elif path == "/positions":
                             payload, code = {"positions": h.positions()}, 200
                         elif path == "/orders":
@@ -678,10 +989,12 @@ class SidecarServer:
                 self._send(code, payload)
 
             def do_GET(self) -> None:  # noqa: N802 (http.server API)
+                self._t0 = time.monotonic()
                 parsed = urlparse(self.path)
                 self._route_get(parsed.path.rstrip("/"), parse_qs(parsed.query))
 
             def do_POST(self) -> None:  # noqa: N802 (http.server API)
+                self._t0 = time.monotonic()
                 parsed = urlparse(self.path)
                 with outer._mt5_lock:
                     try:
@@ -773,6 +1086,7 @@ def main() -> int:
     handlers = BridgeHandlers(
         mt5, reattach=lambda: attach(retries=2, delay=1.0, terminal_path=terminal_path))
     server = SidecarServer(handlers, port)
+    handlers.prewarm_symbols()   # first /symbols lands on a warm cache
     print(f"sidecar listening on http://127.0.0.1:{server.port} (loopback only)")
     try:
         server.serve_forever()

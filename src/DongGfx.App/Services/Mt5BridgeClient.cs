@@ -109,6 +109,17 @@ public sealed class Mt5BridgeClient : IDisposable
     private readonly HttpClient _http;
     private readonly bool _ownsHandler;
 
+    /// <summary>The login the sidecar last reported — refreshed by every
+    /// successful health/account read and by a successful login. A LIVE
+    /// value, so consumers can scope on the account actually attached right
+    /// now rather than a login stored when the app last saved settings.
+    /// Updated from async paths and read from sync ones, hence volatile.</summary>
+    private volatile string? _lastLogin;
+
+    /// <summary>The attached account's login, or null before the first
+    /// successful bridge read. Never throws.</summary>
+    public string? LastLogin => _lastLogin;
+
     public Mt5BridgeClient(int port = DefaultPort)
         : this(new HttpClient { Timeout = TimeSpan.FromSeconds(15) },
                new Uri($"http://127.0.0.1:{port}/"), ownsHandler: true)
@@ -153,9 +164,15 @@ public sealed class Mt5BridgeClient : IDisposable
         // GetInt64/GetString on a null threw and killed the startup poll).
         // TradeAllowed (older sidecars omit it) is the terminal's own
         // autotrading verdict — null = unknown, never treated as off.
+        var loginValue = doc.RootElement.TryGetProperty("login", out var login) && login.ValueKind == JsonValueKind.Number
+            ? login.GetInt64() : (long?)null;
+        if (loginValue is { } loginId)
+        {
+            _lastLogin = loginId.ToString();
+        }
+
         return (doc.RootElement.GetProperty("ok").GetBoolean(),
-                doc.RootElement.TryGetProperty("login", out var login) && login.ValueKind == JsonValueKind.Number
-                    ? login.GetInt64() : null,
+                loginValue,
                 doc.RootElement.TryGetProperty("server", out var server) && server.ValueKind == JsonValueKind.String
                     ? server.GetString() : null,
                 doc.RootElement.TryGetProperty("trade_allowed", out var allowed) && allowed.ValueKind == JsonValueKind.True
@@ -174,8 +191,10 @@ public sealed class Mt5BridgeClient : IDisposable
         }
 
         var r = doc.RootElement;
+        var login = r.GetProperty("login").GetInt64();
+        _lastLogin = login.ToString();
         return new Mt5Account(
-            r.GetProperty("login").GetInt64(),
+            login,
             r.GetProperty("server").GetString() ?? "",
             r.GetProperty("currency").GetString() ?? "",
             r.GetProperty("balance").GetDouble(),
@@ -324,9 +343,16 @@ public sealed class Mt5BridgeClient : IDisposable
         {
             using var doc = JsonDocument.Parse(raw);
             var r = doc.RootElement;
+            var ok = r.GetProperty("ok").GetBoolean();
+            var accountLogin = r.TryGetProperty("login", out var lg) && lg.ValueKind == JsonValueKind.Number
+                ? lg.GetInt64() : (long?)null;
+            if (ok && accountLogin is { } signedIn)
+            {
+                _lastLogin = signedIn.ToString();
+            }
             return new Mt5LoginResult(
-                r.GetProperty("ok").GetBoolean(),
-                r.TryGetProperty("login", out var lg) && lg.ValueKind == JsonValueKind.Number ? lg.GetInt64() : null,
+                ok,
+                accountLogin,
                 r.TryGetProperty("server", out var sv) ? sv.GetString() : null,
                 r.TryGetProperty("trade_mode", out var tm) && tm.ValueKind == JsonValueKind.Number ? tm.GetInt32() : null,
                 r.TryGetProperty("balance", out var bal) && bal.ValueKind == JsonValueKind.Number ? bal.GetDouble() : null,

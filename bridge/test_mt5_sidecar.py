@@ -261,6 +261,131 @@ def test_symbols_degrades_when_stop_geometry_missing():
     assert gold["stops_level"] == 0 and gold["point"] == 0.00001
 
 
+# ── /symbols snapshot cache (the 2026-10-06 BridgeDown fix) ─────────
+
+def test_symbols_cached_builds_once_then_serves_cache():
+    """Cold start blocks for the first snapshot; every later call is a pure
+    cache hit — same object, no MT5 scan. The scan is what held the MT5
+    lock 25-31 s and starved every other route past the app's 15 s
+    timeout (one 'bridge unreachable' halt per minute)."""
+    h = make_handlers()
+    calls = {"n": 0}
+    orig = h._m.symbols_get
+    def counting():
+        calls["n"] += 1
+        return orig()
+    h._m.symbols_get = counting
+    first = h.symbols_cached()
+    second = h.symbols_cached()
+    assert first is second
+    assert [r["symbol"] for r in first["symbols"]] == ["XAUUSDmicro", "EURUSD"]
+    assert calls["n"] == 1
+
+
+def test_symbols_cached_serves_stale_while_rebuilding():
+    """An expired snapshot returns IMMEDIATELY (stale-while-revalidate:
+    the size ground truth is static intraday) while a background thread
+    rebuilds; after the rebuild the next call sees the new payload."""
+    h = make_handlers()
+    first = h.symbols_cached()
+    h._sym_refresh.join(timeout=5)              # first build fully done
+    assert not h._sym_refresh.is_alive()
+    h._sym_ts = time.monotonic() - 999          # force expiry
+    calls = {"n": 0}
+    orig = h._m.symbols_get
+    def counting():
+        calls["n"] += 1
+        return orig()
+    h._m.symbols_get = counting
+    stale = h.symbols_cached()                  # must not block on rebuild
+    assert stale is first
+    h._sym_refresh.join(timeout=5)              # background rebuild finished
+    assert not h._sym_refresh.is_alive()
+    assert calls["n"] == 1
+    assert h._sym_payload is not first          # fresh object published
+    fresh = h.symbols_cached()
+    assert fresh is h._sym_payload and calls["n"] == 1   # fresh → cache hit
+
+
+def test_symbols_scan_releases_lock_between_chunks():
+    """With the MT5 lock passed in, the scan releases it between chunks —
+    a monolithic hold was the BridgeDown flap (25-31 s with no route and
+    even no accepts getting through)."""
+    h = make_handlers()
+    lock = threading.Lock()
+    h._m.symbol_info_tick = lambda s: (
+        time.sleep(0.01), SimpleNamespace(bid=1.0, ask=1.1, time=1))[1]
+    free_windows: list[float] = []
+    stop = threading.Event()
+    def probe():
+        while not stop.is_set():
+            if lock.acquire(timeout=0.005):
+                free_windows.append(time.monotonic())
+                lock.release()
+    th = threading.Thread(target=probe, daemon=True)
+    th.start()
+    try:
+        out = h.symbols(lock=lock, chunk=1)      # 2 visible → 2 chunks
+    finally:
+        stop.set()
+        th.join(timeout=2)
+    assert [r["symbol"] for r in out["symbols"]] == ["XAUUSDmicro", "EURUSD"]
+    assert free_windows, "lock never freed mid-scan — monolithic hold"
+
+
+def test_symbols_route_serves_while_mt5_lock_held():
+    """End-to-end: while another thread monopolizes the MT5 lock (a slow
+    /history, say), GET /symbols still answers promptly from cache — the
+    request path never queues behind the lock."""
+    server = sidecar.SidecarServer(make_handlers(), port=0)
+    th = threading.Thread(target=server.serve_forever, daemon=True)
+    th.start()
+    base = f"http://127.0.0.1:{server.port}"
+    try:
+        with urllib.request.urlopen(f"{base}/symbols", timeout=5) as r:
+            assert r.status == 200               # cold build (fake-fast)
+        server._mt5_lock.acquire()               # simulate a long MT5 fetch
+        try:
+            t0 = time.monotonic()
+            with urllib.request.urlopen(f"{base}/symbols", timeout=3) as r:
+                syms = json.loads(r.read())
+            elapsed = time.monotonic() - t0
+        finally:
+            server._mt5_lock.release()
+        assert elapsed < 2.0, f"cached /symbols waited {elapsed:.2f}s"
+        assert {s["symbol"] for s in syms["symbols"]} == {"XAUUSDmicro", "EURUSD"}
+    finally:
+        server.httpd.shutdown()
+
+
+def test_keepalive_two_requests_one_connection():
+    """HTTP/1.1 + keep-alive: two requests ride ONE TCP connection.
+    Under the old HTTP/1.0 close-per-response the app churned ~6 new
+    connections per second and ~0.04% were RST mid-response ('connection
+    was forcibly closed by the remote host') → GetJson null →
+    'MT5 bridge unreachable' halt every minute. A 20k-probe measured
+    8 failures / 20k connections on HTTP/1.0 vs 0 / 20k on HTTP/1.1."""
+    import http.client
+    server = sidecar.SidecarServer(make_handlers(), port=0)
+    th = threading.Thread(target=server.serve_forever, daemon=True)
+    th.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        conn.request("GET", "/health")
+        r1 = conn.getresponse()
+        body1 = r1.read()
+        conn.request("GET", "/account")   # same socket — keep-alive
+        r2 = conn.getresponse()
+        body2 = r2.read()
+        conn.close()
+        assert r1.version == 11 and r2.version == 11, "must speak HTTP/1.1"
+        assert r1.status == 200 and r2.status == 200
+        assert json.loads(body1)["login"] == 201587365 or "ok" in body1.decode()
+        assert json.loads(body2)["login"] == 201587365
+    finally:
+        server.httpd.shutdown()
+
+
 def test_order_rejects_bad_action_type():
     h = make_handlers()
     for action, kind in [("buy", "weird"), ("sideways", "market"), ("", "")]:
@@ -341,6 +466,25 @@ def test_order_happy_path_stoplimit_sends_both_prices():
     req = fake.sent[-1]
     assert req["action"] == fake.TRADE_ACTION_PENDING
     assert req["price"] == 4300.0 and req["stoplimit"] == 4340.0
+    # "Honors" half: the mapped order TYPE must be the venue's own
+    # stop-limit constant, not a plain limit/stop. A sidecar that forwarded
+    # the prices but picked the wrong type would place the wrong pending
+    # order — the exact contract the app's stop-limit ticket depends on.
+    assert req["type"] == fake.ORDER_TYPE_SELL_STOP_LIMIT, req
+
+
+def test_order_happy_path_stoplimit_buy_maps_buy_stop_limit():
+    # Buy side of the same contract: the type map is keyed on (action, kind),
+    # so the buy leg must resolve independently to BUY_STOP_LIMIT.
+    fake = FakeMT5()
+    h = sidecar.BridgeHandlers(fake)
+    out = h.order({"action": "buy", "type": "stoplimit", "symbol": "XAUUSDmicro",
+                   "lots": 0.1, "price": 4360.0, "stopprice": 4320.0})
+    assert out["ok"], out
+    req = fake.sent[-1]
+    assert req["action"] == fake.TRADE_ACTION_PENDING
+    assert req["price"] == 4360.0 and req["stoplimit"] == 4320.0
+    assert req["type"] == fake.ORDER_TYPE_BUY_STOP_LIMIT, req
 
 
 def test_close_requires_known_position():
@@ -446,6 +590,60 @@ def test_close_partial_sends_volume_and_full_close_omits_it():
             raise AssertionError(f"close(lots={bad}) should be refused")
         except sidecar.OrderError:
             pass
+
+
+def test_venue_float32_volumes_are_quantized():
+    """MT5 volumes are float32: a 0.1-lot fill arrives as
+    0.10000000149011612. The app's AuditExposure compares book lots
+    against the double cap EXACTLY, so raw float32 noise at a full-cap
+    book tripped a spurious FX_RISK "exceeds the cap" WARN. Every
+    volume the app reads back (positions, order fills, close results)
+    must be quantized to clean decimal lots, and full-close detection
+    must not be fooled by the same noise."""
+    noisy = 0.10000000149011612   # float32 representation of 0.1
+
+    def noisy_position(ticket):
+        return [SimpleNamespace(ticket=ticket, symbol="XAUUSDmicro", type=0,
+                                volume=noisy, price_open=4300.0,
+                                price_current=4300.5, profit=0.1, swap=0.0,
+                                sl=0.0, tp=0.0, time=1790000000)]
+
+    fake = FakeMT5()
+    fake.positions_get = lambda ticket=None: noisy_position(333)
+    h = sidecar.BridgeHandlers(fake)
+    assert h.positions()[0]["volume"] == 0.1
+
+    # order fill result echoes the same float32 artifact
+    real_send = fake.order_send
+
+    def noisy_send(request):
+        r = real_send(request)
+        r.volume = noisy
+        return r
+
+    fake.order_send = noisy_send
+    out = h.order({"action": "buy", "type": "market",
+                   "symbol": "XAUUSDmicro", "lots": 0.1})
+    assert out["volume"] == 0.1, out
+
+    # closing EXACTLY the remaining (float32-noisy) volume is a full close
+    fake.positions_get = lambda ticket=None: noisy_position(334)
+    out = h.close(334, 0.1)
+    assert out["ok"] and out["closed_volume"] == 0.1, out
+    assert h._m.sent[-1]["volume"] == 0.1
+
+    # deal history and pending orders carry the same float32 artifact
+    fake.history_deals_get = lambda frm, to: [
+        SimpleNamespace(ticket=551, order=551, symbol="XAUUSDmicro", type=0,
+                        volume=noisy, price=4310.0, profit=-12.5,
+                        commission=-0.5, swap=0.0, time=1790001000, entry=1)]
+    assert h.deals(7)[0]["volume"] == 0.1
+
+    fake.orders_get = lambda ticket=None: [
+        SimpleNamespace(ticket=777, symbol="XAUUSDmicro", type=2,
+                        volume_current=noisy, price_open=4200.0,
+                        sl=0.0, tp=0.0, state=2, time_setup=1790000000)]
+    assert h.orders()[0]["volume"] == 0.1
 
 
 def test_deals_accepts_explicit_utc_range():
