@@ -32,13 +32,19 @@ var diag = args.Contains("--diag");
 
 // Measurement flags (evidence passes, default off):
 //   --min-conf X   gate entries below this confidence (the live entry filter)
-//   --roster N     force one roster mode for every symbol (1 = positive-record
-//                  families only — the playbook filter's production candidate)
+//   --roster N     force one roster mode for every symbol (1 = the RECENT-TAPE
+//                  roster — the in-app gate's cells reseeded from the live
+//                  journal; 2/3 = cumulative positive record at 5/30 trades)
 //   --symbols A,B  restrict the run to these tape symbols
-// All three are stripped from the positional args before the normal parse.
+//   --journal DIR  journal the recent-tape reseed reads (default: the LIVE
+//                  %APPDATA%/tf/data/journal — deliberately independent of
+//                  data-dir so scratch A/B runs see the same tape the
+//                  in-app gate does)
+// All flags are stripped from the positional args before the normal parse.
 double minConfidence = 0.0;
 int? rosterOverride = null;
 var symbolFilter = (string?)null;
+string? journalDir = null;
 var kept = new List<string>();
 for (var i = 0; i < args.Length; i++)
 {
@@ -56,6 +62,9 @@ for (var i = 0; i < args.Length; i++)
             break;
         case "--symbols" when i + 1 < args.Length:
             symbolFilter = args[++i];
+            break;
+        case "--journal" when i + 1 < args.Length:
+            journalDir = args[++i];
             break;
         default:
             kept.Add(args[i]);
@@ -85,6 +94,21 @@ var config = new FxTrainingConfig(
 
 var memory = FxBrainMemory.Load(dataDir);
 Console.WriteLine(memory.SummaryLine());
+
+// ── The recent-tape roster (ROSTER-POLICY items 2–4) ─────────────────
+// Mode 1 reads THIS, not the lifetime cells: the same rolling 30-settle
+// tape the in-app dispatch gate reseeds from the live journal (n >= 30,
+// mean <= -0.10R, two consecutive fails; default-keep when the sample is
+// short). ROSTER-POLICY §5 mandate 2026-10-08: cumulative cells went
+// stale twice running on GBPUSD — stale evidence may tilt weights,
+// never cut the roster.
+journalDir ??= Path.Combine(appData, "tf", "data", "journal");
+var recentTape = new FxRecentTape();
+var tapeReseed = FxRecentTapeReseed.Run(journalDir, recentTape);
+Console.WriteLine(tapeReseed.ClosesRecorded > 0
+    ? $"recent tape: {tapeReseed.ClosesRecorded} settled closes reseeded from {journalDir} " +
+      $"({tapeReseed.FillsSeen} fills, {tapeReseed.ClosesNoOutcome} without outcome)"
+    : $"recent tape: no settled closes at {journalDir} — default-keep, mode 1 runs the full roster");
 
 // Per-symbol best-known config, chosen from the four --sweep passes:
 // EURUSD/AUDUSD need a 40-bar window (short window flips them positive,
@@ -140,10 +164,14 @@ FxTrainingConfig ConfigFor(string symbol)
 }
 
 // Memory-playbook roster filter (the type-7 surface feeding back into
-// training): mode 0 = full roster (production parity), 1 = families with
-// any positive measured record on this symbol, 2 = positive with ≥5 trades,
-// 3 = positive with ≥30 (the memory's own trust floor). An empty filter
-// falls back to the full roster — silence is not a strategy.
+// training): mode 0 = full roster (production parity), 1 = the RECENT-TAPE
+// roster — full roster minus the in-app gate's exclusions (policy items
+// 2–4; replaced the old "positive cumulative record" filter, which read
+// the lifetime cells §5 proved stale), 2 = cumulative positive with ≥5
+// trades, 3 = cumulative positive with ≥30 (the memory's own trust floor).
+// For modes 2/3 an empty filter falls back to the full roster — silence
+// is not a strategy. Mode 1 returns its roster as-is: if the tape has
+// excluded every family, the live gate would refuse every dispatch too.
 // Modes 4/5 are the quiet-FX sweep axis: 4 = production roster PLUS the
 // quiet-FX extension voices, 5 = extension voices alone (how much do they
 // carry by themselves?). Production parity stays mode 0.
@@ -164,14 +192,33 @@ IReadOnlyList<IFxAlpha>? RosterFor(string symbol, int mode)
         return null;   // null = simulator default (FxFamilies.All())
     }
 
-    var minTrades = mode >= 3 ? FxBrainMemory.TrustTrades : mode == 2 ? 5 : 1;
+    if (mode == 1)
+    {
+        // THE LIVE ROSTER: every family the recent tape has not excluded
+        // (IsExcluded = n >= 30, mean <= -0.10R, 2 consecutive fails,
+        // default-keep) — the offline mirror of the dispatch gate.
+        var excluded = FxFamilies.All()
+            .Where(a => recentTape.IsExcluded(symbol, a.Name))
+            .Select(a => a.Name)
+            .ToList();
+        if (excluded.Count > 0)
+        {
+            Console.WriteLine($"roster 1: recent tape excludes {excluded.Count} " +
+                $"famil(ies) on {symbol}: {string.Join(", ", excluded)}");
+        }
+        return FxFamilies.All()
+            .Where(a => !recentTape.IsExcluded(symbol, a.Name))
+            .ToList();
+    }
+
+    var minTrades = mode >= 3 ? FxBrainMemory.TrustTrades : 5;
     var names = new HashSet<string>(
         memory.Playbook(symbol)
             .Where(c => c.ExpectancyR > 0 && c.Trades >= minTrades)
             .Select(c => c.Alpha),
         StringComparer.Ordinal);
-    var roster = FxFamilies.All().Where(a => names.Contains(a.Name)).ToList();
-    return roster.Count > 0 ? roster : null;
+    var playbookRoster = FxFamilies.All().Where(a => names.Contains(a.Name)).ToList();
+    return playbookRoster.Count > 0 ? playbookRoster : null;
 }
 
 int RosterModeFor(string symbol) => rosterOverride ?? symbol.ToUpperInvariant() switch
@@ -190,7 +237,12 @@ int RosterModeFor(string symbol) => rosterOverride ?? symbol.ToUpperInvariant() 
     // Metals: pos (mode 1) grew 5/7 in the full-tape sweep. XAGEUR alone
     // keeps pos30 (mode 3) — mode1 blew it twice in final runs while
     // mode3 gave its best measured end ($12.07, UNSTABLE but growing).
-    "XAGUSD" or "XAUUSD" or "XAUUSDmicro" or "XAUEUR"
+    // NOTE: this switch matches on ToUpperInvariant(), so the case label
+    // must be ALL-CAPS — the old "XAUUSDmicro" label could never match and
+    // XAUUSDmicro silently ran mode 0 (fixed 2026-10-08; with mode 1 now
+    // the recent-tape roster this is full-roster-equal until a cell
+    // reaches the n >= 30 bar).
+    "XAGUSD" or "XAUUSD" or "XAUUSDMICRO" or "XAUEUR"
         or "XPDUSD" or "XPTUSD" => 1,
     "XAGEUR" => 3,
     // Crypto: pos5 (mode 2) over the win70 config — 3/4 grew vs sam3's
