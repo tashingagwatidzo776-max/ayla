@@ -1852,6 +1852,7 @@ public sealed class FxEngineHost : IDisposable
                             ? Core.Fx.FxJson.Sanitize(decision.ProfitR)
                             : (double?)null,
                         OutcomeSource = close.Ok && !lots.HasValue ? "close-price" : "unknown",
+                        ExitPrice = close.Ok && close.Price is { } enPx ? Core.Fx.FxJson.Sanitize(enPx) : (double?)null,
                         Lots = lots,
                         close.Retcode,
                     }));
@@ -2092,9 +2093,13 @@ public sealed class FxEngineHost : IDisposable
                     var floorState = _exitStates.TryGetValue(gone, out var fstate)
                         ? fstate
                         : g.DeferredCloseState;
+                    // Settle from the venue's REAL fill when the submit
+                    // captured one; mid is only the fallback (market data
+                    // can be stale by confirmation time).
+                    var exitPx = g.ExitFillPrice ?? mid;
                     var floorR = floorState is { } fs
                         ? Core.Fx.FxRealizedR.Compute(
-                            fs.EntryPrice, mid,
+                            fs.EntryPrice, exitPx,
                             fs.InitialStopDistance > 0 ? fs.InitialStopDistance : fs.RiskPerLot,
                             fs.Side)
                         : (double?)null;
@@ -2114,6 +2119,7 @@ public sealed class FxEngineHost : IDisposable
                             Retcode = 10009,
                             Confirmed = true,
                             RealizedR = floorR is { } fr2 ? Core.Fx.FxJson.Sanitize(fr2) : (double?)null,
+                            ExitPrice = g.ExitFillPrice is { } cfPx ? Core.Fx.FxJson.Sanitize(cfPx) : (double?)null,
                             OutcomeSource = floorR is not null ? "close-price" : "unknown",
                             EventId = g.EventId,
                             ExitOrderId = g.ExitOrderId,
@@ -2258,6 +2264,9 @@ public sealed class FxEngineHost : IDisposable
             if (close.Ok)
             {
                 guard.MarkSubmitted(close.Order?.ToString() ?? close.Deal?.ToString() ?? "?");
+                // The venue's real fill for this exit — the confirmation
+                // loop (possibly minutes later) settles R from it.
+                guard.ExitFillPrice = close.Price;
                 _webhook?.PostRiskRail(
                     $"🚨 HARD PROFIT FLOOR BREACH — #{ticket}",
                     $"{symbol} | Current: {guardVerdict.ExecutableR:+0.0;-0.0}R | Floor: {guardVerdict.FloorR:0.0}R " +
@@ -2274,6 +2283,7 @@ public sealed class FxEngineHost : IDisposable
                         BrokerResponse = close.RetcodeName,
                         Attempt = attempt,
                         ExecutablePrice = Core.Fx.FxJson.Sanitize(executablePrice),
+                        ExitPrice = close.Price is { } subPx ? Core.Fx.FxJson.Sanitize(subPx) : (double?)null,
                     }));
                 break;
             }

@@ -113,6 +113,13 @@ public sealed class FxProfitFloorGuard
     /// snapshot (unknown), never a wrong R.</summary>
     public FxPositionState? DeferredCloseState { get; set; }
 
+    /// <summary>The venue's ACTUAL fill price for this guard's exit,
+    /// captured when the close was accepted (null when the venue did not
+    /// report one). The confirmation loop settles R from it when
+    /// present — entry vs the real fill beats entry vs a mid sampled
+    /// later. Host-set, transient like DeferredCloseState.</summary>
+    public double? ExitFillPrice { get; set; }
+
     public FxProfitFloorGuard(long ticket, string symbol, string side)
     {
         _ticket = ticket;

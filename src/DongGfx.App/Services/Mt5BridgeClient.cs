@@ -459,7 +459,15 @@ public sealed class Mt5BridgeClient : IDisposable
 
         return new Mt5OrderResult(
             r.GetProperty("ok").GetBoolean(), r.GetProperty("retcode").GetInt32(),
-            r.GetProperty("retcode_name").GetString() ?? "", null, ticket, null,
+            r.GetProperty("retcode_name").GetString() ?? "",
+            // The venue's REAL deal id + fill price for this close (the
+            // sidecar passes both through). Parsing null here made every
+            // close row's "deal N" print the position ticket and left
+            // close rows without the actual fill (2026-10-08 backfills
+            // had to approximate from executable prices).
+            r.TryGetProperty("deal", out var cdeal) && cdeal.ValueKind == JsonValueKind.Number ? cdeal.GetInt64() : null,
+            ticket,
+            r.TryGetProperty("price", out var cprice) && cprice.ValueKind == JsonValueKind.Number ? cprice.GetDouble() : null,
             r.TryGetProperty("closed_volume", out var cv) && cv.ValueKind == JsonValueKind.Number ? cv.GetDouble() : null, "");
     }
 
