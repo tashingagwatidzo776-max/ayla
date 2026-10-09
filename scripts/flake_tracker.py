@@ -322,7 +322,10 @@ def _save_chronic_state(state_path, chronic_names):
 def post_webhook(url, body):
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        # Discord's Cloudflare edge 403s urllib's default "Python-urllib"
+        # signature (error 1010); a named UA posts fine (2026-10-09).
+        headers={"Content-Type": "application/json",
+                 "User-Agent": "DongGfx-Watcher/1.0"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status
