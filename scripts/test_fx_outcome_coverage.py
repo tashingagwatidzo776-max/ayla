@@ -67,8 +67,14 @@ def main():
             failed += 1
             print(f"  FAIL: {name}")
 
-    noon = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
-    yesterday = noon - timedelta(days=1)
+    # Anchor the fixture to the wall clock, not a fixed 12:00 UTC:
+    # windowed() cuts at now-1day, so a noon-pinned fixture only proves
+    # "yesterday is outside the window" once the current UTC time is past
+    # noon (CI failed at 04:20 UTC, 2026-10-09). Rows one hour back and
+    # 25 hours back are always on the right side of that cutoff.
+    now = datetime.now(timezone.utc)
+    noon = now - timedelta(hours=1)          # "today" rows
+    yesterday = noon - timedelta(days=1)     # 25h ago: outside --days 1
 
     with tempfile.TemporaryDirectory() as tmp:
         rows = [
