@@ -76,7 +76,7 @@ Invoke-Step 'script-hygiene' {
 Invoke-Step 'mt5-copy integrity' {
     & "$PSScriptRoot/mt5_copy_integrity.ps1"
 }
-# Watch-the-watcher: the profit-floor watcher's scheduled task must be
+# Watch-the-watcher: every alerting watcher's scheduled task must be
 # alive and completing cleanly. Skips cleanly on machines without the
 # task (e.g. CI runners); a task-health rc of 2 (indeterminate — broken
 # probe) is a skip, not a failure: the check itself must never false-green
