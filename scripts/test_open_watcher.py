@@ -82,7 +82,8 @@ def test_registered_task_points_at_watcher():
           re.search(r"-Weekly\s+-DaysOfWeek\s+Monday", src) is not None)
     check("register script passes -MaxHours 16 to the watcher", "-MaxHours 16" in src)
     check("register script is idempotent (replaces task)",
-          "Register-ScheduledTask" in src and "Unregister-ScheduledTask" in src)
+          "Register-ScheduledTask" in src and "Unregister-ScheduledTask" in src
+          and "-Force" in src)
     check("task runs only when logged on (toast needs a desktop)",
           "-LogonType Interactive" in src)
 

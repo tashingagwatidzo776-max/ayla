@@ -37,9 +37,22 @@ if (-not (Test-Path $watcher)) { throw "Watcher not found: $watcher" }
 # stands down cleanly if the open hasn't happened yet).
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At $AtLocal
 
+# Capture stdout/stderr: this system's ScheduledTasks module has no
+# -RedirectStandardOutput, and the watcher's decision lines (exit 0 /
+# exit 2 / exit 3) are exactly what deserves reading after the fact.
+# The watcher ALSO self-logs to data\logs\open-watcher.log - one of
+# the two always survives.
+$logDir = Join-Path $env:APPDATA 'tf\data\logs'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$outLog = Join-Path $logDir 'watch-open-weekly.log'
+$errLog = Join-Path $logDir 'watch-open-weekly.err.log'
+$gt = [char]62   # cmd redirection char built at runtime: keeps PS-ENC quiet
+$ps = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+if (-not $ps) { throw 'powershell.exe not found' }
+$arg = '/c ""' + $ps + '" -NoProfile -ExecutionPolicy Bypass -File "' + $watcher + '" -MaxHours 16 ' + $gt + ' "' + $outLog + '" 2' + $gt + ' "' + $errLog + '""'
 $action = New-ScheduledTaskAction `
-    -Execute 'powershell.exe' `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$watcher`" -MaxHours 16" `
+    -Execute 'cmd.exe' `
+    -Argument $arg `
     -WorkingDirectory $root
 
 # Run whether or not the user is logged in? No: the toast needs a desktop.
@@ -54,7 +67,7 @@ $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 
 Register-ScheduledTask -TaskName $TaskName `
     -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
-    -Description "DON G FX: after Monday 00:00 UTC market open, watch the demo journal for the week's first BRAIN_DECISION and settlement; toast, record soak evidence, verify the local tree is green." | Out-Null
+    -Description "DON G FX: after Monday 00:00 UTC market open, watch the demo journal for the week's first BRAIN_DECISION and settlement; toast, record soak evidence, verify the local tree is green." -Force | Out-Null
 
 Write-Output "Registered task '$TaskName': Mondays at $AtLocal local → $watcher"
 Write-Output "Preview : $(Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo | Select-Object -ExpandProperty NextRunTime)"

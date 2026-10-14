@@ -223,6 +223,9 @@ def main() -> None:
         print(json.dumps({"tasks": [t for t, _, _ in WATCHERS],
                           "healthy": healthy,
                           "findings": findings}, indent=2))
+        # --json is a machine summary: exit quietly with the verdict so
+        # callers (the weekly fleet digest) get the code AND the JSON.
+        sys.exit(0 if healthy else 1)
     if healthy:
         print(f"watcher-task-health: OK — all {len(WATCHERS)} watcher tasks "
               f"recent, no persistent nonzero (stale or 2x same nonzero "

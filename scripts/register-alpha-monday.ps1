@@ -43,17 +43,22 @@ $action = New-ScheduledTaskAction `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`"" `
     -WorkingDirectory $root
 
+# 4 h limit (was 2 h): the Monday run died as SCHED_S_TASK_TERMINATED
+# (0x41306) leaving only a start line in soak_evening.log - whether the
+# 2 h wall-clock cap or a manual stop killed it is unprovable while the
+# operational event log is off, so double the headroom and let the new
+# timestamped start/exit markers measure the real duration first.
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    -ExecutionTimeLimit (New-TimeSpan -Hours 4)
 
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 
 Register-ScheduledTask -TaskName $TaskName `
     -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
-    -Description 'DON G FX: Monday-evening alpha validation - rerun propose/backtest over the weekday tick archive and surface any proposal clearing the 5-trade bar in docs/soak.' | Out-Null
+    -Description 'DON G FX: Monday-evening alpha validation - rerun propose/backtest over the weekday tick archive and surface any proposal clearing the 5-trade bar in docs/soak.' -Force | Out-Null
 
 Write-Output "Registered task '$TaskName': Mondays at $AtLocal local -> $wrapper"
 Write-Output "Preview : $(Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo | Select-Object -ExpandProperty NextRunTime)"
