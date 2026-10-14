@@ -59,6 +59,8 @@ def main() -> int:
           "TF_DATA_DIR" in audit)
     check("audit exits 1 on findings (scheduler-visible drift)",
           "sys.exit(1 if" in audit)
+    check("audit stdout/stderr captured (a crash leaves evidence)",
+          "task-fleet-audit.log" in src and "[char]62" in src)
 
     failed = [name for name, ok in results if not ok]
     print(f"{'FAIL' if failed else 'PASS'}: "
