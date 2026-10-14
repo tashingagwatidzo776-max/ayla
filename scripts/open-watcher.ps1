@@ -47,6 +47,21 @@ $ErrorActionPreference = 'Stop'
 $dataDir = Join-Path $env:APPDATA 'tf\data'
 $root = (Get-Item $PSScriptRoot).Parent.FullName
 
+# Decisions persist to a log as well as stdout: Task Scheduler
+# discards stdout, so without this the exit 0 / exit 2 / exit 3
+# verdicts vanished with the console (the 403 lesson). Best effort -
+# a failed log write never kills the watch.
+$WatcherLog = Join-Path $dataDir 'logs\open-watcher.log'
+function Write-Note {
+    param([string]$Message)
+    Write-Output $Message
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $WatcherLog) | Out-Null
+        Add-Content -Path $WatcherLog -Value $Message -Encoding utf8
+    }
+    catch { }   # the toast and the exit code are the real signals
+}
+
 function Show-WatcherToast {
     param([string]$Title, [string]$Body, [switch]$Green)
     # Headless runs (tests, SSH sessions) set DG_WATCHER_NOTOAST to suppress
@@ -124,14 +139,14 @@ $seenDecisionKeys = @{}
 $seenSettlementKeys = @{}
 $followUpDone = $false
 
-Write-Output ("open-watcher: started {0:u}, deadline {1:u}, poll {2}s" -f (Get-Date).ToUniversalTime(), $deadline, $PollSeconds)
+Write-Note ("open-watcher: started {0:u}, deadline {1:u}, poll {2}s" -f (Get-Date).ToUniversalTime(), $deadline, $PollSeconds)
 
 while ($true) {
     $nowUtc = (Get-Date).ToUniversalTime()
 
     $appRunning = [bool](Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)
     if (-not $appRunning -and -not $AssumeApp) {
-        Write-Output ("{0:u}  app not running - exiting 3" -f $nowUtc)
+        Write-Note ("{0:u}  app not running - exiting 3" -f $nowUtc)
         exit 3
     }
 
@@ -149,7 +164,7 @@ while ($true) {
         $seenDecisionKeys[$key] = $true
         if (-not $firstDecisionToasted) {
             $firstDecisionToasted = $true
-            Write-Output ("{0:u}  first BRAIN_DECISION of the week" -f $nowUtc)
+            Write-Note ("{0:u}  first BRAIN_DECISION of the week" -f $nowUtc)
             Show-WatcherToast -Title 'DON G FX - market open' -Body 'The engine is receiving live prices and made its first decision of the week. Journal is recording.' -Green
         }
     }
@@ -160,7 +175,7 @@ while ($true) {
         $seenSettlementKeys[$key] = $true
         $pnl = ''
         if ($s.Details -and $null -ne $s.Details.Pnl) { $pnl = ' ({0})' -f $s.Details.Pnl }
-        Write-Output ("{0:u}  TRADE_SETTLEMENT{1}" -f $nowUtc, $pnl)
+        Write-Note ("{0:u}  TRADE_SETTLEMENT{1}" -f $nowUtc, $pnl)
         Show-WatcherToast -Title 'DON G FX - first settlement of the week' -Body ("A trade settled{0}. Journal and digest are up to date." -f $pnl) -Green
 
         if (-not $ToastOnly -and -not $followUpDone) {
@@ -168,7 +183,7 @@ while ($true) {
             # Soak evidence: the report generator reads the journal and writes
             # docs/soak/SOAK-<date>.md. Failure here must not fail the watch.
             try {
-                Write-Output 'running soak_report.py --record docs/soak ...'
+                Write-Note 'running soak_report.py --record docs/soak ...'
                 & python (Join-Path $PSScriptRoot 'soak_report.py') --record (Join-Path $root 'docs\soak') 2>&1 | ForEach-Object { Write-Output "  soak: $_" }
             }
             catch { Write-Output ("  soak failed (non-fatal): " + $_.Exception.Message) }
@@ -177,12 +192,12 @@ while ($true) {
             # from is still green. Non-fatal: its own status file + toasts
             # already surface RED states.
             try {
-                Write-Output 'running ci-watch.ps1 -Once ...'
+                Write-Note 'running ci-watch.ps1 -Once ...'
                 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'ci-watch.ps1') -Once 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Output "  ci: $_" }
             }
             catch { Write-Output ("  ci-watch failed (non-fatal): " + $_.Exception.Message) }
         }
-        Write-Output ("{0:u}  watch complete - exit 0" -f (Get-Date).ToUniversalTime())
+        Write-Note ("{0:u}  watch complete - exit 0" -f (Get-Date).ToUniversalTime())
         exit 0
     }
 
@@ -190,12 +205,12 @@ while ($true) {
         # Quietly keep waiting; the deadline handles the "opened but nothing
         # traded" case. Only log sparsely so the transcript stays readable.
         if ($nowUtc.Minute % 30 -eq 0 -and $nowUtc.Second -lt $PollSeconds) {
-            Write-Output ("{0:u}  market open, no decisions yet ({1} journal events)" -f $nowUtc, $events.Count)
+            Write-Note ("{0:u}  market open, no decisions yet ({1} journal events)" -f $nowUtc, $events.Count)
         }
     }
 
     if ([DateTime]::UtcNow -gt $deadline) {
-        Write-Output ("{0:u}  deadline reached: {1} decisions, {2} settlements - exit 2" -f (Get-Date).ToUniversalTime(), $decisions.Count, $settlements.Count)
+        Write-Note ("{0:u}  deadline reached: {1} decisions, {2} settlements - exit 2" -f (Get-Date).ToUniversalTime(), $decisions.Count, $settlements.Count)
         exit 2
     }
 
