@@ -13,6 +13,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -41,14 +42,22 @@ class Stub:
     on the first draft)."""
 
     def __init__(self, last_run_minutes_ago=2.0, last_code=0,
-                 event_log_codes=None):
+                 event_log_codes=None, per_task=None):
         self.last_run = iso(last_run_minutes_ago)
         self.last_code = last_code
+        # per_task: {task name: (minutes_ago, code)} overrides so a
+        # multi-watcher fixture can make ONE task stale/failing while
+        # the others stay default (fresh, clean).
+        self.per_task = dict(per_task or {})
         ev_json = json.dumps([
             {"Properties": [c]} for c in (event_log_codes or [])])
 
         def fake_ps(command: str) -> str:
             if "Get-ScheduledTaskInfo" in command:
+                m = re.search(r"-TaskName '([^']+)'", command)
+                over = self.per_task.get(m.group(1)) if m else None
+                if over is not None:
+                    return f"{iso(over[0])}|{over[1]}"
                 return f"{self.last_run}|{self.last_code}"
             return ev_json
         mod._ps = fake_ps
@@ -56,15 +65,34 @@ class Stub:
         self._old = os.environ.get("TF_DATA_DIR")
         os.environ["TF_DATA_DIR"] = self._tmp.name
 
-    def seed(self, older: list[tuple[float, int]]) -> None:
-        """(minutes_before_last_run, code) pairs, oldest first."""
+    def seed(self, older: list[tuple[float, int]],
+             task: str | None = None) -> None:
+        """(minutes_before_last_run, code) pairs, oldest first, merged
+        into the history file under `task` (default: no task field —
+        legacy single-task samples, which count as the first watcher).
+        Only the named task's prior samples are replaced, so fixtures
+        can seed several tasks in sequence."""
         base = datetime.fromisoformat(self.last_run)
         samples = [{"run": (base - timedelta(minutes=m)).isoformat(),
                     "code": c} for m, c in older]
+        if task is not None:
+            for s in samples:
+                s["task"] = task
         path = mod.history_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                prior = json.load(fh)
+            if not isinstance(prior, list):
+                prior = []
+        except (OSError, ValueError):
+            prior = []
+        replaced = task if task is not None else mod.TASK
+        merged = [s for s in prior
+                  if isinstance(s, dict)
+                  and s.get("task", mod.TASK) != replaced]
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump(samples, fh)
+            json.dump(merged + samples, fh)
 
     def __enter__(self):
         return self
@@ -199,6 +227,40 @@ def test_probe_failure_maps_to_exit2_not_false_green():
     except SystemExit as ex:
         code = ex.code
     assert code == 2, (code, buf.getvalue())
+
+
+def test_covers_all_four_alerting_watchers():
+    """The check must watch every task that pages a webhook, not just
+    the profit-floor one it originally covered."""
+    assert len(mod.WATCHERS) == 4, mod.WATCHERS
+    with Stub(last_code=0) as s:
+        s.seed([(8, 0)], task=mod.TASK)
+        healthy, findings = mod.check()
+    assert healthy, findings
+
+
+def test_stale_watcher_names_itself():
+    """One task stops firing while the others are fresh: the finding
+    must name the stale task, and the healthy ones stay uninvolved."""
+    with Stub(per_task={"DongGfx close-price watcher": (30.0, 0)}) as s:
+        s.seed([(8, 0)], task=mod.TASK)
+        healthy, findings = mod.check()
+    assert not healthy
+    assert any("close-price" in f and "not firing" in f for f in findings)
+    assert not any("profit-floor" in f for f in findings)
+
+
+def test_persistence_is_scoped_to_its_task():
+    """profit-floor failing twice in a row must not paint the other
+    watchers: completion history is per task."""
+    pf = "DongGfx profit-floor watcher"
+    with Stub(per_task={pf: (2.0, 3)}) as s:
+        s.seed([(9, 3)], task=pf)
+        healthy, findings = mod.check()
+    assert not healthy
+    assert any(pf in f and "persistent nonzero" in f for f in findings)
+    assert not any("close-price" in f and "persistent" in f
+                   for f in findings)
 
 
 def main() -> int:
