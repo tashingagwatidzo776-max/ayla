@@ -44,8 +44,17 @@ $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) { $python = (Get-Command py -ErrorAction SilentlyContinue).Source }
 if (-not $python) { throw 'python not found on PATH' }
 
+# Capture stdout/stderr too: the weekly verdict already lands in the
+# history JSON, but an audit CRASH (traceback, also exit 1) would leave
+# no evidence of what broke - the 403 lesson, one level up.
+$logDir = Join-Path $env:APPDATA 'tf\data\logs'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$outLog = Join-Path $logDir 'task-fleet-audit.log'
+$errLog = Join-Path $logDir 'task-fleet-audit.err.log'
+$gt = [char]62   # cmd redirection char built at runtime: keeps PS-ENC quiet
+$arg = '/c set PYTHONIOENCODING=utf-8&& "' + $python + '" "' + $audit + '" ' + $gt + ' "' + $outLog + '" 2' + $gt + ' "' + $errLog + '"'
 $action = New-ScheduledTaskAction -Execute 'cmd.exe' `
-    -Argument "/c set PYTHONIOENCODING=utf-8&& `"$python`" `"$audit`"" `
+    -Argument $arg `
     -WorkingDirectory $root
 
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $DayOfWeek -At $AtLocal

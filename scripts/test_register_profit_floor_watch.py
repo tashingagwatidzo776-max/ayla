@@ -54,6 +54,12 @@ def main() -> int:
     check("watcher has a --no-alert observe mode", "--no-alert" in watcher)
     check("watcher dedups alerts across restarts",
           "profit-floor-alerts.json" in watcher)
+    check("cmd wrapper sets PYTHONIOENCODING (the fleet audit's rule)",
+          "set PYTHONIOENCODING=utf-8&&" in src)
+    check("stdout/stderr captured to a log (Task Scheduler discards output)",
+          "watch-profit-floor.log" in src and "[char]62" in src)
+    check("action executes via cmd.exe (stdout-bearing python, no pythonw)",
+          "-Execute 'cmd.exe'" in src)
 
     failed = [name for name, ok in results if not ok]
     print(f"{'FAIL' if failed else 'PASS'}: "
