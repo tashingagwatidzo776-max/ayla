@@ -128,7 +128,8 @@ public class FxProfitBrainTests
     // ── the profit floor: the core HWARANG law ───────────────────────────
 
     [Theory]
-    [InlineData(1.0, 0.3)]
+    [InlineData(0.8, 0.4)]    // the 2026-10-15 early arm: the floor opens at the plan-rung peak
+    [InlineData(1.0, 0.45)]
     [InlineData(2.0, 1.0)]
     [InlineData(3.5, 2.0)]
     [InlineData(4.0, 3.0)]
@@ -169,46 +170,109 @@ public class FxProfitBrainTests
     [Fact]
     public void Floor_Is_Zero_Below_The_Activation_Threshold()
     {
-        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, 0.8, 0.1, 0, FxProfitBrainOptions.Default));
+        // The first schedule rung opens at 0.8R (2026-10-15 early arm);
+        // below it no schedule floor may exist.
+        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.79, 0.79, 0.1, 0, FxProfitBrainOptions.Default));
+    }
+
+    [Fact]
+    public void Plan_Rung_Keeps_TP1_Inside_The_Early_Band()
+    {
+        // Flat tape: no real structure nearer than the plan rung, so the
+        // ladder's synthetic 0.8R destination becomes TP1 — the early bank
+        // the 2026-10-15 giveback investigation called for (the old ladder
+        // offered only real destinations, whose nearest member sat at
+        // 1.1–3.1R on every TP1-EXEC to date).
+        var bars = Bars(60, 100.0, drift: 0.0, wick: 0.1);
+        var st = State("buy", 100.0, riskPerLot: 1.0);
+        var report = FxProfitBrain.Evaluate(st, 100.5, bars, atr: 0.5, atrMedian: 0.5, FxRegime.Range);
+
+        Assert.NotNull(report.Tp1);
+        Assert.Equal("plan-rung", report.Tp1!.Kind);
+        Assert.InRange(report.Tp1.R, 0.79, 0.81);
+    }
+
+    [Fact]
+    public void Real_Structure_Nearer_Than_The_Plan_Rung_Still_Wins_TP1()
+    {
+        // A swing high at ~100.40 (0.40R) is nearer than the 0.8R plan
+        // rung — real structure keeps its priority; the plan rung only
+        // guarantees a rung EXISTS when nothing nearer does.
+        var bars = Bars(60, 100.0, drift: 0.0, wick: 0.1);
+        bars[55] = new FxBar(bars[55].Time, 100.28, 100.32, 100.24, 100.30, 100);
+        bars[56] = new FxBar(bars[56].Time, 100.30, 100.38, 100.28, 100.34, 100);
+        bars[57] = new FxBar(bars[57].Time, 100.34, 100.40, 100.30, 100.36, 100);
+        bars[58] = new FxBar(bars[58].Time, 100.36, 100.37, 100.30, 100.33, 100);
+        bars[59] = new FxBar(bars[59].Time, 100.33, 100.34, 100.28, 100.30, 100);
+        var st = State("buy", 100.0, riskPerLot: 1.0);
+        var report = FxProfitBrain.Evaluate(st, 100.30, bars, atr: 0.5, atrMedian: 0.5, FxRegime.Range);
+
+        Assert.NotNull(report.Tp1);
+        Assert.True(report.Tp1!.R < FxProfitBrain.Tp1PlanRungR,
+            $"nearer structure must win TP1, was {report.Tp1.Kind} {report.Tp1.R:0.00}R");
+    }
+
+    [Fact]
+    public void Floor_Breach_Reports_At_A_Sub_One_Peak()
+    {
+        // Early arm: a 0.85R peak falling back through the 0.4R floor is a
+        // BREACH the guard commands on — the old 1.0R gate left this exact
+        // cohort (peaks 0.5–1.0R) unprotected and 85% of it settled negative.
+        var bars = Bars(60, 100.0, drift: 0.0, wick: 0.1);
+        var st = State("buy", 100.0, riskPerLot: 1.0, mfeR: 0.85);
+        var report = FxProfitBrain.Evaluate(st, 100.35, bars, atr: 0.5, atrMedian: 0.5, FxRegime.Range);
+
+        Assert.Equal(0.4, report.FloorR, 6);
+        Assert.True(report.FloorBreached);
+        Assert.Equal("PROFIT_EXIT_READY", report.ProfitState);
     }
 
     [Fact]
     public void Floor_Adaptive_Tighten_Reachable_Below_The_First_Schedule_Rung()
     {
-        // The 2026-10-08 giveback gap: peaks under the first rung (1.0R)
-        // used to early-return with floor 0 no matter how strong the
-        // reversal confluence. High-confidence evidence (> 0.55) must now
-        // open a floor at current - 0.1, still capped by the peak.
-        var floor = FxProfitBrain.ProfitFloor(0.8, currentR: 0.7, reversalP: 0.60,
+        // The 2026-10-08 giveback gap: peaks under the first rung (now
+        // 0.8R) used to early-return with floor 0 no matter how strong the
+        // reversal confluence. High-confidence evidence (> 0.55) must open
+        // a floor at current - 0.1, still capped by the peak.
+        var floor = FxProfitBrain.ProfitFloor(0.7, currentR: 0.7, reversalP: 0.60,
             prevFloorR: 0, FxProfitBrainOptions.Default);
         Assert.Equal(0.6, floor, 6);
-        Assert.True(floor <= 0.8 * FxProfitBrain.FloorCapOfPeak + 1e-9,
+        Assert.True(floor <= 0.7 * FxProfitBrain.FloorCapOfPeak + 1e-9,
             "the peak cap still binds below the rung");
     }
 
     [Fact]
     public void Floor_Below_The_First_Rung_Moderate_Reversal_Stays_Zero()
     {
-        // Pre-tighten stays schedule-only: below the rung, moderate
-        // (0.40-0.55) evidence must not lock a noise floor on a sliver of
-        // profit — its `currentR > floor * 1.25` guard degenerates at 0.
-        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, currentR: 0.7, reversalP: 0.45,
+        // Pre-tighten stays schedule-only: below the rung (peak 0.7 <
+        // 0.8), moderate (0.40-0.55) evidence must not lock a noise floor
+        // on a sliver of profit — its `currentR > floor * 1.25` guard
+        // degenerates at 0.
+        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.7, currentR: 0.7, reversalP: 0.45,
             prevFloorR: 0, FxProfitBrainOptions.Default));
-        // High confidence with a profit sliver smaller than 0.1R cannot
-        // produce a floor either (current - 0.1 <= 0).
-        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, currentR: 0.05, reversalP: 0.60,
-            prevFloorR: 0, FxProfitBrainOptions.Default));
+        // At a QUALIFYING peak (0.8R) the schedule floor stands even after
+        // a near-total collapse: the protection lapsed, it is not
+        // forgiven — current 0.05R is already below the 0.4R floor and the
+        // breach path owns the exit.
+        Assert.Equal(0.4, FxProfitBrain.ProfitFloor(0.8, currentR: 0.05, reversalP: 0.60,
+            prevFloorR: 0, FxProfitBrainOptions.Default), 6);
     }
 
     [Fact]
     public void Floor_Below_The_First_Rung_Never_Floors_A_Losing_Position_And_Keeps_The_Ratchet()
     {
-        // No floor may be minted out of a losing position, ever.
-        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.8, currentR: -0.5, reversalP: 0.9,
+        // No schedule floor may be minted below the first rung (0.8R) —
+        // a losing position whose peak never qualified earns nothing.
+        Assert.Equal(0, FxProfitBrain.ProfitFloor(0.7, currentR: -0.5, reversalP: 0.9,
             prevFloorR: 0, FxProfitBrainOptions.Default));
+        // At a qualifying peak the schedule floor survives the collapse
+        // into a loss (the protection lapsed; the breach path owns the
+        // exit — same law as the old 1.0R/0.3R rung at its own peak).
+        Assert.Equal(0.4, FxProfitBrain.ProfitFloor(0.8, currentR: -0.5, reversalP: 0.9,
+            prevFloorR: 0, FxProfitBrainOptions.Default), 6);
         // An established 0.7R floor survives a later sub-rung evaluation
         // whose tighten would compute less (0.5R): never-down still holds.
-        var kept = FxProfitBrain.ProfitFloor(0.8, currentR: 0.6, reversalP: 0.6,
+        var kept = FxProfitBrain.ProfitFloor(0.7, currentR: 0.6, reversalP: 0.6,
             prevFloorR: 0.7, FxProfitBrainOptions.Default);
         Assert.Equal(0.7, kept, 6);
     }

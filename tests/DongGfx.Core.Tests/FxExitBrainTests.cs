@@ -159,6 +159,18 @@ public class FxExitBrainTests
     }
 
     [Fact]
+    public void Profit_Floor_Saves_The_Sub_One_Peak_Round_Trip()
+    {
+        // The 2026-10-15 early-floor band: a 0.9R peak handed back to
+        // +0.4R used to sail through untouched (old gate: peak ≥1R,
+        // floor 0.2R) — the cohort that settles negative 85% of the time.
+        var st = LongState() with { MfeR = 0.9 };
+        var d = Eval(st, 2400 + 0.4);
+        Assert.Equal("profit-floor", d.OverrideEngine);
+        Assert.Equal("full", d.Action);
+    }
+
+    [Fact]
     public void Profit_Floor_Round_Trip_Is_An_Override_Not_A_Vote()
     {
         // The 2026-09-29 backtest's failure mode (+20.25R of round-trip
@@ -311,9 +323,12 @@ public class FxExitBrainTests
         // A broad consensus (structure CHOCH + stale trade + thesis flip +
         // drawdown ramp + volatility collapse) lands at ~61 — TIGHTEN.
         // Shapes chosen to stay clear of the profit-floor law: leg 1 never
-        // peaked ≥1R (MFE 0.6 — a deep give-back from a real peak would be
-        // an override now, not a tighten), leg 2 holds +0.3R (a 1.2R peak
-        // down to +0.3R is a watch vote; below +0.2R it would be an override).
+        // reached the floor's first peak (MFE 0.6 < 0.8 — a deep give-back
+        // from a qualifying peak would be an override now, not a tighten).
+        // Leg 2 lives in the one band where a 1.2R peak can still TIGHTEN
+        // rather than be saved: current must clear the 0.45R round-trip
+        // override yet stay under the 0.5R stale-time bar (0.45–0.5R —
+        // the 2026-10-15 early floor owns everything at or below the floor).
         var st = LongState() with { BarsHeld = 50, MaeR = 1.05, MfeR = 0.6 };
         var d = Eval(st, 2399.2, atr: 0.3, median: 1.0,
             current: FxRegime.Range, entry: FxRegime.Trend,
@@ -322,7 +337,7 @@ public class FxExitBrainTests
         Assert.Equal(0, d.NewSl);   // MFE never paid -> no trail
 
         var st2 = st with { MfeR = 1.2 };
-        var d2 = Eval(st2, 2400.3, atr: 0.3, median: 1.0,
+        var d2 = Eval(st2, 2400.47, atr: 0.3, median: 1.0,
             current: FxRegime.Range, entry: FxRegime.Trend,
             bars: CrashBars());
         Assert.Equal("tighten", d2.Action);

@@ -83,11 +83,19 @@ public static class FxExitBrain
     /// <summary>Drawdown engine: MAE (in R) beyond this = abnormal adverse
     /// excursion — an override-grade emergency.</summary>
     public const double MaeEmergencyR = 1.6;
-    /// <summary>Profit-floor override: a trade that peaked ≥1R and returned
-    /// to ≤ this R has ROUND-TRIPPED — the 2026-09-29 backtest's +20.25R
-    /// failure mode, promoted to the override tier (safety outranks the
-    /// consensus that failed to see it).</summary>
-    public const double ProfitFloorR = 0.2;
+    /// <summary>Profit-floor override: a trade that peaked ≥
+    /// <see cref="ProfitFloorPeakR"/> and returned to ≤ this R has
+    /// ROUND-TRIPPED — the 2026-09-29 backtest's +20.25R failure mode,
+    /// promoted to the override tier (safety outranks the consensus that
+    /// failed to see it). Raised 0.2→0.45 and the peak gate lowered
+    /// 1.0→0.8 (2026-10-15 giveback investigation: tickets peaking
+    /// 0.5–1.0R settle negative 85% of the time — the save must fire
+    /// INSIDE that band, not after the peak qualified for it).</summary>
+    public const double ProfitFloorR = 0.45;
+    /// <summary>Profit-floor override: peaks at/above this count as "earned"
+    /// for the round-trip save — the mirror of
+    /// FxProfitBrain.FloorFirstPeakR (the floor schedule's first rung).</summary>
+    public const double ProfitFloorPeakR = 0.8;
     /// <summary>Giveback vote: deep give-back of a major (≥2R) peak.</summary>
     public const double GivebackVoteRatio = 0.75;
     /// <summary>Giveback watch: heavy give-back of a real (≥1.5R) peak.</summary>
@@ -229,7 +237,7 @@ public static class FxExitBrain
             overrideEngine = "drawdown";
             overrideReason = $"MAE {maeR:0.00}R beyond the {MaeEmergencyR:0.#}R emergency bar — adverse movement is abnormal; emergency close";
         }
-        else if ((mfeR >= 1.0 && plR <= ProfitFloorR)
+        else if ((mfeR >= ProfitFloorPeakR && plR <= ProfitFloorR)
                  || (mfeR >= 2.0 && (mfeR - plR) / mfeR >= GivebackOverrideRatio))
         {
             // The profit-floor override: the mirror of the MAE emergency.
@@ -488,7 +496,7 @@ public static class FxExitBrain
     {
         // Profit-side giveback evidence (dominates the MAE ramp when both
         // are present — the round-trip is the emergency).
-        if (mfeR >= 1.0 && plR <= ProfitFloorR)
+        if (mfeR >= ProfitFloorPeakR && plR <= ProfitFloorR)
         {
             return new("drawdown", 0.95, 2.0,
                 $"round-trip: peaked {mfeR:0.0}R, now {plR:0.00}R — the move was given back");
