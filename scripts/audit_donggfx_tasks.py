@@ -109,10 +109,15 @@ def list_tasks() -> list[dict]:
 
 
 def _ps(command: str) -> str:
+    # 240 s, not 120: Get-ScheduledTask hydrates EVERY task on the box
+    # and serializes behind the Task Scheduler service's own churn (the
+    # fleet fires a trigger every few seconds at boot hour). A timed-out
+    # enumeration is an INDETERMINATE audit — and fleet-wide AMBER — so
+    # the timeout needs real headroom (2026-10-15, seen live).
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command", command],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=120, check=False)
+        timeout=240, check=False)
     if out.returncode != 0:
         raise RuntimeError(f"powershell failed rc={out.returncode}")
     return out.stdout

@@ -89,10 +89,14 @@ def _ps(command: str) -> str:
 
 def _run_ps(command: str):
     import subprocess
+    # 120 s, not 90: under boot-hour contention (the fleet fires a
+    # trigger every few seconds) even a one-task Get-ScheduledTaskInfo
+    # can queue behind the service — a timeout here is an INDETERMINATE
+    # health check, fleet-wide AMBER (seen live 2026-10-15).
     return subprocess.run(
         ["powershell", "-NoProfile", "-Command", command],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=90, check=False)
+        timeout=120, check=False)
 
 
 def task_info(task: str = TASK) -> tuple[str, int]:

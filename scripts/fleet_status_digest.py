@@ -15,12 +15,24 @@ enough to leave nothing to report). Red verdicts travel INSIDE a
 delivered digest — ci-local and the watcher task-health task remain
 the gates.
 
-Flags: --no-alert (print, skip the POST), --webhook-url override
-(default: settings.json WebhookUrl), --json (machine summary).
+--watch turns the same probes into the instant flip alert (the
+"DongGfx fleet red alert" task, every 5 min): it posts only when the
+combined verdict CHANGES — to RED, or back to GREEN after a RED — so a
+red fleet is heard within one poll instead of waiting for Monday's
+digest. Flip dedup lives in data/watcher/fleet-alert-state.json and the
+state is saved only after a confirmed POST, so a failed alert retries
+on the next pass. AMBER (a broken probe) posts nothing and holds the
+previous state, so RED -> AMBER -> GREEN still reads as one recovery.
+
+Flags: --no-alert (print, skip the POST), --watch (post only on
+GREEN/RED flips), --webhook-url override (default: settings.json
+WebhookUrl), --json (machine summary).
 
 Usage:
-  python scripts/fleet_status_digest.py            # weekly digest
-  python scripts/fleet_status_digest.py --no-alert  # dry run
+  python scripts/fleet_status_digest.py             # weekly digest
+  python scripts/fleet_status_digest.py --no-alert   # dry run
+  python scripts/fleet_status_digest.py --watch      # flip alert (task)
+  python scripts/fleet_status_digest.py --watch --no-alert  # dry run
 """
 from __future__ import annotations
 
@@ -165,6 +177,97 @@ def post_webhook(url: str, body: dict) -> int:
         raise RuntimeError(f"webhook POST failed: {ex.__class__.__name__}") from ex
 
 
+def watch_state_path() -> str:
+    """Where the flip alert remembers the last POSTed state."""
+    return os.path.join(data_dir(), "watcher", "fleet-alert-state.json")
+
+
+def decide_watch_action(current: str, previous: str | None) -> str:
+    """(state now, state of the last POSTed pass) -> this pass's move.
+
+    post-red       RED where the last posted state was not RED —
+                   including the first-ever pass: a fleet that is red
+                   NOW must be heard now, not at Monday's digest.
+    post-recovery  RED -> GREEN: closes the alert thread so a later
+                   flip reads as new.
+    baseline       first-ever pass, not RED: record, post nothing.
+    hold           AMBER (a broken probe is neither): keep the previous
+                   state so RED -> AMBER -> GREEN is one recovery.
+    silent         nothing changed since the last posted pass.
+    """
+    if current == "AMBER":
+        return "hold" if previous else "baseline"
+    if current == "RED":
+        return "silent" if previous == "RED" else "post-red"
+    if previous == "RED":
+        return "post-recovery"
+    return "baseline" if previous is None else "silent"
+
+
+def load_watch_state(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        state = data.get("state") if isinstance(data, dict) else None
+        return state if state in ("GREEN", "RED", "AMBER") else None
+    except (OSError, ValueError):
+        return None
+
+
+def save_watch_state(path: str, state: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"state": state,
+                       "ts": datetime.now(timezone.utc)
+                             .isoformat(timespec="seconds")}, fh)
+    except OSError:
+        pass   # best-effort: a lost state file re-posts at most one alert
+
+
+def run_watch_pass(payload: dict, state: str, no_alert: bool, url: str,
+                   state_path: str) -> int:
+    """One --watch pass: post only on a flip, dedup via the state file.
+
+    The state is saved ONLY after a confirmed POST (plus the deliberate
+    baseline/hold cases): a failed alert keeps the old state, so the
+    next pass sees the same flip and retries instead of dropping it."""
+    prev = load_watch_state(state_path)
+    action = decide_watch_action(state, prev)
+    embed = payload["embeds"][0]
+    if action == "hold":
+        print(f"fleet-alert: probe AMBER (broken) — holding last posted "
+              f"state ({prev}), no post")
+        return 0
+    if action == "baseline":
+        save_watch_state(state_path, state)
+        print(f"fleet-alert: baseline {state} recorded, no post")
+        return 0
+    if action == "silent":
+        save_watch_state(state_path, state)   # refresh the timestamp only
+        print(f"fleet-alert: still {state}, no flip — no post")
+        return 0
+    embed["title"] = ("Fleet alert — RED" if action == "post-red"
+                      else "Fleet alert — GREEN (recovered from RED)")
+    verb = "RED flip" if action == "post-red" else "recovery"
+    if no_alert:
+        print(f"fleet-alert: {verb} ({prev} -> {state}) — --no-alert, "
+              f"POST skipped, state unchanged")
+        return 0
+    if not url:
+        print(f"fleet-alert: no webhook URL (settings.json WebhookUrl "
+              f"missing) — {verb} UNPOSTED, will retry next pass")
+        return 1
+    try:
+        status = post_webhook(url, payload)
+    except RuntimeError as ex:
+        print(f"fleet-alert: {ex} — {verb} UNPOSTED, will retry next pass")
+        return 1
+    save_watch_state(state_path, state)
+    print(f"fleet-alert: posted HTTP {status} ({verb} {prev} -> {state})")
+    return 0
+
+
 def main() -> int:
     # A cp1252 console must never crash the digest mid-print (the
     # scheduled task already runs with PYTHONIOENCODING=utf-8; this
@@ -176,6 +279,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--no-alert", action="store_true",
                     help="print the digest, skip the POST")
+    ap.add_argument("--watch", action="store_true",
+                    help="flip-alert mode: post only on GREEN/RED transitions")
     ap.add_argument("--webhook-url", default="",
                     help="override settings.json WebhookUrl")
     ap.add_argument("--json", action="store_true", help="machine summary")
@@ -189,6 +294,7 @@ def main() -> int:
     payload = build_payload(audit, health, ts)
     url = args.webhook_url or (load_settings().get("WebhookUrl") or "")
     title = payload["embeds"][0]["title"]
+    state = title.split("—")[-1].strip()   # the verdict word in the title
 
     if args.json:
         print(json.dumps({"audit": audit, "health": health,
@@ -199,6 +305,9 @@ def main() -> int:
         for field in payload["embeds"][0]["fields"]:
             print(f"  {field['name']}: {field['value']}")
 
+    if args.watch:
+        sys.exit(run_watch_pass(payload, state, args.no_alert, url,
+                                watch_state_path()))
     if args.no_alert:
         print("fleet-digest: --no-alert, POST skipped")
         return 0
