@@ -333,15 +333,36 @@ the gate-regression drill uses).
 
 | Ticket | Symbol | Mode | Armed (UTC) | Exec (UTC) | Rung | Plan | Banked R | Live peak | Closed R | Executed |
 |---|---|---|---|---|---|---|---|---|---|---|
+| #8792309354 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T00:46:53 | 2026-10-08T00:48:54 | 1.18105R | 15 | +0.18R | 1.3R | — | yes |
+| #8792685935 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T08:45:07 | 2026-10-08T09:03:41 | 1.61635R | 15 | +0.24R | 1.6R | — | yes |
+| #8792846716 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T12:04:38 | 2026-10-08T12:05:45 | 1.12822R | 15 | +0.17R | 1.5R | — | yes |
+| #8793078103 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T15:27:23 | 2026-10-08T15:37:45 | 3.14029R | 15 | +0.47R | 3.3R | — | yes |
+| #8796640544 | — | HYBRID_STRUCTURE_ATR | 2026-10-12T16:42:28 | 2026-10-12T16:43:25 | 2.30155R | 25 | +0.58R | 2.5R | — | yes |
 
 <!-- TP1-EXEC-DIGEST:END -->
 
 ## Graded tickets
 
 <!-- TP1-GRADED:START -->
-Generated every pass by `scripts/watch_tp1_first_arm.py` — no banked rung
-in the journals yet. The first TP1-EXEC writes the row here (and one
-line to `data/watcher/tp1-graded-verdicts.jsonl`).
+Generated every pass by `scripts/watch_tp1_first_arm.py` from the
+journals — one row per banked rung; the numbers are mechanical.
+Rung banked = plan % × rung R. Capture = settled R ÷ live peak
+(the weekly digest's rule). vs giveback baseline = plan % ×
+(rung R − settled R): the R the early rung locked versus holding
+the whole position to the same exit — positive means the rung
+beat the giveback the ticket would otherwise have taken, negative
+means the floor/exit out-earned it. Verdict is 'pending' until a
+decisive FX_EXIT settles the ticket. Machine-readable twin:
+`data/watcher/tp1-graded-verdicts.jsonl`.
+
+| Ticket | Symbol | TrailingMode | Armed (UTC) | Exec (UTC) | Rung banked | Live peak | Settled | Capture | vs giveback baseline |
+|---|---|---|---|---|---|---|---|---|---|
+| #8792309354 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T00:46:53 | 2026-10-08T00:48:54 | +0.18R (15% plan) | 1.3R | — | — | pending |
+| #8792685935 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T08:45:07 | 2026-10-08T09:03:41 | +0.24R (15% plan) | 1.6R | — | — | pending |
+| #8792846716 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T12:04:38 | 2026-10-08T12:05:45 | +0.17R (15% plan) | 1.5R | — | — | pending |
+| #8793078103 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T15:27:23 | 2026-10-08T15:37:45 | +0.47R (15% plan) | 3.3R | — | — | pending |
+| #8796640544 | — | HYBRID_STRUCTURE_ATR | 2026-10-12T16:42:28 | 2026-10-12T16:43:25 | +0.58R (25% plan) | 2.5R | — | — | pending |
+
 <!-- TP1-GRADED:END -->
 
 Gate note (TP1-FLOOR-INTERACTION.md, now implemented): STRUCTURE_TRAIL
