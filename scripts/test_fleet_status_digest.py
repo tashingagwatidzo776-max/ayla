@@ -165,6 +165,164 @@ def test_posts_with_the_fleet_ua_and_settings_url():
           "never gates" in src)
 
 
+def test_watch_decision_matrix():
+    check("first-ever RED posts (a fleet red NOW is heard now)",
+          mod.decide_watch_action("RED", None) == "post-red")
+    check("GREEN -> RED posts", mod.decide_watch_action("RED", "GREEN")
+          == "post-red")
+    check("RED -> RED does not repeat", mod.decide_watch_action("RED", "RED")
+          == "silent")
+    check("RED -> GREEN posts the recovery",
+          mod.decide_watch_action("GREEN", "RED") == "post-recovery")
+    check("first-ever GREEN is a silent baseline",
+          mod.decide_watch_action("GREEN", None) == "baseline")
+    check("first-ever AMBER is a baseline, not a post",
+          mod.decide_watch_action("AMBER", None) == "baseline")
+    check("AMBER holds the previous state (so RED->AMBER->GREEN is one "
+          "recovery)", mod.decide_watch_action("AMBER", "RED") == "hold")
+    check("AMBER -> GREEN after a held RED still recovers",
+          mod.decide_watch_action("GREEN", "RED") == "post-recovery")
+    check("GREEN -> AMBER holds too", mod.decide_watch_action("AMBER", "GREEN")
+          == "hold")
+
+
+def test_watch_state_file():
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "sub" / "state.json")
+        check("no state file -> None (first-ever pass)",
+              mod.load_watch_state(path) is None)
+        mod.save_watch_state(path, "RED")
+        check("state round-trips", mod.load_watch_state(path) == "RED")
+        Path(path).write_text('{"state": "BLUE"}', encoding="utf-8")
+        check("unknown state word -> None, never a crash",
+              mod.load_watch_state(path) is None)
+        Path(path).write_text('{broken', encoding="utf-8")
+        check("corrupt state file -> None, never a crash",
+              mod.load_watch_state(path) is None)
+
+
+def test_watch_flip_flow_end_to_end():
+    """Drive main() through baseline -> RED flip -> RED hold ->
+    recovery -> AMBER hold with stubbed probes and a stubbed post."""
+    import tempfile
+    audit_fail = [False]
+    health_broken = [False]
+
+    def fake_run_check(args):
+        if "audit_donggfx_tasks.py" in args[0]:
+            if audit_fail[0]:
+                return 1, ("DongGfx x\n  FINDING: python task with no repo "
+                           "script path\n"
+                           "task-audit: FAIL - 2 task(s), 1 finding(s)\n")
+            return 0, "task-audit: OK - 2 task(s), 0 finding(s)\n"
+        if health_broken[0]:
+            return 2, "watcher-task-health: INDETERMINATE (RuntimeError)\n"
+        return 0, ('{"tasks": ["a"], "healthy": true, "findings": []}\n')
+
+    posted = []
+    with tempfile.TemporaryDirectory() as td:
+        state_path = str(Path(td) / "fleet-alert-state.json")
+        real = (mod.run_check, mod.post_webhook, mod.watch_state_path,
+                sys.argv)
+        mod.run_check = fake_run_check
+        mod.post_webhook = lambda url, body: (posted.append(body), 204)[1]
+        mod.watch_state_path = lambda: state_path
+        sys.argv = ["fleet_status_digest.py", "--watch",
+                    "--webhook-url", "http://example.invalid/hook"]
+
+        def run() -> int:
+            try:
+                mod.main()
+                return 0
+            except SystemExit as ex:
+                return ex.code or 0
+
+        try:
+            check("baseline GREEN pass exits 0, posts nothing",
+                  run() == 0 and posted == [])
+            audit_fail[0] = True
+            check("GREEN -> RED flip posts exactly one alert, exit 0",
+                  run() == 0 and len(posted) == 1)
+            check("alert embed is titled Fleet alert - RED",
+                  posted[0]["embeds"][0]["title"] == "Fleet alert — RED")
+            check("audit finding travels inside the alert",
+                  "no repo script path" in
+                  posted[0]["embeds"][0]["fields"][0]["value"])
+            run()
+            check("standing RED does not repeat the alert", len(posted) == 1)
+            audit_fail[0] = False
+            check("RED -> GREEN posts the recovery once",
+                  run() == 0 and len(posted) == 2
+                  and "recovered" in posted[1]["embeds"][0]["title"])
+            run()
+            check("standing GREEN posts nothing", len(posted) == 2)
+            health_broken[0] = True
+            run()
+            check("AMBER (broken probe) posts nothing and holds GREEN",
+                  len(posted) == 2 and mod.load_watch_state(state_path)
+                  == "GREEN")
+            health_broken[0] = False
+            run()
+            check("AMBER -> GREEN after held GREEN is silent",
+                  len(posted) == 2)
+            audit_fail[0] = True
+            run()
+            check("AMBER-held GREEN -> RED still alerts",
+                  len(posted) == 3)
+        finally:
+            (mod.run_check, mod.post_webhook, mod.watch_state_path,
+             sys.argv) = real
+
+
+def test_watch_failed_post_retries_next_pass():
+    """A failed alert must leave the state untouched so the next poll
+    sees the same flip — the alert is never silently dropped."""
+    import tempfile
+
+    def boom(url, body):
+        raise RuntimeError("webhook POST failed: HTTP 403")
+
+    with tempfile.TemporaryDirectory() as td:
+        state_path = str(Path(td) / "state.json")
+        real = mod.post_webhook
+        mod.post_webhook = boom
+        try:
+            rc = mod.run_watch_pass(
+                mod.build_payload(GREEN_AUDIT, GREEN_HEALTH, "ts"),
+                "RED", False, "http://example.invalid/hook", state_path)
+            check("failed POST -> exit 1", rc == 1)
+            check("failed POST leaves state unsaved (retry next pass)",
+                  mod.load_watch_state(state_path) is None)
+        finally:
+            mod.post_webhook = real
+
+
+def test_fleet_alert_register_composition():
+    src = (HERE / "register-fleet-alert.ps1").read_text(
+        encoding="utf-8", errors="replace")
+    check("register script is idempotent (replaces task)",
+          "Register-ScheduledTask" in src and "Unregister-ScheduledTask" in src)
+    check("task name is the fleet red alert", "DongGfx fleet red alert" in src)
+    check("registered action points at the digest in --watch mode",
+          "fleet_status_digest.py" in src and "--watch" in src)
+    check("default cadence is 5 minutes", "$EveryMinutes = 5" in src)
+    check("task runs at logon", "AtLogOn" in src)
+    check("cmd wrapper sets PYTHONIOENCODING (the fleet audit's rule)",
+          "set PYTHONIOENCODING=utf-8&&" in src)
+    check("stdout/stderr captured to a log (Task Scheduler discards output)",
+          "fleet-alert.log" in src and "[char]62" in src)
+    check("action executes via cmd.exe (stdout-bearing python)",
+          "-Execute 'cmd.exe'" in src)
+    check("execution time limit is bounded", "ExecutionTimeLimit" in src)
+    check("concurrent instances are ignored",
+          "-MultipleInstances IgnoreNew" in src)
+    check("survives battery/available-start quirks",
+          "AllowStartIfOnBatteries" in src and "StartWhenAvailable" in src)
+    check("register script fails closed on a missing digest",
+          "Digest script not found" in src)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
