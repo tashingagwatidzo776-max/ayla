@@ -60,7 +60,12 @@ public sealed record FxProfitBrainOptions(
     {
         FloorSchedule = new[]
         {
-            (1.0, 0.3), (2.0, 1.0), (3.0, 2.0), (4.0, 3.0), (5.0, 4.0),
+            // Early arm (2026-10-15 giveback investigation): the old first
+            // rung (1.0, 0.3) left every sub-1R peak unprotected — the
+            // exact cohort that settles negative 85–94% of the time. The
+            // floor now opens at 0.8R of peak and protects 0.4R; the
+            // 1.0R rung keeps its job with a raised 0.45R floor.
+            (0.8, 0.4), (1.0, 0.45), (2.0, 1.0), (3.0, 2.0), (4.0, 3.0), (5.0, 4.0),
         },
     };
 }
@@ -100,6 +105,22 @@ public static class FxProfitBrain
     // Target scoring caps.
     public const int MaxTargetCandidates = 6;
 
+    /// <summary>The plan rung: TP1 is placed at this R when no real
+    /// structure sits closer, so the allocation's first leg can actually
+    /// fire early. The 2026-10-15 giveback investigation (152 measured
+    /// closes: mean +1.09R giveback peak→settle, tickets peaking
+    /// 0.5–1.0R settling negative 85% of the time) showed the missing
+    /// early bank was STRUCTURAL — the ladder only offered real
+    /// destinations, whose nearest member sat wherever the last swing
+    /// happened to be (1.1–3.1R observed on every TP1-EXEC to date).</summary>
+    public const double Tp1PlanRungR = 0.8;
+
+    /// <summary>Peaks at/above which the floor schedule opens its first
+    /// rung AND the brain reports a breach — kept equal so "protected"
+    /// and "breached" always describe the same schedule (early-floor
+    /// arm, same 2026-10-15 investigation).</summary>
+    public const double FloorFirstPeakR = 0.8;
+
     public static FxProfitReport Evaluate(
         FxPositionState st,
         double price,
@@ -125,7 +146,7 @@ public static class FxProfitBrain
         var givebackClass = ClassifyGiveback(givebackPct, reversalP);
 
         var floorR = ProfitFloor(peakR, currentR, reversalP, prevFloorR, options);
-        var floorBreached = floorR > 0 && peakR >= 1.0 && currentR < floorR;
+        var floorBreached = floorR > 0 && peakR >= FloorFirstPeakR && currentR < floorR;
 
         var targets = TargetLadder(st, price, bars, atr, momentum, regime);
         var (tp1, tp2, tp3) = PickLadder(targets, st, atr);
@@ -234,6 +255,15 @@ public static class FxProfitBrain
         // no visible structure ahead: 1R beyond the recent range per 2 ATR.
         Add("atr-projection", isBuy ? price + 2 * atr : price - 2 * atr);
         Add("atr-projection", isBuy ? price + 4 * atr : price - 4 * atr);
+
+        // The plan rung: a synthetic destination at a fixed fraction of R
+        // so TP1 (nearest-by-R in PickLadder) can bank early even when no
+        // structure sits below 1R. Real structure nearer than the plan
+        // rung still wins TP1 — this only guarantees a rung EXISTS where
+        // the giveback data says the book keeps round-tripping.
+        Add("plan-rung", isBuy
+            ? st.EntryPrice + Tp1PlanRungR * risk
+            : st.EntryPrice - Tp1PlanRungR * risk);
 
         // Records are immutable: rebuild with scores attached.
         var scored = new List<FxProfitTarget>(outp.Count);
@@ -465,7 +495,7 @@ public static class FxProfitBrain
         double peakR, double currentR, double floorR, bool floorBreached, string givebackClass)
     {
         if (floorBreached) return "PROFIT_EXIT_READY";
-        if (peakR >= 1.0 && currentR <= 0.1) return "PROFIT_DETERIORATING";   // earned, then given back
+        if (peakR >= FloorFirstPeakR && currentR <= 0.1) return "PROFIT_DETERIORATING";   // earned, then given back
         if (givebackClass == "CRITICAL") return "PROFIT_CRITICAL";
         if (givebackClass == "DETERIORATING") return "PROFIT_DETERIORATING";
         if (givebackClass == "WARNING") return "PROFIT_GIVEBACK_WARNING";
