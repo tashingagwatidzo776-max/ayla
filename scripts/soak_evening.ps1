@@ -13,7 +13,10 @@ $started = Get-Date
 $py = Join-Path (Split-Path (Get-Command python).Source) "python.exe"
 # Out-File -Encoding utf8: bare *>> defaults to UTF-16LE, which reads as
 # mojibake in every editor and breaks the emoji narratives.
-& $py (Join-Path $PSScriptRoot "soak_evening.py") 2>&1 |
+# -u (unbuffered): a run that stalls must show its progress in the log
+# live, not only whatever was flushed at exit - that opacity is what
+# made the old hangs look like silent deaths.
+& $py -u (Join-Path $PSScriptRoot "soak_evening.py") 2>&1 |
     ForEach-Object { "$_" } | Out-File $log -Append -Encoding utf8
 # Timestamped + duration so terminations are measurable: the Monday
 # alpha task died as SCHED_S_TASK_TERMINATED (0x41306) leaving only a
