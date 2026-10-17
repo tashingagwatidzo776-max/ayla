@@ -708,6 +708,10 @@ def test_health_reattaches_when_terminal_shows_up_late():
     h = sidecar.BridgeHandlers(fake, reattach=lambda: setattr(fake, "terminal_connected", True))
     out = h.health()
     assert fake.reattach_calls == 0   # recovery hook owns the counter
+    # Recovery runs on a background thread so /health stays non-blocking;
+    # join it to observe the recovered snapshot.
+    h._reattach_thread.join(timeout=5)
+    out = h.health()
     assert out["ok"] is True and out["terminal_connected"] is True
 
 
@@ -717,11 +721,54 @@ def test_health_reattach_is_throttled():
     h = sidecar.BridgeHandlers(fake, reattach=lambda: None)
     h._reattach = lambda: setattr(h, "_tries", getattr(h, "_tries", 0) + 1)
     h.health()
+    h._reattach_thread.join(timeout=5)   # first try done
     h.health()   # same instant: cooldown must suppress the second try
     assert getattr(h, "_tries", 0) == 1
     h._last_attach_try = time.monotonic() - h.REATTACH_COOLDOWN_S - 1
     h.health()   # cooldown expired: retry allowed again
+    h._reattach_thread.join(timeout=5)
     assert getattr(h, "_tries", 0) == 2
+
+
+def test_health_reattach_is_non_blocking():
+    """A terminal drop must not stall /health (which holds the MT5 request
+    lock): the recovery hook runs on a background thread, so a slow
+    attach() returns instantly and answers the degraded snapshot."""
+    fake = FakeMT5()
+    fake.terminal_connected = False
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_reattach():
+        started.set()
+        release.wait(timeout=5)   # simulates attach()'s sleep-retry loop
+
+    h = sidecar.BridgeHandlers(fake, reattach=slow_reattach)
+    out = h.health()   # must NOT block on the slow hook
+    assert out["ok"] is False and out["terminal_connected"] is False
+    assert started.wait(timeout=5)   # recovery did kick off in the background
+    release.set()
+    h._reattach_thread.join(timeout=5)
+
+
+def test_health_reattach_is_single_flight():
+    """A slow attach() must not be stacked by a second /health firing during
+    the same drop: one recovery thread at a time."""
+    fake = FakeMT5()
+    fake.terminal_connected = False
+    calls = []
+    release = threading.Event()
+
+    def blocking_reattach():
+        calls.append(1)
+        release.wait(timeout=5)
+
+    h = sidecar.BridgeHandlers(fake, reattach=blocking_reattach)
+    h.health()
+    h.health()   # second poll while the first attach is still in flight
+    assert len(calls) == 1, f"stacked re-attach threads: {len(calls)}"
+    release.set()
+    h._reattach_thread.join(timeout=5)
 
 
 def test_health_reattach_skipped_while_terminal_connected():
