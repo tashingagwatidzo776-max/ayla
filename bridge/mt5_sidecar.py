@@ -168,6 +168,14 @@ class BridgeHandlers:
         # the old behavior — reads only, never re-attaches.
         self._reattach = reattach
         self._last_attach_try = 0.0
+        # Background recovery: attach() is a sleep-retry loop (2s x 2 tries
+        # in production), and health() runs under the global MT5 request
+        # lock — doing it inline stalls every other route ~2s per drop.
+        # Recovery instead runs on a daemon thread so /health answers
+        # instantly (degraded) while the terminal re-attaches off the
+        # request path. Single-flight: a slow attach() cannot be stacked
+        # by a second /health that fires during the same drop.
+        self._reattach_thread: threading.Thread | None = None
         # /symbols snapshot cache (symbols_cached). Its own lock — never
         # the MT5 lock: the refresh thread takes the MT5 lock one chunk at
         # a time so concurrent routes keep flowing during a rebuild.
@@ -186,7 +194,13 @@ class BridgeHandlers:
         booting (or reconnected) after the sidecar left the sidecar
         permanently detached. /health is the app's first poll of every
         cycle, so it is the right place to retry — throttled, and any
-        failure here only leaves the degraded snapshot, never raises."""
+        failure here only leaves the degraded snapshot, never raises.
+
+        The retry itself runs on a BACKGROUND thread: /health holds the
+        global MT5 request lock, and attach() sleeps between attempts — an
+        inline call would stall every other route for the whole retry
+        window on each drop. The throttle + single-flight guard keep the
+        recovery off the request path without stacking threads."""
         if self._reattach is None:
             return
         try:
@@ -198,10 +212,34 @@ class BridgeHandlers:
         now = time.monotonic()
         if now - self._last_attach_try < self.REATTACH_COOLDOWN_S:
             return
+        # Single-flight: a thread already mid-attach owns this drop; do not
+        # stamp the cooldown (the next /health after it exits will).
+        current = self._reattach_thread
+        if current is not None and current.is_alive():
+            return
         self._last_attach_try = now
+        thread = threading.Thread(
+            target=self._run_reattach, name="mt5-reattach", daemon=True)
+        self._reattach_thread = thread
+        thread.start()
+
+    def _run_reattach(self) -> None:
+        """Run the recovery hook OFF the request path, but still under the
+        MT5 request lock when one is bound: mt5.initialize() is an IPC call
+        on the same not-thread-safe facade every route touches, so a re-
+        attach racing a /ticks or /symbols read would corrupt the IPC. The
+        lock is taken here (not in _ensure_attached) so /health returns
+        instantly — the background thread pays the wait, not the request.
+        None (handler tests, no server) keeps the old single-threaded
+        behavior."""
+        lock = self._route_lock
         try:
-            self._reattach()
-        except Exception:  # noqa: BLE001
+            if lock is not None:
+                with lock:
+                    self._reattach()
+            else:
+                self._reattach()
+        except Exception:  # noqa: BLE001 — recovery is best-effort; next /health retries
             pass
 
     def health(self) -> dict:
@@ -969,11 +1007,23 @@ class SidecarServer:
                 # under one lock, but the socket write happens OUTSIDE it —
                 # a slow or aborted client write must never stall other
                 # requests (2026-09-28 freeze + crash loop).
+                if path == "/health":
+                    # Runs OUTSIDE the request lock: /health triggers the
+                    # background re-attach (which takes _mt5_lock itself),
+                    # so calling it under the lock would deadlock on the
+                    # non-reentrant MT5 lock and hold it for the whole
+                    # attach window. Same reasoning as /symbols above.
+                    try:
+                        payload, code = h.health(), 200
+                    except OrderError as e:
+                        payload, code = {"error": str(e)}, 422
+                    except Exception as e:  # noqa: BLE001
+                        payload, code = {"error": f"{type(e).__name__}: {e}"}, 500
+                    self._send(code, payload)
+                    return
                 with outer._mt5_lock:
                     try:
-                        if path == "/health":
-                            payload, code = h.health(), 200
-                        elif path == "/account":
+                        if path == "/account":
                             payload, code = h.account(), 200
                         elif path.startswith("/ticks/"):
                             payload, code = h.ticks(path.split("/", 2)[2]), 200
