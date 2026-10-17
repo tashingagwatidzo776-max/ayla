@@ -971,6 +971,13 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                                     CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
                                                     Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
                                                     ToolTip="Close part of the selected MT5 position" />
+                                            <TextBlock Text="1 :" VerticalAlignment="Center" Margin="16,0,4,0" FontSize="11" />
+                                            <TextBox Text="{Binding RiskRewardRatio, UpdateSourceTrigger=PropertyChanged}" Width="34" Padding="4,3"
+                                                     ToolTip="Reward-to-risk ratio the Close 1:R button arms (2 = 1:2). Change it here." />
+                                            <Button Content="Arm TP 1:R" Command="{Binding CloseAtRiskRewardCommand}"
+                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
+                                                    ToolTip="Set the selected position's take-profit at the configured reward-to-risk multiple of its stop (default 1:2). Arms the TP the venue fills — the 1:2 reward is banked without watching the screen." />
                                             <TextBlock Text="{Binding Mt5OrderStatus}" VerticalAlignment="Center" Margin="12,0,0,0"
                                                        FontSize="11" Foreground="{StaticResource AccentBrush}" />
                                         </StackPanel>
@@ -989,13 +996,20 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                             <DataGridTextColumn Header="Now" Binding="{Binding Current, StringFormat=0.#####}" Width="90" />
                                             <DataGridTextColumn Header="P/L" Binding="{Binding Profit, StringFormat=+0.##;-0.##;0}" Width="70" />
                                             <DataGridTextColumn Header="Kind" Binding="{Binding Kind}" Width="60" />
-                                            <DataGridTemplateColumn Width="70">
+                                            <DataGridTemplateColumn Width="110">
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
-                                                        <Button Content="✕" Padding="6,0" FontSize="11"
-                                                                Visibility="{Binding Mt5CloseVisibility}"
-                                                                Command="{Binding DataContext.TerminalVm.CloseMt5PositionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                CommandParameter="{Binding Mt5Ticket}" />
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Button Content="1:R" Padding="5,0" FontSize="11" Margin="0,0,4,0"
+                                                                    Visibility="{Binding Mt5CloseVisibility}"
+                                                                    Command="{Binding DataContext.TerminalVm.CloseAtRiskRewardCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Mt5Ticket}"
+                                                                    ToolTip="Arm this position's take-profit at the reward-to-risk ratio set above (default 1:2)" />
+                                                            <Button Content="✕" Padding="6,0" FontSize="11"
+                                                                    Visibility="{Binding Mt5CloseVisibility}"
+                                                                    Command="{Binding DataContext.TerminalVm.CloseMt5PositionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Mt5Ticket}" />
+                                                        </StackPanel>
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
