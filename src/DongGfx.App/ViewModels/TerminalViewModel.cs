@@ -65,7 +65,8 @@ public sealed partial class TerminalSymbolRow : ObservableObject
 /// normalized to a ticket-like grid with live P/L.</summary>
 public sealed record TerminalTradeRow(
     string Ticket, string Symbol, string Side, double Volume,
-    double Entry, double Current, double Profit, string Kind, long? Mt5Ticket = null)
+    double Entry, double Current, double Profit, string Kind, long? Mt5Ticket = null,
+    double Sl = 0, double Tp = 0)
 {
     /// <summary>The ✕ close button only makes sense for MT5 positions.</summary>
     public System.Windows.Visibility Mt5CloseVisibility =>
@@ -1308,7 +1309,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         {
             TradeRows.Add(new TerminalTradeRow(
                 $"MT5-{p.Ticket}", p.Symbol, p.Side.ToUpperInvariant() + (p.Side == "buy" ? " ▲" : " ▼"),
-                p.Volume, p.PriceOpen, p.PriceCurrent, p.Profit, "mt5", p.Ticket));
+                p.Volume, p.PriceOpen, p.PriceCurrent, p.Profit, "mt5", p.Ticket, p.Sl, p.Tp));
         }
 
         RebuildExposure();
@@ -1737,6 +1738,107 @@ public sealed partial class TerminalViewModel : ObservableObject
     /// <summary>The lots box feeding the partial-close button.</summary>
     [ObservableProperty]
     private string partialCloseLots = "";
+
+    /// <summary>The reward-to-risk ratio the "Close 1:R" button targets.
+    /// 1:2 (two units of reward per one of risk) is the default; the box on
+    /// the Trade tab lets the trader change it per session.</summary>
+    [ObservableProperty]
+    private string riskRewardRatio = "2";
+
+    /// <summary>Risk-to-reward take-profit price for one MT5 position, or
+    /// null when it cannot be computed.
+    ///
+    /// risk = |entry − SL|; the take-profit sits <paramref name="ratio"/>
+    /// rewards beyond entry on the profitable side (buy: entry + ratio×risk,
+    /// sell: entry − ratio×risk). Returns null when there is no SL (no
+    /// defined risk), a non-positive ratio, or a computed target that would
+    /// land on the wrong side of the current price — a 1:2 target the market
+    /// has ALREADY reached must not be re-set as a fresh take-profit, or the
+    /// order would fill instantly and give the trade back.</summary>
+    public static double? RiskRewardTakeProfit(double entry, double current, double sl, bool isBuy, double ratio)
+    {
+        // SL == 0 means the position has no stop-loss leg — there is no
+        // defined 1R risk to scale a reward from. Without this guard the
+        // |entry − 0| distance would fabricate a huge bogus risk and arm a
+        // take-profit absurdly far from the market (seen live: the no-SL
+        // path reached the bridge and came back "modify refused").
+        if (sl <= 0)
+        {
+            return null;
+        }
+        double risk = Math.Abs(entry - sl);
+        if (risk <= 0 || ratio <= 0)
+        {
+            return null;
+        }
+        double target = isBuy ? entry + ratio * risk : entry - ratio * risk;
+        // The reward leg must still be ahead of the market: a buy target at
+        // or below the current price (a sell target at or above) means the
+        // 1:2 move already happened — refuse rather than place a TP that
+        // triggers instantly and books back the gain.
+        if (isBuy ? target <= current : target >= current)
+        {
+            return null;
+        }
+        return target;
+    }
+
+    /// <summary>Arm the selected MT5 position's take-profit at the configured
+    /// reward-to-risk multiple (default 1:2). This is a MODIFY, not a close:
+    /// it arms the TP the venue fills on the way up, so the 1:2 reward is
+    /// banked without a hand on the button. When the 1:2 target is already
+    /// met (reward reached) it says so instead of re-setting a stale TP.</summary>
+    [RelayCommand]
+    private async Task CloseAtRiskRewardAsync(long? ticket)
+    {
+        if (ticket is null)
+        {
+            return;
+        }
+
+        if (_dashboard.IsKillSwitchEngaged)
+        {
+            Mt5OrderStatus = "kill switch is engaged — reset it on the Dashboard first";
+            return;
+        }
+
+        if (!double.TryParse(RiskRewardRatio, System.Globalization.CultureInfo.InvariantCulture, out var ratio) || ratio <= 0)
+        {
+            Mt5OrderStatus = "enter a reward-to-risk ratio (e.g. 2 for 1:2)";
+            return;
+        }
+
+        var p = _mt5Positions.FirstOrDefault(x => x.Ticket == ticket.Value);
+        if (p is null)
+        {
+            Mt5OrderStatus = $"position {ticket} not found — refresh";
+            return;
+        }
+
+        bool isBuy = p.Side == "buy";
+        double? target = RiskRewardTakeProfit(p.PriceOpen, p.PriceCurrent, p.Sl, isBuy, ratio);
+        if (target is null)
+        {
+            Mt5OrderStatus = p.Sl <= 0
+                ? "position has no stop-loss — set an SL to define 1R risk first"
+                : $"1:{ratio:0.##} target already met (reward reached) — not re-setting TP";
+            return;
+        }
+
+        try
+        {
+            var result = await _mt5.ModifyPositionAsync(ticket.Value, tp: target.Value).ConfigureAwait(true);
+            Mt5OrderStatus = result.Ok
+                ? $"{p.Symbol} take-profit armed at {target:0.#####} (1:{ratio:0.##} R:R)"
+                : $"1:R take-profit refused: {result.RetcodeName}";
+            _journal.Log(Guid.Empty, "MT5_ORDER", $"arm TP {ticket} {p.Symbol} @ {target:0.#####} (1:{ratio:0.##} R:R) → {result.RetcodeName}");
+            _ = PollMt5Async();
+        }
+        catch (Exception ex)
+        {
+            Mt5OrderStatus = $"1:R take-profit failed: {ex.Message}";
+        }
+    }
 
     /// <summary>Change SL/TP on an open position. Pass only the legs being
     /// changed; the bridge enforces the broker's stops level.</summary>

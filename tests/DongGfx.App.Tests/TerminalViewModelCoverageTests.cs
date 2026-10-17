@@ -767,6 +767,111 @@ public class TerminalViewModelCoverageTests : IDisposable
         Assert.Equal(2, vm.Ladder.Count);
     }
 
+    // ── Close at risk:reward (1:2 default, adjustable) ───────────────
+
+    [Fact]
+    public void RiskRewardTakeProfit_Buy_UsesEntryPlusRatioTimesRisk()
+    {
+        // entry 2600, SL 2590 → risk 10; ratio 2 → target 2620, still ahead
+        // of the current 2605 so it arms.
+        var tp = TerminalViewModel.RiskRewardTakeProfit(2600, 2605, 2590, isBuy: true, ratio: 2);
+        Assert.Equal(2620, tp!.Value, 5);
+    }
+
+    [Fact]
+    public void RiskRewardTakeProfit_Sell_UsesEntryMinusRatioTimesRisk()
+    {
+        // entry 2660, SL 2670 → risk 10; ratio 2 → target 2640, still below
+        // the current 2655 so it arms.
+        var tp = TerminalViewModel.RiskRewardTakeProfit(2660, 2655, 2670, isBuy: false, ratio: 2);
+        Assert.Equal(2640, tp!.Value, 5);
+    }
+
+    [Fact]
+    public void RiskRewardTakeProfit_TargetAlreadyMet_ReturnsNull()
+    {
+        // A buy whose 1:2 target (2620) is already at/below the current price
+        // (2625): re-arming would fill instantly and hand the gain back.
+        Assert.Null(TerminalViewModel.RiskRewardTakeProfit(2600, 2625, 2590, isBuy: true, ratio: 2));
+        // Exactly at the target is still refused (would fill at market now).
+        Assert.Null(TerminalViewModel.RiskRewardTakeProfit(2600, 2620, 2590, isBuy: true, ratio: 2));
+    }
+
+    [Fact]
+    public void RiskRewardTakeProfit_NoStopLoss_ReturnsNull()
+    {
+        // SL == entry → no defined risk → no R:R target.
+        Assert.Null(TerminalViewModel.RiskRewardTakeProfit(2600, 2605, 2600, isBuy: true, ratio: 2));
+    }
+
+    [Fact]
+    public void RiskRewardTakeProfit_AdjustableRatio_ChangesTheTarget()
+    {
+        var at1_3 = TerminalViewModel.RiskRewardTakeProfit(2600, 2602, 2590, isBuy: true, ratio: 1.5);
+        var at1_2 = TerminalViewModel.RiskRewardTakeProfit(2600, 2602, 2590, isBuy: true, ratio: 2);
+        Assert.Equal(2615, at1_3!.Value, 5);
+        Assert.Equal(2620, at1_2!.Value, 5);
+    }
+
+    [Fact]
+    public async Task CloseAtRiskReward_ArmsTheComputedTakeProfit_AndSendsItToTheBridge()
+    {
+        var (vm, h) = NewVm();
+        h.Route("/positions", "{\"positions\": [{\"ticket\": 42, \"symbol\": \"XAUUSDmicro\", \"side\": \"buy\", " +
+            "\"volume\": 0.5, \"price_open\": 2600.0, \"price_current\": 2605.0, \"profit\": 5.0, \"sl\": 2590.0, \"tp\": 0.0}]}");
+        h.Route("/modify", "{\"ok\": true, \"retcode\": 10009, \"retcode_name\": \"TRADE_RETCODE_DONE\", " +
+            "\"modified_ticket\": 42, \"sl\": 2590.0, \"tp\": 2620.0}");
+        await vm.PollMt5ForTestsAsync().ConfigureAwait(true);
+
+        await vm.CloseAtRiskRewardCommand.ExecuteAsync(42L).ConfigureAwait(true);
+
+        // Default ratio is 1:2: entry 2600, SL 2590 (risk 10) → TP 2620.
+        Assert.Contains("take-profit armed", vm.Mt5OrderStatus);
+        Assert.Contains("2620", vm.Mt5OrderStatus);
+        Assert.NotNull(h.LastBody);
+        Assert.Contains("\"tp\":2620", h.LastBody);
+    }
+
+    [Fact]
+    public async Task CloseAtRiskReward_NoStopLoss_SaysSetAnSlFirst()
+    {
+        var (vm, h) = NewVm();
+        h.Route("/positions", "{\"positions\": [{\"ticket\": 42, \"symbol\": \"XAUUSDmicro\", \"side\": \"buy\", " +
+            "\"volume\": 0.5, \"price_open\": 2600.0, \"price_current\": 2605.0, \"profit\": 5.0, \"sl\": 0.0, \"tp\": 0.0}]}");
+        await vm.PollMt5ForTestsAsync().ConfigureAwait(true);
+
+        await vm.CloseAtRiskRewardCommand.ExecuteAsync(42L).ConfigureAwait(true);
+
+        Assert.Contains("no stop-loss", vm.Mt5OrderStatus);
+    }
+
+    [Fact]
+    public async Task CloseAtRiskReward_BadRatioBox_IsRefusedLocally()
+    {
+        var (vm, _) = NewVm();
+        vm.RiskRewardRatio = "abc";
+
+        await vm.CloseAtRiskRewardCommand.ExecuteAsync(42L).ConfigureAwait(true);
+
+        Assert.Contains("reward-to-risk ratio", vm.Mt5OrderStatus);
+    }
+
+    [Fact]
+    public async Task CloseAtRiskReward_KillSwitch_Refuses()
+    {
+        var dashboard = new DashboardViewModel();
+        var (vm, _) = NewVm(dashboard: dashboard);
+        if (dashboard.ToggleKillSwitchCommand.CanExecute(null))
+        {
+            dashboard.ToggleKillSwitchCommand.Execute(null);
+        }
+
+        await vm.CloseAtRiskRewardCommand.ExecuteAsync(42L).ConfigureAwait(true);
+
+        Assert.Contains("kill switch", vm.Mt5OrderStatus);
+        dashboard.ToggleKillSwitchCommand.Execute(null);
+    }
+
     [Fact]
     public async Task EmptyBook_FallsBackToTheSyntheticLadder()
     {
