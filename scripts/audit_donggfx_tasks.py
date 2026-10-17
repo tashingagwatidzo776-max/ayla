@@ -34,10 +34,12 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:          # import a sibling regardless of CWD
+    sys.path.insert(0, _HERE)
 WRAPPER = "set PYTHONIOENCODING=utf-8&&"
 HISTORY_MAX = 60
 
@@ -109,15 +111,20 @@ def list_tasks() -> list[dict]:
 
 
 def _ps(command: str) -> str:
+    from bounded_run import run_bounded
     # 240 s, not 120: Get-ScheduledTask hydrates EVERY task on the box
     # and serializes behind the Task Scheduler service's own churn (the
     # fleet fires a trigger every few seconds at boot hour). A timed-out
     # enumeration is an INDETERMINATE audit — and fleet-wide AMBER — so
     # the timeout needs real headroom (2026-10-15, seen live).
-    out = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", command],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=240, check=False)
+    #
+    # run_bounded (not subprocess.run(capture_output=True, timeout=240)):
+    # the pipe-based call waits for stream EOF past its own timeout when a
+    # grandchild inherits the write end, hanging this audit instead of
+    # letting it report indeterminate (see bounded_run).
+    out = run_bounded(["powershell", "-NoProfile", "-Command", command], 240)
+    if out is None:
+        raise RuntimeError("powershell did not finish within 240s (bounded run)")
     if out.returncode != 0:
         raise RuntimeError(f"powershell failed rc={out.returncode}")
     return out.stdout
@@ -130,11 +137,12 @@ def file_hash(path: str) -> str:
 
 def head_hash(rel: str) -> str | None:
     """Newline-normalized sha256 of the file at git HEAD (None if not
-    tracked)."""
-    out = subprocess.run(
-        ["git", "-C", REPO, "show", f"HEAD:{rel.replace(os.sep, '/')}"],
-        capture_output=True, timeout=30, check=False)
-    if out.returncode != 0:
+    tracked). Raw bytes: the hash must match file_hash's binary read, so
+    run_bounded returns untouched bytes (raw=True), not decoded text."""
+    from bounded_run import run_bounded
+    out = run_bounded(
+        ["git", "-C", REPO, "show", f"HEAD:{rel.replace(os.sep, '/')}"] , 30, raw=True)
+    if out is None or out.returncode != 0:
         return None
     return hashlib.sha256(out.stdout.replace(b"\r\n", b"\n")).hexdigest()
 
