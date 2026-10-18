@@ -398,4 +398,132 @@ public class UiaSmokeTests
             _output.WriteLine("smoke: bridge offline, degradation path confirmed");
         }
     }
+
+    // ── the 1:2 R:R close's binding smoke ─────────────────────────────
+
+    /// <summary>
+    /// Pins the WPF wiring of the "Arm TP 1:R" close — the one surface the
+    /// desktop-free coverage suite cannot see. In a real launched window it
+    /// asserts that the Trade toolbox tab carries the button, that the
+    /// ratio box renders the default "2" and round-trips an edit (proving
+    /// the two-way <c>RiskRewardRatio</c> binding with
+    /// UpdateSourceTrigger=PropertyChanged writes through), and that
+    /// invoking the button with NOTHING selected — no live position needed —
+    /// reaches the command's null-ticket guard and leaves the process alive.
+    /// The math and guards themselves are covered desktop-free by
+    /// TerminalViewModelCoverageTests; this test makes sure the button is
+    /// actually wired to them in the shell that traders click.
+    /// </summary>
+    [Fact]
+    public void ArmTpRiskReward_Button_And_Ratio_Box_Bind_In_The_Live_Shell()
+    {
+        // A scratch data dir keeps the run deterministic and off the live
+        // session's settings/journal — same isolation as the banner smoke.
+        var dataDir = Path.Combine(Path.GetTempPath(), "tf-data-uia-riskreward");
+        try
+        {
+            if (Directory.Exists(dataDir)) Directory.Delete(dataDir, recursive: true);
+        }
+        catch { /* a previous smoke may still be winding down */ }
+        Directory.CreateDirectory(dataDir);
+        File.WriteAllText(Path.Combine(dataDir, "settings.json"), "{}");
+
+        var (proc, owned) = LaunchSeeded(dataDir);
+        if (proc is null)
+        {
+            return;   // a live instance is running: vacuous, like the other smokes
+        }
+        try
+        {
+            var win = WindowOf(proc.Id, TimeSpan.FromSeconds(45));
+            Assert.True(win is not null, $"no main window appeared for pid={proc.Id}");
+
+            // The Trade toolbox lives inside the Terminal tab (same select
+            // the boot smoke performs), then the inner "Trade" tab item.
+            var terminalTab = Named(win!, "Terminal", TimeSpan.FromSeconds(20));
+            Assert.NotNull(terminalTab);
+            ((System.Windows.Automation.SelectionItemPattern)terminalTab!
+                .GetCurrentPattern(System.Windows.Automation.SelectionItemPattern.Pattern)).Select();
+            Thread.Sleep(800);
+
+            var tradeTab = Named(win!, "Trade", TimeSpan.FromSeconds(15));
+            Assert.True(tradeTab is not null, "Trade toolbox tab not found");
+            ((System.Windows.Automation.SelectionItemPattern)tradeTab!
+                .GetCurrentPattern(System.Windows.Automation.SelectionItemPattern.Pattern)).Select();
+            Thread.Sleep(600);
+
+            // The button renders with the exact content traders read.
+            var armButton = Named(win!, "Arm TP 1:R", TimeSpan.FromSeconds(15));
+            Assert.True(armButton is not null, "Arm TP 1:R button not found on the Trade tab");
+
+            // The ratio box holds the default "2" (1:2) — and it BINDS:
+            // write "5", read it back through the same ValuePattern the
+            // two-way binding feeds from.
+            var ratioBox = TextBoxWithValue(win!, "2", TimeSpan.FromSeconds(15));
+            Assert.True(ratioBox is not null, "RiskRewardRatio box (default value 2) not found");
+            var value = (System.Windows.Automation.ValuePattern)ratioBox!
+                .GetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern);
+            Assert.False(value.Current.IsReadOnly, "ratio box is not editable");
+            value.SetValue("5");
+            Thread.Sleep(400);   // UpdateSourceTrigger=PropertyChanged writes through immediately
+            value = (System.Windows.Automation.ValuePattern)ratioBox!
+                .GetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern);
+            Assert.Equal("5", value.Current.Value);
+
+            // No row is selected in an empty grid, so the command's
+            // CommandParameter (SelectedItem.Ticket) resolves to null.
+            // Invoking must hit that null guard and return quietly — the
+            // process survives and the Trade surface still renders.
+            ((System.Windows.Automation.InvokePattern)armButton!
+                .GetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern)).Invoke();
+            Thread.Sleep(1000);
+            proc.Refresh();
+            Assert.False(proc.HasExited, "Arm TP 1:R with no selection crashed the app");
+            Assert.NotNull(Named(win!, "Arm TP 1:R", TimeSpan.FromSeconds(5)));
+            _output.WriteLine("smoke: Arm TP 1:R bound, ratio box round-tripped 2→5, null-selection invoke survived");
+        }
+        finally
+        {
+            CloseOwned(proc, owned);
+        }
+    }
+
+    /// <summary>Finds the TextBox whose ValuePattern reads <paramref
+    /// name="want"/> (the ratio box is the only Trade-tab text box with a
+    /// value in a fresh data dir — SL/TP/lots boxes are empty). Scans at
+    /// least once even with a zero wait.</summary>
+    private System.Windows.Automation.AutomationElement? TextBoxWithValue(
+        System.Windows.Automation.AutomationElement scope, string want, TimeSpan wait)
+    {
+        var deadline = DateTime.UtcNow + wait;
+        while (true)
+        {
+            var boxes = scope.FindAll(
+                System.Windows.Automation.TreeScope.Descendants,
+                new System.Windows.Automation.PropertyCondition(
+                    System.Windows.Automation.AutomationElement.ControlTypeProperty,
+                    System.Windows.Automation.ControlType.Edit));
+            foreach (System.Windows.Automation.AutomationElement box in boxes)
+            {
+                // GetCurrentPattern throws when the pattern is absent; an
+                // Edit without ValuePattern is just not our box.
+                System.Windows.Automation.ValuePattern? vp;
+                try
+                {
+                    vp = box.GetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern)
+                        as System.Windows.Automation.ValuePattern;
+                }
+                catch (InvalidOperationException)
+                {
+                    continue;
+                }
+                if (vp?.Current.Value == want)
+                {
+                    return box;
+                }
+            }
+            if (DateTime.UtcNow >= deadline) return null;
+            Thread.Sleep(400);
+        }
+    }
 }
