@@ -94,26 +94,44 @@ function Read-JournalEvents {
     # Tolerant by design: unparsable lines are skipped, missing files yield
     # an empty list — a weekend journal or a mid-file crash must never kill
     # the watch.
+    #
+    # FileShare.ReadWrite is LOAD-BEARING: the default [IO.File]::ReadLines
+    # opens with FileShare.Read (deny-write), so every poll overlapping the
+    # app's 5-second journal flush made the appender's open fail with a
+    # sharing violation (the APP_FAULT journal-lock saga of 2026-10-06..08,
+    # when this watcher re-read the whole growing file every few seconds).
+    # The app's flush now retries and requeues, but the durable law is the
+    # reader's: an open reader must never block a write — the same
+    # FileShare.ReadWrite rule TradeJournal.ReadLinesShared states.
     param([string]$Path)
     $events = @()
     if (-not (Test-Path $Path)) { return $events }
-    foreach ($line in [IO.File]::ReadLines($Path)) {
-        if (-not $line.Trim()) { continue }
-        # One try per line: a malformed line (bad JSON, bad timestamp) is
-        # skipped, never fatal — a partial write mid-settlement must not
-        # kill the watch.
-        try {
-            $obj = $line | ConvertFrom-Json
-            if (-not $obj.Category) { continue }
-            $details = $null
-            if ($obj.Details) { $details = $obj.Details | ConvertFrom-Json }
-            $events += [pscustomobject]@{
-                Timestamp = [datetime]::Parse($obj.Timestamp).ToUniversalTime()
-                Category  = [string]$obj.Category
-                Details   = $details
+    $stream = $null; $reader = $null
+    try {
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $reader = New-Object IO.StreamReader($stream)
+        while ($null -ne ($line = $reader.ReadLine())) {
+            if (-not $line.Trim()) { continue }
+            # One try per line: a malformed line (bad JSON, bad timestamp) is
+            # skipped, never fatal — a partial write mid-settlement must not
+            # kill the watch.
+            try {
+                $obj = $line | ConvertFrom-Json
+                if (-not $obj.Category) { continue }
+                $details = $null
+                if ($obj.Details) { $details = $obj.Details | ConvertFrom-Json }
+                $events += [pscustomobject]@{
+                    Timestamp = [datetime]::Parse($obj.Timestamp).ToUniversalTime()
+                    Category  = [string]$obj.Category
+                    Details   = $details
+                }
             }
+            catch { continue }
         }
-        catch { continue }
+    }
+    finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        elseif ($null -ne $stream) { $stream.Dispose() }
     }
     return $events
 }

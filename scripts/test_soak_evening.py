@@ -18,6 +18,8 @@ import json
 import pathlib
 import sys
 import tempfile
+import threading
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -126,18 +128,17 @@ def _with_fake_exe_and_smoke_output(smoke_out: str):
         exe.write_text("stub", encoding="utf-8")
         calls = []
 
-        def fake_run(cmd, **kw):
+        def fake_run(cmd, timeout=None, **kw):
             calls.append(cmd)
             return SimpleNamespace(returncode=0, stdout=smoke_out, stderr="")
 
-        import subprocess as sp
-        orig_run, orig_exe = sp.run, soak_evening.ANALYST_EXE
+        orig_run, orig_exe = soak_evening.run_bounded, soak_evening.ANALYST_EXE
         soak_evening.ANALYST_EXE = exe
         try:
-            sp.run = fake_run  # type: ignore[assignment]
+            soak_evening.run_bounded = fake_run  # type: ignore[assignment]
             result = soak_evening.run_analyst("qwen3:test")
         finally:
-            sp.run = orig_run  # type: ignore[assignment]
+            soak_evening.run_bounded = orig_run  # type: ignore[assignment]
             soak_evening.ANALYST_EXE = orig_exe
         # calls[0] is the ollama warm-up; the exe run is the last call
         assert calls and calls[-1][0] == str(exe), calls
@@ -274,6 +275,55 @@ def test_run_alpha_thin_tape_reported_not_failed():
 
         assert finding == ""
         assert any("below the 50-bar floor" in ln for ln in lines)
+
+
+# ── run_bounded: the evening-soak death regression ────────────────────
+
+
+def test_run_bounded_captures_text_from_a_real_child():
+    r = soak_evening.run_bounded(
+        [sys.executable, "-c",
+         "import sys; print('out line'); print('err line', file=sys.stderr)"],
+        30)
+    assert r is not None and r.returncode == 0, r
+    assert "out line" in r.stdout and "err line" in r.stderr
+
+
+def test_run_bounded_returns_while_a_grandchild_holds_the_stream():
+    """THE soak-death regression. The scheduled run died 12 of 18 nights
+    because subprocess.run(capture_output=True) waited for stream EOF
+    after its own timeout kill, while a grandchild (ollama serve / a
+    Roslyn VBCSCompiler server) held the inherited stream open forever
+    - py-spy showed the process blocked in that join at zero CPU. Here
+    the child spawns a grandchild that outlives it while holding the
+    stream; run_bounded must return anyway. The assertion runs on a
+    daemon thread so a regressed implementation fails instead of
+    hanging the suite."""
+    script = (
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'])\n"
+        "print('child finished')\n")
+    box: dict = {}
+
+    def work():
+        box["r"] = soak_evening.run_bounded([sys.executable, "-c", script], 60)
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(timeout=20)
+    assert not t.is_alive(), "run_bounded blocked waiting for the inherited stream"
+    r = box.get("r")
+    assert r is not None and r.returncode == 0, r
+    assert "child finished" in r.stdout
+
+
+def test_run_bounded_timeout_kills_and_returns_within_bound():
+    start = time.monotonic()
+    r = soak_evening.run_bounded(
+        [sys.executable, "-c", "import time; time.sleep(120)"], 1)
+    elapsed = time.monotonic() - start
+    assert r is None, r                      # timed out: killed, not awaited
+    assert elapsed < 15, f"timeout path took {elapsed:.1f}s - unbounded"
 
 
 if __name__ == "__main__":

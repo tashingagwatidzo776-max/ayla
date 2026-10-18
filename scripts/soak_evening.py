@@ -31,6 +31,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 SOAK_DIR = REPO / "docs" / "soak"
@@ -80,36 +81,62 @@ def replace_section(path: pathlib.Path, title: str, body: str) -> bool:
 
 # ── analyst ──────────────────────────────────────────────────────────
 
+def run_bounded(cmd, timeout: int):
+    """Run `cmd` under a hard wall-clock bound; can never hang past it.
+
+    This replaces `subprocess.run(..., capture_output=True, timeout=N)`
+    because of a Windows-only trap: when that call times out it kills the
+    child and then calls communicate() with NO timeout, which waits for
+    pipe EOF. A grandchild that inherited the pipe write end (ollama
+    serve, a Roslyn VBCSCompiler server, conhost) keeps it open forever,
+    so the caller sits idle at zero CPU for hours. That is exactly how
+    the evening soak died: 12 of 18 scheduled runs wrote a start line and
+    no exit, and py-spy showed the process blocked in that post-kill
+    join inside warm_llm.
+
+    Redirecting the child's output to temp files removes the EOF
+    dependency — after kill(), the wait is bounded by process death
+    alone. Returns a CompletedProcess with decoded stdout/stderr, or
+    None when the command could not start or did not finish inside
+    `timeout` (it has already been killed by then)."""
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            r = subprocess.run(cmd, stdout=out, stderr=err,
+                               stdin=subprocess.DEVNULL, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None            # child already killed inside run()
+        except OSError:
+            return None            # never started (missing exe, bad path)
+        out.seek(0)
+        err.seek(0)
+        return subprocess.CompletedProcess(
+            cmd, r.returncode,
+            out.read().decode("utf-8", errors="replace"),
+            err.read().decode("utf-8", errors="replace"))
+
+
 def warm_llm(model: str, timeout: int = 180) -> bool:
     """Load the model into memory so the 20s analyst budget is spent on
     narrating, not on a cold 522 MB load. Best effort."""
     if not OLLAMA.exists():
         return False
-    try:
-        r = subprocess.run([str(OLLAMA), "run", model, "warm"],
-                           capture_output=True, timeout=timeout)
-        return r.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    r = run_bounded([str(OLLAMA), "run", model, "warm"], timeout)
+    return r is not None and r.returncode == 0
 
 
 def run_analyst(model: str) -> tuple[str | None, str]:
     """Returns (narrative or None, status note). Never raises."""
     if not ANALYST_EXE.exists():
         print("building AnalystSmoke (first run)...")
-        build = subprocess.run(
+        build = run_bounded(
             ["dotnet", "build", str(REPO / "tools" / "AnalystSmoke"),
-             "-p:OutputPath=bin/lockfree3/", "-v", "q", "--nologo"],
-            capture_output=True, text=True, timeout=600,
-            encoding="utf-8", errors="replace")
-        if build.returncode != 0 or not ANALYST_EXE.exists():
+             "-p:OutputPath=bin/lockfree3/", "-v", "q", "--nologo"], 600)
+        if build is None or build.returncode != 0 or not ANALYST_EXE.exists():
             return None, "AnalystSmoke unavailable (build failed)"
     warm_llm(model)
-    try:
-        r = subprocess.run([str(ANALYST_EXE)], capture_output=True, text=True,
-                           timeout=300, encoding="utf-8", errors="replace")
-    except (OSError, subprocess.TimeoutExpired) as ex:
-        return None, f"AnalystSmoke failed to run ({ex.__class__.__name__})"
+    r = run_bounded([str(ANALYST_EXE)], 300)
+    if r is None:
+        return None, "AnalystSmoke failed to run (timeout or could not start)"
     out = (r.stdout or "") + (r.stderr or "")
     m = re.search(r"=== NARRATIVE START ===\s*(.*?)\s*=== NARRATIVE END ===",
                   out, re.DOTALL)
@@ -142,15 +169,10 @@ def convert_bars(symbol: str, tick_dir: pathlib.Path, out_dir: pathlib.Path) -> 
     if not matches:
         return None
     out = out_dir / f"{matches[-1].stem}.csv"
-    try:
-        r = subprocess.run(
-            [sys.executable, str(REPO / "scripts" / "ai_alpha" / "ticks_to_bars.py"),
-             symbol, "--tick-dir", str(tick_dir), "--out", str(out)],
-            capture_output=True, text=True, timeout=300,
-            encoding="utf-8", errors="replace")
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if r.returncode != 0 or not out.exists():
+    r = run_bounded(
+        [sys.executable, str(REPO / "scripts" / "ai_alpha" / "ticks_to_bars.py"),
+         symbol, "--tick-dir", str(tick_dir), "--out", str(out)], 300)
+    if r is None or r.returncode != 0 or not out.exists():
         return None
     return out
 
@@ -164,13 +186,9 @@ def backtest(proposal: pathlib.Path, bars: pathlib.Path,
              results: pathlib.Path) -> dict | None:
     """One deterministic backtest; report keyed per (proposal, bars day)."""
     ai = REPO / "scripts" / "ai_alpha"
-    try:
-        r = subprocess.run(
+    if run_bounded(
             [sys.executable, str(ai / "backtest.py"), str(proposal),
-             "--bars", str(bars)],
-            capture_output=True, text=True, timeout=600,
-            encoding="utf-8", errors="replace")
-    except (OSError, subprocess.TimeoutExpired):
+             "--bars", str(bars)], 600) is None:
         return None
     # backtest.py writes its plain report next to its own harness dir,
     # not the caller's results dir — read (and consume) it there.
@@ -194,13 +212,8 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
     if not proposals_dir.exists():
         proposals_dir.mkdir(parents=True)
     before = {p.name for p in proposals_dir.glob("PROP-*.json")}
-    r = None
-    try:
-        r = subprocess.run([sys.executable, str(ai / "propose.py")],
-                           capture_output=True, text=True, timeout=600,
-                           encoding="utf-8", errors="replace")
-    except (OSError, subprocess.TimeoutExpired):
-        pass  # missing script or hung daemon: proceed with what exists
+    # None (missing script, hung daemon, timed out) -> proceed with what exists
+    r = run_bounded([sys.executable, str(ai / "propose.py")], 600)
     new = {p.name for p in proposals_dir.glob("PROP-*.json")} - before
     lines.append(f"- propose.py: {'+' + str(len(new)) + ' new proposal(s)' if new else 'no new proposal'}"
                  + ("" if r is not None and r.returncode == 0 else " (propose unavailable or failed)"))

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using DongGfx.Core.Fx;
+using DongGfx.Core.Logging;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Monte-Carlo fire drill: replay the settled FX_EXIT trail through the real
@@ -63,7 +64,10 @@ static List<FxSettledExit> DecodeEvaluations(string journalDir)
     var byTicket = new Dictionary<long, FxSettledExit>();
     foreach (var file in Directory.GetFiles(journalDir, "journal_*.jsonl").OrderBy(f => f))
     {
-        foreach (var line in File.ReadLines(file))
+        // ReadLinesShared (FileShare.ReadWrite): the default File.ReadLines
+        // denies writes while open — a drill running against the live
+        // journal must never block the app's flush appender.
+        foreach (var line in TradeJournal.ReadLinesShared(file))
         {
             if (!line.Contains("FX_EXIT"))
             {
