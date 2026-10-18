@@ -50,6 +50,10 @@ import os
 import sys
 from datetime import datetime, timezone
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:          # import a sibling regardless of CWD
+    sys.path.insert(0, _HERE)
+
 # (task name, trigger cadence in minutes, staleness window in minutes)
 WATCHERS: tuple[tuple[str, int, int], ...] = (
     ("DongGfx profit-floor watcher", 4, 10),
@@ -89,14 +93,23 @@ def _ps(command: str) -> str:
 
 def _run_ps(command: str):
     import subprocess
+    from bounded_run import run_bounded
     # 120 s, not 90: under boot-hour contention (the fleet fires a
     # trigger every few seconds) even a one-task Get-ScheduledTaskInfo
     # can queue behind the service — a timeout here is an INDETERMINATE
     # health check, fleet-wide AMBER (seen live 2026-10-15).
-    return subprocess.run(
-        ["powershell", "-NoProfile", "-Command", command],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=120, check=False)
+    #
+    # run_bounded (not subprocess.run(capture_output=True, timeout=120)):
+    # the pipe-based call waits for stream EOF past its own timeout when a
+    # grandchild inherits the write end, hanging this check instead of
+    # letting it report indeterminate (see bounded_run).
+    proc = run_bounded(["powershell", "-NoProfile", "-Command", command], 120)
+    if proc is None:
+        # Mirror a non-zero CompletedProcess so _ps() raises the same
+        # "powershell failed rc=…" the caller already handles as
+        # indeterminate — never a hang, never a false green.
+        return subprocess.CompletedProcess(command, 1, "", "bounded run: did not finish within 120s")
+    return proc
 
 
 def task_info(task: str = TASK) -> tuple[str, int]:
