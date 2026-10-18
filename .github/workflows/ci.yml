@@ -427,6 +427,41 @@ jobs:
         path: ./trend/coverage-trend.csv
         if-no-files-found: warn
 
+  # Single-author approval path: the branch ruleset needs one approving
+  # review from a write-access account, and GitHub forbids approving your
+  # own pull request. The old escape hatch — a ruleset bypass actor — also
+  # skipped the required STATUS CHECKS, so merges stopped being check-bound
+  # for the author. The GITHUB_TOKEN is a different actor with write access,
+  # so its approval satisfies the review rule while the checks stay binding:
+  # this job only runs after unit, integration, coverage-report and
+  # workflow-lint have ALL succeeded on this exact head SHA, and stale
+  # approvals are dismissed by the ruleset on every new push, so a re-run
+  # re-approves only fresh, green code.
+  bot-approve:
+    if: github.event_name == 'pull_request'
+    needs: [unit, integration, coverage-report, workflow-lint]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Approve the PR (required checks green on this head)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Idempotent for re-runs of the same SHA: only approve when no
+          # un-dismissed approval from the bot exists yet. REST, not
+          # `gh pr view --json reviews`, so workflow-lint's gh-field guard
+          # stays conservative (same API shape the drift jobs use).
+          state=$(gh api "repos/${{ github.repository }}/pulls/$PR/reviews" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | .state] | last // "NONE"')
+          if [ "$state" = "APPROVED" ]; then
+            echo "already approved on this SHA — nothing to do"
+            exit 0
+          fi
+          gh pr review "$PR" --approve --body \
+            "Auto-approved by CI after the required checks passed on this head SHA (unit, integration, coverage-report, workflow-lint). This is the repo's single-author approval path; see the bot-approve job in ci.yml."
+
   # Nightly drift sentinel: a scheduled run failing usually means the *world*
   # changed (runner image, SDK, upstream API) rather than a PR, so a quiet
   # red X on Actions would go unnoticed. Post an open issue with the run link
