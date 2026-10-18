@@ -39,7 +39,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -47,6 +46,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:      # import a sibling regardless of CWD
+    sys.path.insert(0, str(HERE))
+from bounded_run import run_bounded
 
 GREEN, RED, AMBER = 0x2ECC71, 0xE74C3C, 0xFFAA00
 MAX_FIELD = 900   # embed-field cap with slack for long finding lists
@@ -72,15 +74,18 @@ def run_check(args: list[str]) -> tuple[int, str]:
     """Run one of the fleet's checks; (-1, reason) when it cannot run.
     The child gets PYTHONIOENCODING=utf-8 (the fleet's own rule): a
     cp1252 child emits bytes this parent's UTF-8 decode would turn into
-    replacement characters — and those crash a cp1252 console print."""
+    replacement characters — and those crash a cp1252 console print.
+
+    run_bounded (not subprocess.run(capture_output=True, timeout=)): on a
+    timeout the pipe-based call waits for stream EOF past its own bound
+    whenever a grandchild inherited the write end — a digest that hangs
+    instead of reporting AMBER is exactly the silent failure this fleet
+    guards against (see bounded_run for the trap)."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    try:
-        proc = subprocess.run([sys.executable, *args], capture_output=True,
-                              text=True, encoding="utf-8", errors="replace",
-                              timeout=300, check=False, env=env)
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
-    except Exception as ex:  # noqa: BLE001 — a dead probe must not kill the digest
-        return -1, f"{ex.__class__.__name__}: {ex}"
+    proc = run_bounded([sys.executable, *args], 300, env=env)
+    if proc is None:
+        return -1, "probe did not finish within 300s (bounded run)"
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
 def parse_audit_output(rc: int, out: str) -> dict:
