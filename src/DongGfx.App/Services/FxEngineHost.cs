@@ -1742,7 +1742,12 @@ public sealed class FxEngineHost : IDisposable
                 && _venueSpec is not null
                 && decision.Action is not ("full" or "partial")
                 && planPct >= 10
-                && st.MfeR >= 1.0;
+                // Arm at the plan rung (0.8R), not a flat 1R: the 2026-10-15
+                // giveback investigation showed the bulk of tickets peak
+                // 1.0–1.4R and give back ~1R before settling — a rung that
+                // only arms at 1R of peak misses exactly the band it should
+                // bank. Shared knob with the ladder's plan-rung target.
+                && st.MfeR >= Core.Fx.FxProfitBrain.Tp1PlanRungR;
             var tp1GateBlocked = tp1ArmEligible
                 && profit.TrailingMode == "STRUCTURE_TRAIL";
             if (tp1GateBlocked && _tp1GateSkippedTickets.Add(p.Ticket))

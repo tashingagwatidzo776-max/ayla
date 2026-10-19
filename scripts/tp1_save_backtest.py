@@ -11,7 +11,8 @@ replays, per save ticket, the counterfactual "TP1 armed and executed
 before the save closed the position":
 
   1. ARM: scan the ticket's FX_PROFIT rows chronologically; the first row
-     with a Tp1 rung, Allocation.Tp1 >= 10 (the live gate), and PeakR >= 1
+     with a Tp1 rung, Allocation.Tp1 >= 10 (the live gate), and PeakR >= 0.8
+     (the plan-rung arm, 2026-10-15 — was >= 1R)
      arms the rung at its journaled R distance (Tp1.R).
   2. CROSS: any later row with CurrentR >= armed rung R executes the rung.
   3. SAVE: the ticket's journaled save (override close or floor exit)
@@ -56,7 +57,8 @@ JOURNAL_GLOB = os.path.join(os.environ.get("APPDATA", ""), "tf", "data",
                             "journal", "journal_*.jsonl")
 SAVE_TICKETS = [9820814920, 9820161383, 9820781127, 9820712902, 9820719898]
 TP1_GATE_PLAN_PCT = 10   # FxEngineHost: Allocation.Tp1 >= 10
-TP1_GATE_MFE_R = 1.0    # FxEngineHost: MfeR >= 1.0 (MfeR == PeakR per row)
+TP1_GATE_MFE_R = 0.8    # FxEngineHost: MfeR >= Tp1PlanRungR (0.8, the 2026-10-15
+                         # early arm; MfeR == PeakR per row)
 
 
 def journal_rows(pattern: str = JOURNAL_GLOB):
