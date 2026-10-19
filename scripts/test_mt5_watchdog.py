@@ -40,6 +40,37 @@ def test_main_spawns_when_healthy():
         wd.healthy, wd.kill, wd.spawn = orig
 
 
+def test_probe_targets_ping_quickly():
+    """/ping with a SHORT timeout: a busy bridge (requests queued behind
+    the MT5 lock) can never look wedged, and a genuine wedge is detected
+    in seconds — not the old 45 s /account probe plus a per-minute retry
+    (2026-10-19 weekend freeze stayed undetected for hours)."""
+    assert wd.PROBE_PATH == "/ping"
+    assert wd.PROBE_TIMEOUT <= 10
+
+
+def test_healthy_probes_ping_url():
+    calls = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    orig = wd.urllib.request.urlopen
+    try:
+        wd.urllib.request.urlopen = \
+            lambda url, timeout: (calls.append((url, timeout)) or _Resp())
+        assert wd.healthy() is True
+    finally:
+        wd.urllib.request.urlopen = orig
+    assert calls == [(f"http://127.0.0.1:{wd.PORT}/ping", wd.PROBE_TIMEOUT)]
+
+
 def test_main_kills_then_spawns_when_wedged():
     orig = (wd.healthy, wd.port_owner, wd.kill, wd.spawn)
     try:

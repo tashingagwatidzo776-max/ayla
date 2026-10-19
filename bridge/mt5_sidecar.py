@@ -7,6 +7,8 @@ one) and serves a small JSON API on 127.0.0.1 only:
 
     GET  /health                 liveness + attached account snapshot
                                  (re-attaches when the terminal dropped)
+    GET  /ping                   watchdog liveness — answered with no MT5
+                                 access and no locks (busy vs wedged)
     GET  /account                balance/equity/margin/currency/leverage/login
     GET  /ticks/{symbol}         last bid/ask/time
     GET  /book/{symbol}          DOM levels (Deriv streams none -> client falls back)
@@ -33,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import sys
 import threading
 import time
@@ -840,21 +843,101 @@ def _req_log_ts() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3] + "Z"
 
 
-# Serialize appends: the :18 heartbeat burst has a dozen threads logging at
-# once, and unlocked concurrent appends on Windows can drop or interleave
-# lines — which would hide exactly the request the flap diagnosis is after.
-_req_log_lock = threading.Lock()
+# Lines are appended by ONE daemon writer thread; server threads only
+# enqueue. The old implementation wrote INLINE under a lock — including
+# from get_request() on the ACCEPT path itself — so when AppData file I/O
+# stalled (2026-10-19 weekend freeze, py-spy showed threads parked inside
+# req_log_write), every accept and every response log blocked on disk,
+# the GIL never reached the socket threads, and the whole bridge froze
+# with zero answers for hours. Logging can never be allowed to take the
+# bridge down: the queue is bounded (drops are counted and reported) and
+# disk work happens on the writer thread only.
+_REQ_LOG_CAP = 1_000_000          # rotate the file at this size
+_req_log_queue: "queue.Queue[str]" = queue.Queue(maxsize=5000)
+_req_log_drops = [0]              # lines dropped while the queue was full
+_req_log_state = {"fh": None, "size": 0, "fails": 0}   # writer-thread owned
+_req_log_thread: threading.Thread | None = None
+_req_log_start_lock = threading.Lock()
+
+
+def _req_log_persist(line: str, state: dict) -> None:
+    """Write ONE line through a shared handle, rotating at the size cap.
+    Runs on the writer thread only; any OSError resets the handle so the
+    next line reopens — a failed write can never kill the writer loop."""
+    try:
+        fh = state["fh"]
+        if fh is None:
+            os.makedirs(os.path.dirname(REQ_LOG), exist_ok=True)
+            fh = open(REQ_LOG, "a", encoding="utf-8")
+            state["fh"] = fh
+            try:
+                state["size"] = fh.tell()
+            except OSError:
+                state["size"] = 0
+        if state["size"] > _REQ_LOG_CAP:
+            fh.close()
+            state["fh"] = None
+            os.replace(REQ_LOG, REQ_LOG + ".1")
+            return _req_log_persist(line, state)   # reopen + write it
+        fh.write(line + "\n")
+        fh.flush()
+        state["size"] += len(line) + 1
+        if state["fails"]:
+            # Recovery is visible, like the old per-line WRITEFAIL marker:
+            # a stall can be told apart from normal operation afterwards.
+            state["fh"].write("%s REQLOG recovered after %d failed writes\n"
+                               % (_req_log_ts(), state["fails"]))
+            state["fails"] = 0
+    except OSError:
+        state["fails"] += 1
+        try:
+            if state["fh"] is not None:
+                state["fh"].close()
+        except OSError:
+            pass
+        state["fh"] = None
+
+
+def _req_log_writer_loop(state: dict) -> None:
+    while True:
+        line = _req_log_queue.get()
+        drops = _req_log_drops[0]
+        if drops:
+            _req_log_drops[0] = 0
+            _req_log_persist("%s REQLOGDROPPED n=%d (queue full)"
+                             % (_req_log_ts(), drops), state)
+        _req_log_persist(line, state)
+
+
+def _ensure_req_log_thread() -> None:
+    global _req_log_thread
+    if _req_log_thread is not None and _req_log_thread.is_alive():
+        return
+    with _req_log_start_lock:
+        if _req_log_thread is None or not _req_log_thread.is_alive():
+            _req_log_thread = threading.Thread(
+                target=_req_log_writer_loop,
+                args=(_req_log_state,),
+                name="req-log", daemon=True)
+            _req_log_thread.start()
 
 
 def req_log_write(line: str) -> None:
+    """Enqueue a diagnostic line; NEVER blocks, NEVER touches disk here."""
     try:
-        with _req_log_lock:
-            if os.path.exists(REQ_LOG) and os.path.getsize(REQ_LOG) > 1_000_000:
-                os.replace(REQ_LOG, REQ_LOG + ".1")
-            with open(REQ_LOG, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-    except OSError:
-        pass
+        _req_log_queue.put_nowait(line)
+    except queue.Full:
+        _req_log_drops[0] += 1
+        return
+    _ensure_req_log_thread()
+
+
+def req_log_flush(timeout: float = 5.0) -> None:
+    """Wait (bounded) until the queue drains — test/diagnosis hook."""
+    deadline = time.monotonic() + timeout
+    while not _req_log_queue.empty() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.05)   # let the in-flight write finish
 
 
 class ExclusiveHTTPServer(ThreadingHTTPServer):
@@ -989,6 +1072,18 @@ class SidecarServer:
 
             def _route_get(self, path: str, qs: dict) -> None:
                 h = outer._handlers
+                if path == "/ping":
+                    # Liveness only, answered WITHOUT the MT5 lock and
+                    # without touching MT5: a busy bridge (requests queued
+                    # behind the request lock during a heartbeat burst)
+                    # still answers instantly. The watchdogs probe /ping
+                    # with a SHORT timeout — an answer means process +
+                    # HTTP stack + GIL are alive; no answer within seconds
+                    # means a genuine wedge (2026-10-19: a stalled AppData
+                    # write in the req-log froze the accept loop while
+                    # /account probes timed out for hours).
+                    self._send(200, {"ok": True, "pong": True})
+                    return
                 if path == "/symbols":
                     # NOT under the MT5 lock: the full-catalog scan used to
                     # hold it 25-31s (2026-10-06 BridgeDown flaps), queueing

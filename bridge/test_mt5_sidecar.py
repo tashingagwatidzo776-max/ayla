@@ -359,6 +359,96 @@ def test_symbols_route_serves_while_mt5_lock_held():
         server.httpd.shutdown()
 
 
+def test_ping_answers_while_mt5_lock_held():
+    """/ping must answer even while a long MT5 fetch holds the request
+    lock: the watchdogs use it to tell 'busy' (lock held, process fine)
+    from 'wedge' (nothing answers at all). The 2026-10-19 weekend freeze
+    stayed invisible for hours behind /account's 45 s probe."""
+    server = sidecar.SidecarServer(make_handlers(), port=0)
+    th = threading.Thread(target=server.serve_forever, daemon=True)
+    th.start()
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{server.port}/ping", timeout=3) as r:
+            assert r.status == 200
+            assert json.loads(r.read()) == {"ok": True, "pong": True}
+        server._mt5_lock.acquire()          # simulate a long MT5 fetch
+        try:
+            t0 = time.monotonic()
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{server.port}/ping", timeout=3) as r:
+                assert r.status == 200
+            assert time.monotonic() - t0 < 2.0
+        finally:
+            server._mt5_lock.release()
+    finally:
+        server.httpd.shutdown()
+
+
+def test_req_log_write_never_blocks_and_persists():
+    """req_log_write only enqueues; the writer thread persists the line.
+    Server threads must never touch disk again: the 2026-10-19 weekend
+    freeze was INLINE req-log writes on the accept path stalling the
+    whole bridge when AppData I/O stalled."""
+    import os
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    orig = sidecar.REQ_LOG
+    try:
+        sidecar.REQ_LOG = os.path.join(tmp, "req.log")
+        # The singleton writer may hold a handle to the REAL log from an
+        # earlier test - force a reopen onto the patched path.
+        if sidecar._req_log_state["fh"] is not None:
+            sidecar._req_log_state["fh"].close()
+        sidecar._req_log_state["fh"] = None
+        sidecar._req_log_state["size"] = 0
+        t0 = time.monotonic()
+        sidecar.req_log_write("persist-me")
+        assert time.monotonic() - t0 < 0.5       # enqueue is instant
+        sidecar.req_log_flush()
+        with open(sidecar.REQ_LOG, encoding="utf-8") as fh:
+            assert fh.read().strip() == "persist-me"
+    finally:
+        sidecar.REQ_LOG = orig
+
+
+def test_req_log_drops_loudly_when_queue_full():
+    """A full queue drops (counted, then reported once), never blocks."""
+    import queue as queue_mod
+    orig_q = sidecar._req_log_queue
+    try:
+        sidecar._req_log_queue = queue_mod.Queue(maxsize=1)
+        sidecar._req_log_queue.put("already-full")
+        before = sidecar._req_log_drops[0]
+        t0 = time.monotonic()
+        sidecar.req_log_write("dropped-line")     # must return instantly
+        assert time.monotonic() - t0 < 0.5
+        assert sidecar._req_log_drops[0] == before + 1
+    finally:
+        sidecar._req_log_queue = orig_q
+
+
+def test_req_log_rotates_at_cap():
+    """The 1 MB size cap still rotates the file, now on the writer thread."""
+    import os
+    import tempfile
+    state = {"fh": None, "size": 0, "fails": 0}
+    tmp = tempfile.mkdtemp()
+    orig = sidecar.REQ_LOG
+    try:
+        sidecar.REQ_LOG = os.path.join(tmp, "req.log")
+        with open(sidecar.REQ_LOG, "w", encoding="utf-8") as fh:
+            fh.write("x" * (sidecar._REQ_LOG_CAP + 10) + "\n")
+        sidecar._req_log_persist("after-rotate", state)
+        assert os.path.exists(sidecar.REQ_LOG + ".1")
+        with open(sidecar.REQ_LOG, encoding="utf-8") as fh:
+            assert fh.read().strip() == "after-rotate"
+    finally:
+        if state["fh"] is not None:
+            state["fh"].close()
+        sidecar.REQ_LOG = orig
+
+
 def test_keepalive_two_requests_one_connection():
     """HTTP/1.1 + keep-alive: two requests ride ONE TCP connection.
     Under the old HTTP/1.0 close-per-response the app churned ~6 new

@@ -7,7 +7,10 @@ sidecar's own already_running() probe cannot distinguish 'wedged' from
 process can recover. This watchdog, run every minute by the scheduled
 task 'DongGfx MT5 bridge watchdog':
 
-1. probes /health - an answer (any status) means alive, do nothing;
+1. probes /ping - an answer (any status) means the process, its HTTP
+   stack and the GIL are alive, do nothing. /ping never touches MT5 and
+   never waits on the request lock, so a busy bridge answers instantly -
+   only a WEDGE stays silent;
 2. on no answer: kills whoever holds the port, then starts a fresh
    sidecar detached.
 
@@ -37,11 +40,16 @@ import urllib.request
 from datetime import datetime
 
 PORT = 53190
-PROBE_TIMEOUT = 45  # data routes queue behind the request lock; a burst can
-#                    legitimately take tens of seconds. Only a WEDGE (hung
-#                    native MT5 call) never answers at all.
-PROBE_PATH = "/account"  # an MT5-touching route: proves the IPC is responsive,
-#                          which is exactly what the app needs to work
+PROBE_TIMEOUT = 6   # /ping never queues behind the MT5 request lock, so
+#                    an answer is immediate: multi-second silence IS the
+#                    wedge. The old /account probe waited 45 s (a burst
+#                    can legitimately take tens of seconds) - but that
+#                    also meant a wedged bridge kept the whole machine's
+#                    trading path dead for 45 s + a minute per retry, and
+#                    the 2026-10-19 weekend req-log freeze (py-spy showed
+#                    threads parked inside req_log_write) stayed undetected
+#                    for HOURS. /ping distinguishes busy from wedged.
+PROBE_PATH = "/ping"  # liveness only - MT5-busy must never read as a wedge
 SIDECAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bridge", "mt5_sidecar.py")
 DEAD_PID = 0  # sentinel: port not bound at all
 DATA_DIR_ENV = "TF_DATA_DIR"  # mirrors SettingsService.DataDirEnvVar

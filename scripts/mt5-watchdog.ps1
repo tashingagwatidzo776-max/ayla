@@ -5,10 +5,15 @@
 # 5 minutes (see register-mt5-watchdog.ps1).
 #
 # Behavior:
-#   - /health answers → exit 0 silently (nothing to do).
-#   - /health down → start the sidecar detached (hidden window), wait for
-#     health, write a status line to the watchdog log, exit 0 if it came up
-#     (exit 2 if the sidecar could not be started — the next run retries).
+#   - /ping answers → exit 0 silently (nothing to do). /ping is served
+#     WITHOUT the MT5 lock, so a busy bridge still answers instantly and
+#     can never look wedged.
+#   - /ping silent → the sidecar is wedged: it still holds the port, so
+#     the port owner is KILLED first (a fresh bind would fail with 10048
+#     otherwise), then the sidecar is started detached (hidden window),
+#     wait for health, write a status line to the watchdog log, exit 0
+#     if it came up (exit 2 if the sidecar could not be started — the
+#     next run retries).
 #
 # Usage: pwsh -File scripts/mt5-watchdog.ps1 [-Port 53190] [-Quiet]
 [CmdletBinding()]
@@ -46,7 +51,7 @@ function Log([string]$line) {
 
 function Test-Health {
     try {
-        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -UseBasicParsing -TimeoutSec 4
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ping" -UseBasicParsing -TimeoutSec 4
         return $resp.StatusCode -eq 200
     } catch {
         return $false
@@ -65,6 +70,19 @@ $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) {
     Log "python not found on PATH - cannot start sidecar"
     exit 2
+}
+
+# A WEDGED sidecar still LISTENS on the port (its accept loop is frozen,
+# so it can never answer /ping), and a fresh bind would fail with 10048 -
+# the bridge then stayed dead until a human noticed (2026-10-19 weekend
+# freeze). Kill the port owner before respawning, like the Python
+# watchdog does.
+$owner = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -First 1
+if ($owner) {
+    Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Log "killed wedged sidecar (PID $owner) still holding port $Port"
 }
 
 $argList = @("`"$sidecar`"", "$Port")
