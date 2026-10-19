@@ -51,6 +51,14 @@ public sealed class FxEngineHost : IDisposable
     /// least this many paper signals have been journaled (plan guardrail).</summary>
     public int PaperSoakSignalsRequired { get; set; } = 10;
 
+    /// <summary>The R multiple the PAPER brain closes at — the paper twin
+    /// of the Trade tab's default 1:2 "Close 1:R" button. Armed only while
+    /// the engine is in paper, so every 1:R bank is journaled (FX_EXIT,
+    /// Override = "reward-target") and the rule accrues its evidence before
+    /// real mode leans on it. Live leaves the target disarmed (0): live
+    /// R:R stays the operator's button until the journal proves the rule.</summary>
+    public const double PaperRewardTargetR = 2.0;
+
     /// <summary>Paper signals this host RESTORED from the ledger when it was
     /// built (0 on a cold start). The account bar's soak pill names it, so a
     /// bar carried over from an earlier session is never mistaken for
@@ -1587,7 +1595,11 @@ public sealed class FxEngineHost : IDisposable
                 spreadPoints, MaxAbnormalSpreadPoints,
                 account?.Equity ?? 0, (double)_equityFloorFloor(),
                 bridgeUp: true,   // a dead bridge never reaches this method
-                bars, currentRegime, entryRegime);
+                bars, currentRegime, entryRegime,
+                // Paper R:R evidence: while in paper the 1:R reward target
+                // is armed, so the close accrues journal evidence before
+                // real mode trusts the rule (live stays disarmed).
+                rewardTargetR: _engine.IsLive ? 0 : PaperRewardTargetR);
 
             Journal("FX_EXIT",
                 $"{p.Symbol} #{p.Ticket}: {decision.Action} score {decision.Score:0} — {decision.Reason}",

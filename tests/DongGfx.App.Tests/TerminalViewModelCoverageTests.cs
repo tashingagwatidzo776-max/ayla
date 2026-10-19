@@ -814,6 +814,20 @@ public class TerminalViewModelCoverageTests : IDisposable
     }
 
     [Fact]
+    public void PaperRewardTarget_MatchesTheButtonsDefaultRatio()
+    {
+        // The paper brain's 1:R close and the Trade tab's "Close 1:R"
+        // button are the same rule in two places: what the button would
+        // arm by default is what the paper brain banks by default. If
+        // either default drifts alone, the evidence accrues for a rule
+        // the trader is no longer pressing.
+        var (vm, _) = NewVm();
+        var buttonDefault = double.Parse(vm.RiskRewardRatio,
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(FxEngineHost.PaperRewardTargetR, buttonDefault);
+    }
+
+    [Fact]
     public async Task CloseAtRiskReward_ArmsTheComputedTakeProfit_AndSendsItToTheBridge()
     {
         var (vm, h) = NewVm();
