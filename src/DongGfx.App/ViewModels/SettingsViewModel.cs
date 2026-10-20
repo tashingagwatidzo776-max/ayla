@@ -71,6 +71,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool fxExecuteTp1Partials;
 
+    /// <summary>Paper R:R close prototype: when armed, the exit brain
+    /// closes PAPER trades at the Close 1:R default ratio (Override =
+    /// "reward-target"), accruing journal evidence for the 1:R rule before
+    /// real mode leans on it. Off by default; paper-only — live is never
+    /// armed (the engine host hard-zeros the target in live mode).
+    /// No confirm dialog: paper places no venue orders beyond the local
+    /// book, so the arm is a plain opt-in like the other prototype flags.</summary>
+    [ObservableProperty]
+    private bool fxPaperRrCloseArmed;
+
     [ObservableProperty]
     private string tp1ToggleHint = "TP1 partials: OFF — the allocation plan is advisory only";
 
@@ -357,6 +367,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         RefreshTp1Hint();
     }
 
+    /// <summary>The paper R:R arm, mirroring the TP1 pattern minus the
+    /// dialog: flipping ON applies the static at once (reaches a running
+    /// brain — no restart), flipping OFF is always allowed and clears it
+    /// — the fail-safe direction.</summary>
+    partial void OnFxPaperRrCloseArmedChanged(bool value)
+    {
+        Services.FxEngineHost.PaperRewardTargetR = value
+            ? Services.FxEngineHost.PaperRewardTargetDefaultR
+            : 0;
+    }
+
     /// <summary>Recomputes the arming hint, including the overdue plan-%
     /// review circuit-breaker state so an operator sees that a rung is not
     /// just armed but HELD. Called on load, on toggle, and whenever the
@@ -525,6 +546,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         RiskNarratorEnabled = settings.RiskNarratorEnabled;
         FxLabEnabled = settings.FxLabEnabled;
         FxExecuteTp1Partials = settings.FxExecuteTp1Partials;
+        FxPaperRrCloseArmed = settings.FxPaperRrCloseArmed;
         RefreshTp1Hint();   // reflect any overdue-review breaker hold at load
         LoadTp1Tunables();  // the shared config, editable in-app
         MapsColormap = settings.MapsColormap;
@@ -565,6 +587,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         RiskNarratorEnabled = RiskNarratorEnabled,
         FxLabEnabled = FxLabEnabled,
         FxExecuteTp1Partials = FxExecuteTp1Partials,
+        FxPaperRrCloseArmed = FxPaperRrCloseArmed,
         MapsColormap = MapsColormap,
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         FxMinEntryConfidence = Math.Clamp(FxMinEntryConfidence, 0, 1),

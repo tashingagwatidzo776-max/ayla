@@ -398,6 +398,11 @@ public partial class App : System.Windows.Application
         // TP1 partial prototype: the allocation plan's first rung is graded
         // live when this is armed (default OFF — an explicit opt-in).
         Services.FxEngineHost.ExecuteTp1Partials = settings.FxExecuteTp1Partials;
+        // Paper R:R close: the Settings arm survives restarts — applied on
+        // every launch/save exactly like the TP1 arm above (paper-only; the
+        // engine host still hard-zeros the target in live mode).
+        Services.FxEngineHost.PaperRewardTargetR = settings.FxPaperRrCloseArmed
+            ? Services.FxEngineHost.PaperRewardTargetDefaultR : 0;
         // Entry-quality gate: clamp the persisted floor to [0,1] and arm it
         // on every launch/save. 0 = off (the historical behavior); a positive
         // value journals one startup row so the operator sees the floor.

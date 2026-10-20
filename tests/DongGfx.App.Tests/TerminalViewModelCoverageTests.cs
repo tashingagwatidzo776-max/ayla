@@ -822,12 +822,13 @@ public class TerminalViewModelCoverageTests : IDisposable
         // default drifts alone, the evidence accrues for a rule the
         // trader is no longer pressing. The knob itself is opt-in —
         // disarmed by default so it can never pre-empt the TP1/floor
-        // prototypes mid-grade (PR #179).
+        // prototypes mid-grade (PR #179). The disarmed-default assertion
+        // lives in DashboardAndSettingsCoverageTests (same serialized
+        // collection as the arm test) — this class runs in parallel with
+        // it, so only the immutable const is safe to read here.
         var (vm, _) = NewVm();
         var buttonDefault = double.Parse(vm.RiskRewardRatio,
             System.Globalization.CultureInfo.InvariantCulture);
-        vm.ToggleFxBrainCommand.Execute(null);
-        Assert.Equal(0.0, vm.FxHost!.Hosts[0].PaperRewardTargetR);
         Assert.Equal(FxEngineHost.PaperRewardTargetDefaultR, buttonDefault);
     }
 

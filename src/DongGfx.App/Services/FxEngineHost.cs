@@ -63,11 +63,13 @@ public sealed class FxEngineHost : IDisposable
     public const double PaperRewardTargetDefaultR = 2.0;
 
     /// <summary>Armed R multiple for the paper R:R close (0 = disarmed,
-    /// the default). Set to <see cref="PaperRewardTargetDefaultR"/> (or
-    /// any target) to opt in; while armed AND in PAPER the brain closes
-    /// at the target and stamps FX_EXIT with Override = "reward-target"
-    /// so every bank is auditable evidence.</summary>
-    public double PaperRewardTargetR { get; set; }
+    /// the default) — a STATIC knob like ExecuteTp1Partials, so the
+    /// Settings arm reaches every engine host including one already
+    /// running, with no brain restart. Set to PaperRewardTargetDefaultR
+    /// to opt in; while armed AND in PAPER the brain closes at the target
+    /// and stamps FX_EXIT with Override = "reward-target" so every bank
+    /// is auditable evidence.</summary>
+    public static double PaperRewardTargetR { get; set; }
 
     /// <summary>Paper signals this host RESTORED from the ledger when it was
     /// built (0 on a cold start). The account bar's soak pill names it, so a
