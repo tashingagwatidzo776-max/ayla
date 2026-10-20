@@ -39,6 +39,14 @@ public sealed class AppSettings
     /// FX_PROFIT; the Exit Brain's overrides and vote still outrank it.</summary>
     public bool FxExecuteTp1Partials { get; set; }
 
+    /// <summary>Operator-armed paper R:R close: while true the exit brain
+    /// closes the book at the Close 1:R default ratio while the engine is
+    /// in PAPER (Override = "reward-target"), the paper twin of the Trade
+    /// tab's button. Off by default — the TP1 / profit-floor prototypes
+    /// grade the same paper book and an armed +2R close would pre-empt
+    /// them. Live always stays disarmed regardless of this flag.</summary>
+    public bool FxPaperRrCloseArmed { get; set; }
+
     /// <summary>Operator-armed TP1 plan-% override (null = the allocation
     /// plan's own TP1 leg). Set by the dashboard's one-click Arm action when
     /// the plan-% gate recommends a different percentage: the engine then

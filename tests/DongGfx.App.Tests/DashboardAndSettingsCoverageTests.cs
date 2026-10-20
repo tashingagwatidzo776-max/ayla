@@ -79,6 +79,44 @@ public class DashboardAndSettingsCoverageTests : IDisposable
         }
     }
 
+    // ── Paper R:R close arming (the Settings opt-in) ───────────────
+
+    [Fact]
+    public void PaperRrClose_Arm_Toggles_The_Static_And_Load_Restores_Silently()
+    {
+        try
+        {
+            // Disarmed by default: the TP1 / profit-floor prototypes grade
+            // the same paper book, so the 1:2 close only ever runs when
+            // opted in (the +2R pre-empt PR #179 was caught red on).
+            Assert.Equal(0.0, FxEngineHost.PaperRewardTargetR);
+
+            var vm = new SettingsViewModel(new SettingsService());
+            vm.FxPaperRrCloseArmed = true;
+            Assert.True(vm.FxPaperRrCloseArmed);
+            Assert.Equal(FxEngineHost.PaperRewardTargetDefaultR,
+                FxEngineHost.PaperRewardTargetR);   // applied live, no restart
+
+            // Disarm is unconditional — the fail-safe direction.
+            vm.FxPaperRrCloseArmed = false;
+            Assert.Equal(0.0, FxEngineHost.PaperRewardTargetR);
+
+            // A persisted arm restores silently (no dialog — paper places
+            // no venue orders) and applies to the static immediately.
+            vm.Load(new AppSettings { FxPaperRrCloseArmed = true });
+            Assert.True(vm.FxPaperRrCloseArmed);
+            Assert.Equal(FxEngineHost.PaperRewardTargetDefaultR,
+                FxEngineHost.PaperRewardTargetR);
+
+            // …and survives a settings save.
+            Assert.True(vm.BuildSettings().FxPaperRrCloseArmed);
+        }
+        finally
+        {
+            FxEngineHost.PaperRewardTargetR = 0;   // never leak into other tests
+        }
+    }
+
     [Fact]
     public void Load_Restores_Tp1_Armed_State_Without_Re_Prompting()
     {

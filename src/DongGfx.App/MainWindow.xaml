@@ -680,6 +680,10 @@
                                     </Style>
                                 </TextBlock.Style>
                             </TextBlock>
+                            <CheckBox Content="Arm paper 1:R close (prototype)"
+                                      IsChecked="{Binding SettingsVm.FxPaperRrCloseArmed}"
+                                      Margin="0,6,0,4"
+                                      ToolTip="While the brain is in PAPER, the exit brain closes the book at the Close 1:R default ratio (1:2) and journals FX_EXIT with Override=reward-target — an evidence stream for the 1:R rule. Live mode is never armed." />
                             <!-- Actionable review list: only shown when the breaker
                                  holds the rung, so the operator can act/clear in-app
                                  instead of opening a terminal. -->
