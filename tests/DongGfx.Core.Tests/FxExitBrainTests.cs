@@ -293,6 +293,57 @@ public class FxExitBrainTests
         Assert.Equal("bridge", d.OverrideEngine);
     }
 
+    // ── Paper R:R reward target (the "Close 1:R" twin) ────────────────
+
+    [Fact]
+    public void Reward_Target_Closes_Full_At_The_Target()
+    {
+        // +2R at the armed 1:2 target: full exit, tagged reward-target —
+        // the paper evidence row the real-mode switch will lean on.
+        var d = FxExitBrain.Evaluate(LongState(), 2402.0, 0.1, 1, 1, 20, 250,
+            10000, 0, true, FlatBars(), FxRegime.Trend, FxRegime.Trend,
+            rewardTargetR: 2.0);
+        Assert.Equal("full", d.Action);
+        Assert.Equal("reward-target", d.OverrideEngine);
+        Assert.Equal(100, d.Score);
+        Assert.Contains("1:2 reward target reached", d.Reason);
+        Assert.Equal(2.0, d.ProfitR, 9);
+    }
+
+    [Fact]
+    public void Reward_Target_Is_Disarmed_By_Default()
+    {
+        // Same +2R shape, no target passed (live's posture): the ensemble
+        // keeps its normal say and nothing tags a reward-target close.
+        var d = FxExitBrain.Evaluate(LongState(), 2402.0, 0.1, 1, 1, 20, 250,
+            10000, 0, true, FlatBars(), FxRegime.Trend, FxRegime.Trend);
+        Assert.Null(d.OverrideEngine);
+        Assert.Equal("hold", d.Action);   // flat tape: the ensemble holds
+    }
+
+    [Fact]
+    public void Reward_Target_Below_The_Target_Keeps_The_Ensemble_Say()
+    {
+        // +1.5R with the 1:2 target armed: not yet — hold, no override.
+        var d = FxExitBrain.Evaluate(LongState(), 2401.5, 0.1, 1, 1, 20, 250,
+            10000, 0, true, FlatBars(), FxRegime.Trend, FxRegime.Trend,
+            rewardTargetR: 2.0);
+        Assert.Null(d.OverrideEngine);
+        Assert.Equal("hold", d.Action);
+    }
+
+    [Fact]
+    public void Safety_Overrides_Keep_Priority_Over_The_Reward_Target()
+    {
+        // A profit target never gets between the book and a hard risk
+        // rule: abnormal spread at +2R still exits as "spread".
+        var d = FxExitBrain.Evaluate(LongState(), 2402.0, 0.1, 1, 1, 300, 250,
+            10000, 0, true, FlatBars(), FxRegime.Trend, FxRegime.Trend,
+            rewardTargetR: 2.0);
+        Assert.Equal("spread", d.OverrideEngine);
+        Assert.Equal("full", d.Action);
+    }
+
     [Fact]
     public void Mfe_Mae_Are_Monotone()
     {

@@ -154,7 +154,15 @@ public static class FxExitBrain
     }
 
     /// <summary>Evaluate one open position: engines vote, the resolver
-    /// decides. bars is the symbol's recent M1 series (chronological).</summary>
+    /// decides. bars is the symbol's recent M1 series (chronological).
+    ///
+    /// <paramref name="rewardTargetR"/> arms the paper R:R close (0 =
+    /// disarmed): when the position's profit in R has reached the target
+    /// the decision is a full exit tagged "reward-target" — the paper
+    /// twin of the Trade tab's "Close 1:R" button, so the 1:R rule
+    /// accrues journal evidence before real mode trusts it. Safety
+    /// overrides are evaluated FIRST and keep priority: a profit target
+    /// never gets between the book and a hard risk rule.</summary>
     public static FxExitDecision Evaluate(
         FxPositionState state,
         double currentPrice,
@@ -167,7 +175,8 @@ public static class FxExitBrain
         bool bridgeUp,
         IReadOnlyList<FxBar> bars,
         FxRegime currentRegime,
-        FxRegime entryRegime)
+        FxRegime entryRegime,
+        double rewardTargetR = 0)
     {
         var votes = new List<FxExitVote>();
         var isBuy = state.Side == "buy";
@@ -245,6 +254,21 @@ public static class FxExitBrain
         {
             return new FxExitDecision(state.Ticket, "full", 100, votes, currentLots, 0,
                 mfeR, maeR, plR, overrideEngine, overrideReason);
+        }
+
+        // ---- Reward target (paper R:R evidence) --------------------------
+        // The paper twin of the "Close 1:R" button: the host arms this
+        // ONLY while the brain is in PAPER, so every 1:R bank is executed
+        // and journaled here (FX_EXIT, Override = "reward-target") — the
+        // rule accrues its evidence before real mode leans on it. A
+        // target, not an opinion: at the target the book closes the same
+        // way the venue would fill an armed TP. Below the target the
+        // ensemble keeps its normal say.
+        if (rewardTargetR > 0 && plR >= rewardTargetR)
+        {
+            return new FxExitDecision(state.Ticket, "full", 100, votes, currentLots, 0,
+                mfeR, maeR, plR, "reward-target",
+                $"1:{rewardTargetR:0.##} reward target reached at +{plR:0.00}R — bank the move (paper R:R close)");
         }
 
         // ---- Resolver bands ------------------------------------------------
