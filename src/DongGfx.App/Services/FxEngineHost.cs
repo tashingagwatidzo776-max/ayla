@@ -51,13 +51,23 @@ public sealed class FxEngineHost : IDisposable
     /// least this many paper signals have been journaled (plan guardrail).</summary>
     public int PaperSoakSignalsRequired { get; set; } = 10;
 
-    /// <summary>The R multiple the PAPER brain closes at — the paper twin
-    /// of the Trade tab's default 1:2 "Close 1:R" button. Armed only while
-    /// the engine is in paper, so every 1:R bank is journaled (FX_EXIT,
-    /// Override = "reward-target") and the rule accrues its evidence before
-    /// real mode leans on it. Live leaves the target disarmed (0): live
-    /// R:R stays the operator's button until the journal proves the rule.</summary>
-    public const double PaperRewardTargetR = 2.0;
+    /// <summary>The ratio the paper R:R close arms at when the operator
+    /// opts in — the paper twin of the Trade tab's default 1:2 "Close
+    /// 1:R" button. DISARMED by default (PaperRewardTargetR stays 0):
+    /// arming is an explicit act so this evidence stream can never
+    /// pre-empt the TP1 / profit-floor prototypes that grade in the same
+    /// paper book (an always-on +2R close full-exits their winners at the
+    /// first cycle past the target — the 2026-10-20 CI red on PR #179).
+    /// Live always stays disarmed: live R:R is the operator's button
+    /// until the journal proves the rule.</summary>
+    public const double PaperRewardTargetDefaultR = 2.0;
+
+    /// <summary>Armed R multiple for the paper R:R close (0 = disarmed,
+    /// the default). Set to <see cref="PaperRewardTargetDefaultR"/> (or
+    /// any target) to opt in; while armed AND in PAPER the brain closes
+    /// at the target and stamps FX_EXIT with Override = "reward-target"
+    /// so every bank is auditable evidence.</summary>
+    public double PaperRewardTargetR { get; set; }
 
     /// <summary>Paper signals this host RESTORED from the ledger when it was
     /// built (0 on a cold start). The account bar's soak pill names it, so a
