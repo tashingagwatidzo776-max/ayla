@@ -900,13 +900,28 @@ def _req_log_persist(line: str, state: dict) -> None:
 
 def _req_log_writer_loop(state: dict) -> None:
     while True:
-        line = _req_log_queue.get()
-        drops = _req_log_drops[0]
-        if drops:
-            _req_log_drops[0] = 0
-            _req_log_persist("%s REQLOGDROPPED n=%d (queue full)"
-                             % (_req_log_ts(), drops), state)
-        _req_log_persist(line, state)
+        # Re-read the queue every pass AND bound the get: tests swap the
+        # global for a throwaway queue, and a blocking get() on the old
+        # object used to wedge the singleton writer forever (the CI-only
+        # 45/46 on 2026-10-19: the writer sat on the fake queue, so the
+        # next test's line was never persisted).
+        q = _req_log_queue
+        try:
+            line = q.get(timeout=0.25)
+        except queue.Empty:
+            continue
+        try:
+            drops = _req_log_drops[0]
+            if drops:
+                _req_log_drops[0] = 0
+                _req_log_persist("%s REQLOGDROPPED n=%d (queue full)"
+                                 % (_req_log_ts(), drops), state)
+            _req_log_persist(line, state)
+        finally:
+            # Credit only after the line is flushed to disk: req_log_flush
+            # waits on unfinished_tasks, so returning from it guarantees a
+            # subsequent read sees the data.
+            q.task_done()
 
 
 def _ensure_req_log_thread() -> None:
@@ -932,12 +947,17 @@ def req_log_write(line: str) -> None:
     _ensure_req_log_thread()
 
 
-def req_log_flush(timeout: float = 5.0) -> None:
-    """Wait (bounded) until the queue drains — test/diagnosis hook."""
+def req_log_flush(timeout: float = 5.0) -> bool:
+    """Wait (bounded) until every enqueued line is ON DISK — test/diagnosis
+    hook. Join-based (task_done fires after the persist+flush), because the
+    old empty()+50ms guess was not a persistence barrier: a loaded CI box
+    could read the file before the in-flight write landed.
+    Returns False on timeout (writer dead or wedged)."""
+    q = _req_log_queue
     deadline = time.monotonic() + timeout
-    while not _req_log_queue.empty() and time.monotonic() < deadline:
+    while q.unfinished_tasks and time.monotonic() < deadline:
         time.sleep(0.01)
-    time.sleep(0.05)   # let the in-flight write finish
+    return q.unfinished_tasks == 0
 
 
 class ExclusiveHTTPServer(ThreadingHTTPServer):

@@ -395,6 +395,12 @@ def test_req_log_write_never_blocks_and_persists():
     tmp = tempfile.mkdtemp()
     orig = sidecar.REQ_LOG
     try:
+        # Drain BEFORE repointing the log: the full-queue test above left
+        # a pending REQLOGDROPPED report, which would otherwise land in
+        # OUR file and break the exact-content assert. The sentinel line
+        # forces that report out against the real log first.
+        sidecar.req_log_write("drain-before-swap")
+        assert sidecar.req_log_flush(), "writer wedged — never drained"
         sidecar.REQ_LOG = os.path.join(tmp, "req.log")
         # The singleton writer may hold a handle to the REAL log from an
         # earlier test - force a reopen onto the patched path.
@@ -405,7 +411,7 @@ def test_req_log_write_never_blocks_and_persists():
         t0 = time.monotonic()
         sidecar.req_log_write("persist-me")
         assert time.monotonic() - t0 < 0.5       # enqueue is instant
-        sidecar.req_log_flush()
+        assert sidecar.req_log_flush(), "writer wedged — never persisted"
         with open(sidecar.REQ_LOG, encoding="utf-8") as fh:
             assert fh.read().strip() == "persist-me"
     finally:
