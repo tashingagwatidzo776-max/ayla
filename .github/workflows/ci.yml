@@ -459,7 +459,10 @@ jobs:
             echo "already approved on this SHA — nothing to do"
             exit 0
           fi
-          gh pr review "$PR" --approve --body \
+          # -R is required: this job has no checkout step, so gh cannot
+          # infer the repo from cwd ("failed to run git" — seen on PR #178's
+          # run, 2026-10-20) and the approval silently never happens.
+          gh pr review "$PR" --approve -R "$GITHUB_REPOSITORY" --body \
             "Auto-approved by CI after the required checks passed on this head SHA (unit, integration, coverage-report, workflow-lint). This is the repo's single-author approval path; see the bot-approve job in ci.yml."
 
   # Nightly drift sentinel: a scheduled run failing usually means the *world*
