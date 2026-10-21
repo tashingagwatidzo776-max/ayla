@@ -34,6 +34,12 @@ public sealed class HeatMapControl : FrameworkElement
     private FxHeatMap? _map;
     private double[,]? _buyShare;
 
+    /// <summary>Operator zoom (2026-10-21: "zoom heatmaps by 100 percent"):
+    /// cells render at double the fit-to-canvas scale; the overflow is
+    /// centered so the middle of the surface stays visible inside the
+    /// clipped canvas.</summary>
+    private const int ZoomFactor = 2;
+
     /// <summary>Explicit colormap from the picker; null = Auto per map.</summary>
     private FxCmapKind? _colormap;
 
@@ -282,18 +288,20 @@ public sealed class HeatMapControl : FrameworkElement
 
         var availW = _canvas.ActualWidth > 0 ? _canvas.ActualWidth : bmp.PixelWidth;
         var availH = _canvas.ActualHeight > 0 ? _canvas.ActualHeight : bmp.PixelHeight;
-        var sx = Math.Max(1, (int)(availW / bmp.PixelWidth));
-        var sy = Math.Max(1, (int)(availH / bmp.PixelHeight));
+        var sx = Math.Max(1, (int)(availW / bmp.PixelWidth)) * ZoomFactor;
+        var sy = Math.Max(1, (int)(availH / bmp.PixelHeight)) * ZoomFactor;
         var w = bmp.PixelWidth * sx;
         var h = bmp.PixelHeight * sy;
         _image.Width = w;
         _image.Height = h;
         _buyImage.Width = w;
         _buyImage.Height = h;
-        Canvas.SetLeft(_image, 0);
-        Canvas.SetTop(_image, 0);
-        Canvas.SetLeft(_buyImage, 0);
-        Canvas.SetTop(_buyImage, 0);
+        var left = w > availW ? -(w - availW) / 2.0 : 0.0;
+        var top = h > availH ? -(h - availH) / 2.0 : 0.0;
+        Canvas.SetLeft(_image, left);
+        Canvas.SetTop(_image, top);
+        Canvas.SetLeft(_buyImage, left);
+        Canvas.SetTop(_buyImage, top);
     }
 
     private void OnCanvasMouseMove(object sender, MouseEventArgs e)
@@ -311,8 +319,20 @@ public sealed class HeatMapControl : FrameworkElement
             return;
         }
 
-        var c = (int)(pos.X / cw);
-        var r = (int)(pos.Y / ch);
+        // Zoomed images are centered (negative origin): map the pointer
+        // back through the same offset the layout applied.
+        var originX = Canvas.GetLeft(_image);
+        var originY = Canvas.GetTop(_image);
+        var x = pos.X - originX;
+        var y = pos.Y - originY;
+        if (x < 0 || y < 0)
+        {
+            _crosshair.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var c = (int)(x / cw);
+        var r = (int)(y / ch);
         if (c < 0 || r < 0 || c >= bmp.PixelWidth || r >= bmp.PixelHeight)
         {
             _crosshair.Visibility = Visibility.Collapsed;
@@ -334,8 +354,8 @@ public sealed class HeatMapControl : FrameworkElement
 
         _crosshair.Width = Math.Max(cw, 1);
         _crosshair.Height = Math.Max(ch, 1);
-        Canvas.SetLeft(_crosshair, c * cw);
-        Canvas.SetTop(_crosshair, r * ch);
+        Canvas.SetLeft(_crosshair, originX + c * cw);
+        Canvas.SetTop(_crosshair, originY + r * ch);
         _crosshair.Visibility = Visibility.Visible;
     }
 
