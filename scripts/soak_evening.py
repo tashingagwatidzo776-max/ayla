@@ -226,6 +226,10 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
         return lines + ["- no proposals to test"], ""
 
     tested, findings, skipped_thin = 0, [], 0
+    # Winning setups only (operator ask, 2026-10-21): the per-symbol report
+    # lists positive-expectancy setups; rejects/insufficient verdicts are
+    # TALLIED so honesty is preserved (full verdicts stay in results/).
+    suppressed = {"reject": 0, "insufficient": 0}
     for sym in symbols:
         bars = convert_bars(sym, tick_dir, bars_dir)
         if bars is None:
@@ -252,11 +256,20 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
                 continue
             tested += 1
             verdict = report["expectancy_verdict"]
-            lines.append(f"- {prop.stem} on {sym} ({day}): {report['trades']} trades, "
-                         f"{report['total_r']:+.1f}R, verdict: {verdict}")
             if verdict.startswith("positive expectancy"):
+                lines.append(f"- {prop.stem} on {sym} ({day}): {report['trades']} trades, "
+                             f"{report['total_r']:+.1f}R, verdict: {verdict}")
                 findings.append(f"{prop.stem} on {sym} ({report['trades']} trades, "
                                 f"{report['total_r']:+.1f}R, maxDD {report['max_drawdown_r']:.1f}R)")
+            elif verdict.startswith("insufficient"):
+                suppressed["insufficient"] += 1
+            else:
+                suppressed["reject"] += 1
+    hidden = suppressed["reject"] + suppressed["insufficient"]
+    if hidden:
+        lines.append(f"- {hidden} non-winning setup(s) suppressed - "
+                     f"{suppressed['reject']} rejected, {suppressed['insufficient']} insufficient trades; "
+                     "only winning setups are listed (full verdicts stay in scripts/ai_alpha/results/)")
     if skipped_thin:
         lines.append(f"- {skipped_thin} symbol(s) below the 50-bar floor (closed/static tape) - skipped")
     if not tested:

@@ -246,6 +246,54 @@ def test_run_alpha_surfaces_positive_verdict_as_finding():
         assert any("FINDING" in ln for ln in lines)
 
 
+def test_run_alpha_lists_winners_and_suppresses_the_rest():
+    """Winning-setups-only reporting (2026-10-21): a positive verdict is
+    listed and surfaced as a finding; a rejecting verdict is tallied in
+    the suppression line, never printed as its own detail line."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        ai = root / "scripts" / "ai_alpha"
+        (ai / "proposals").mkdir(parents=True)
+        (ai / "results").mkdir()
+        (ai / "proposals" / "PROP-win.json").write_text("{}", encoding="utf-8")
+        (ai / "proposals" / "PROP-lose.json").write_text("{}", encoding="utf-8")
+        day, sym = "20260926", "XAUUSDmicro"
+        csv = ai / "bars" / f"{sym}_{day}.csv"
+        csv.parent.mkdir(parents=True, exist_ok=True)
+        csv.write_text("ts,open,high,low,close\nt,1,1,1,1\n", encoding="utf-8")
+
+        tick_dir = root / "ticks"
+        tick_dir.mkdir()
+        (tick_dir / f"{sym}_{day}.jsonl").write_text("", encoding="utf-8")
+
+        def fake_backtest(prop, bars, results):
+            if prop.stem == "PROP-win":
+                return {"name": "win", "hypothesis": "h", "trades": 12,
+                        "total_r": 4.2, "max_drawdown_r": -0.5,
+                        "expectancy_verdict": "positive expectancy - review for C# port"}
+            return {"name": "lose", "hypothesis": "h", "trades": 6,
+                    "total_r": -13.6, "max_drawdown_r": 14.0,
+                    "expectancy_verdict": "negative expectancy or deep drawdown - reject"}
+
+        real_convert, real_repo = soak_evening.convert_bars, soak_evening.REPO
+        real_backtest = soak_evening.backtest
+        try:
+            soak_evening.convert_bars = lambda s, d, o: csv  # type: ignore[assignment]
+            soak_evening.REPO = root                         # type: ignore[assignment]
+            soak_evening.backtest = fake_backtest            # type: ignore[assignment]
+            lines, finding = soak_evening.run_alpha(tick_dir)
+        finally:
+            soak_evening.convert_bars = real_convert         # type: ignore[assignment]
+            soak_evening.REPO = real_repo                    # type: ignore[assignment]
+            soak_evening.backtest = real_backtest            # type: ignore[assignment]
+
+        text = "\n".join(lines)
+        assert "PROP-win" in text, lines            # winner listed
+        assert "PROP-lose" not in text, lines        # loser suppressed
+        assert "1 non-winning setup(s) suppressed" in text, lines
+        assert finding and "PROP-win" in finding, lines
+
+
 def test_run_alpha_no_ticks_no_crash():
     with tempfile.TemporaryDirectory() as tmp:
         lines, finding = soak_evening.run_alpha(pathlib.Path(tmp) / "absent")
