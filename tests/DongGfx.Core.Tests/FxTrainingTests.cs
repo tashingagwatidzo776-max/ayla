@@ -31,6 +31,15 @@ public class FxTrainingTests : IDisposable
 
     // ── bar fixtures ───────────────────────────────────────────────────────
 
+    /// <summary>Vote-time clock for the Engine_* tests. They assert the
+    /// confidence vote, which needs a regime that lets signals through:
+    /// FxRegime.SessionOf maps 21:00-24:00 UTC to "late" -> LowLiquidity ->
+    /// SkippedRegime -> null Signal, so driving RunOnce with the wall clock
+    /// failed this whole class every night after 21:00Z (seen 2026-10-21).
+    /// Fixed mid-London time; the bars fixture is time-fixed already.</summary>
+    private static readonly DateTimeOffset VoteTimeUtc =
+        new(2026, 1, 5, 12, 0, 0, TimeSpan.Zero);
+
     /// <summary>A directional trending tape: up then down, enough bars to
     /// clear the warm-up, with real range so ATR/ADX are meaningful.</summary>
     private static List<FxBar> TrendBars(int count = 400, double seed = 100.0)
@@ -438,7 +447,7 @@ public class FxTrainingTests : IDisposable
         engine.AddAlpha(new StubAlpha("weak", new[] { FxRegime.Trend }, 0.6));
         engine.AddAlpha(new StubAlpha("strong", new[] { FxRegime.Trend }, 0.9));
 
-        var decision = engine.RunOnce(DateTimeOffset.UtcNow, TrendBars(), 100, 100);
+        var decision = engine.RunOnce(VoteTimeUtc, TrendBars(), 100, 100);
         Assert.NotNull(decision.Signal);
         Assert.Equal("strong", decision.Signal!.Alpha);
     }
@@ -455,7 +464,7 @@ public class FxTrainingTests : IDisposable
         engine.AddAlpha(new StubAlpha("weak", new[] { FxRegime.Trend }, 0.7));
         engine.AddAlpha(new StubAlpha("strong", new[] { FxRegime.Trend }, 0.9));
 
-        var decision = engine.RunOnce(DateTimeOffset.UtcNow, TrendBars(), 100, 100);
+        var decision = engine.RunOnce(VoteTimeUtc, TrendBars(), 100, 100);
         Assert.NotNull(decision.Signal);
         // 0.7 × 1.5 = 1.05 beats 0.9 × 1.0 — the memory tilt re-ranks the
         // vote while the raw confidences stay what they were.
@@ -477,8 +486,8 @@ public class FxTrainingTests : IDisposable
         neutral.AddAlpha(new StubAlpha("strong", new[] { FxRegime.Trend }, 0.9));
 
         var bars = TrendBars();
-        var a = plain.RunOnce(DateTimeOffset.UtcNow, bars, 100, 100);
-        var b = neutral.RunOnce(DateTimeOffset.UtcNow, bars, 100, 100);
+        var a = plain.RunOnce(VoteTimeUtc, bars, 100, 100);
+        var b = neutral.RunOnce(VoteTimeUtc, bars, 100, 100);
         Assert.Equal(a.Signal?.Alpha, b.Signal?.Alpha);
         Assert.Equal("strong", a.Signal?.Alpha);
     }
@@ -492,7 +501,7 @@ public class FxTrainingTests : IDisposable
         engine.AddAlpha(new StubAlpha("weak", new[] { FxRegime.Trend }, 0.6));
         engine.AddAlpha(new StubAlpha("strong", new[] { FxRegime.Trend }, 0.9));
 
-        var decision = engine.RunOnce(DateTimeOffset.UtcNow, TrendBars(), 100, 100);
+        var decision = engine.RunOnce(VoteTimeUtc, TrendBars(), 100, 100);
         Assert.NotNull(decision.Signal);
         Assert.Equal("strong", decision.Signal!.Alpha);   // NaN must not win
     }
