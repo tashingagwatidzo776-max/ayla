@@ -203,6 +203,8 @@ jobs:
       run: python scripts/test_fx_outcome_coverage.py
     - name: Test the close-price coverage watcher (new unknown close pages once)
       run: python scripts/test_watch_close_price.py
+    - name: Test the GWEN fine-tune dataset builder (prompt/outcome pairing, never guesses)
+      run: python scripts/test_gwen_finetune_dataset.py
 
     # The trait guard protects CI's own selection filter: a test class with no
     # Category trait runs in NO job while every job stays green, so the guard

@@ -47,6 +47,22 @@ public sealed class AppSettings
     /// them. Live always stays disarmed regardless of this flag.</summary>
     public bool FxPaperRrCloseArmed { get; set; }
 
+    /// <summary>GWEN confluence gate (default ON): the local Qwen model
+    /// (imported as gwen-fx, served by loopback Ollama) judges each proposed
+    /// dispatch for directional confluence and a workable 1:2 — it can veto,
+    /// journaled as FX_GWEN + an FX_ORDER refusal, and never places, sizes
+    /// or schedules anything. Fail-neutral: a model that cannot answer
+    /// trades exactly as if the gate were off.</summary>
+    public bool GwenConfluenceArmed { get; set; } = true;
+
+    /// <summary>Venue-side 1:2 on brain-placed orders (default ON): the
+    /// order carries a take-profit at 2x the sized stop distance, so winners
+    /// bank at +2R on the venue itself — closed positions actually land at
+    /// ~1:2 instead of watching profit give back. Off = the historic
+    /// behavior (exit brain only). Survives restarts; applied on every
+    /// launch/save like the other engine knobs.</summary>
+    public bool FxVenueRrTpArmed { get; set; } = true;
+
     /// <summary>Operator-armed TP1 plan-% override (null = the allocation
     /// plan's own TP1 leg). Set by the dashboard's one-click Arm action when
     /// the plan-% gate recommends a different percentage: the engine then

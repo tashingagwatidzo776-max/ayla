@@ -81,6 +81,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool fxPaperRrCloseArmed;
 
+    /// <summary>GWEN confluence gate: the local Qwen model's advisory veto
+    /// over brain dispatches. On by default; flipping it applies the static
+    /// at once (reaches a running brain — no restart).</summary>
+    [ObservableProperty]
+    private bool gwenConfluenceArmed = true;
+
+    /// <summary>Venue-side 1:2 on brain-placed orders: the take-profit rides
+    /// on the order itself so winners bank +2R on the venue. On by default;
+    /// flipping it applies the static at once.</summary>
+    [ObservableProperty]
+    private bool fxVenueRrTpArmed = true;
+
     [ObservableProperty]
     private string tp1ToggleHint = "TP1 partials: OFF — the allocation plan is advisory only";
 
@@ -378,6 +390,23 @@ public sealed partial class SettingsViewModel : ObservableObject
             : 0;
     }
 
+    /// <summary>GWEN gate arm, same fail-safe shape as the R:R arm: ON
+    /// applies the static at once (a running brain picks it up immediately),
+    /// OFF is always allowed.</summary>
+    partial void OnGwenConfluenceArmedChanged(bool value)
+    {
+        Services.FxEngineHost.GwenConfluenceEnabled = value;
+    }
+
+    /// <summary>Venue-side 1:2 arm: 2R when on, disarmed (historic behavior)
+    /// when off — applied immediately to any running brain.</summary>
+    partial void OnFxVenueRrTpArmedChanged(bool value)
+    {
+        Services.FxEngineHost.VenueRewardTargetR = value
+            ? Services.FxEngineHost.VenueRewardTargetDefaultR
+            : 0;
+    }
+
     /// <summary>Recomputes the arming hint, including the overdue plan-%
     /// review circuit-breaker state so an operator sees that a rung is not
     /// just armed but HELD. Called on load, on toggle, and whenever the
@@ -547,6 +576,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxLabEnabled = settings.FxLabEnabled;
         FxExecuteTp1Partials = settings.FxExecuteTp1Partials;
         FxPaperRrCloseArmed = settings.FxPaperRrCloseArmed;
+        GwenConfluenceArmed = settings.GwenConfluenceArmed;
+        FxVenueRrTpArmed = settings.FxVenueRrTpArmed;
         RefreshTp1Hint();   // reflect any overdue-review breaker hold at load
         LoadTp1Tunables();  // the shared config, editable in-app
         MapsColormap = settings.MapsColormap;
@@ -588,6 +619,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxLabEnabled = FxLabEnabled,
         FxExecuteTp1Partials = FxExecuteTp1Partials,
         FxPaperRrCloseArmed = FxPaperRrCloseArmed,
+        GwenConfluenceArmed = GwenConfluenceArmed,
+        FxVenueRrTpArmed = FxVenueRrTpArmed,
         MapsColormap = MapsColormap,
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         FxMinEntryConfidence = Math.Clamp(FxMinEntryConfidence, 0, 1),

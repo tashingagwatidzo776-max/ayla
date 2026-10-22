@@ -127,6 +127,16 @@ public sealed partial class TerminalViewModel : ObservableObject
     [ObservableProperty]
     private string fxBadge = "FX BRAIN: OFF";
 
+    /// <summary>The account bar's GWEN pill: the local Qwen confluence
+    /// analyst's last verdict (bias + confidence + ✓/✗), "…" while armed but
+    /// silent, "off" when the gate or the brain is down.</summary>
+    [ObservableProperty]
+    private string gwenBadge = "GWEN: off";
+
+    /// <summary>Per-symbol GWEN verdicts + reasons for the pill tooltip.</summary>
+    [ObservableProperty]
+    private string gwenTooltip = "GWEN: the local Qwen confluence analyst has not spoken yet.";
+
     [ObservableProperty]
     private string fxStatusText = "engine not running";
 
@@ -149,6 +159,7 @@ public sealed partial class TerminalViewModel : ObservableObject
             FxStatusText = "engine stopped";
             FxSoakBadge = "";   // the pill must not outlive a stopped brain
             FxSoakTooltip = SoakTooltipBase;
+            GwenBadge = "GWEN: off";
             _soakProvenanceAnnounced = null;   // next start announces its own bar
             _lastSoakSeen = -1;
             PersistBrainRunning(running: false);
@@ -224,6 +235,7 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxBadge = "FX BRAIN: OFF";
         _lastSoakSeen = -1;
         FxSoakBadge = "";
+        GwenBadge = "GWEN: off";
         FxSoakTooltip = SoakTooltipBase;   // no stale claim about a stopped bar
         _soakProvenanceAnnounced = null;
         FxBrainRunnerChanged?.Invoke();
@@ -397,6 +409,7 @@ public sealed partial class TerminalViewModel : ObservableObject
     /// through OnUiThread by its callers).</summary>
     private void UpdateFxSoakBadge()
     {
+        UpdateGwenBadge();   // same cadence: the two pills share this path
         try
         {
             var host = _fxHost;
@@ -479,12 +492,61 @@ public sealed partial class TerminalViewModel : ObservableObject
         FxStatusText = message;
     }
 
+    /// <summary>Builds the GWEN pill from the portfolio's hosts: a veto
+    /// outranks concurrence (the refusal is the actionable state), and each
+    /// host with a verdict gets a tooltip line.</summary>
+    private void UpdateGwenBadge()
+    {
+        try
+        {
+            if (_fxHost is not { } h || !h.IsRunning)
+            {
+                GwenBadge = "GWEN: off";
+                GwenTooltip = "GWEN: the local confluence analyst runs with the FX brain.";
+                return;
+            }
+
+            if (h.Hosts.All(x => !x.GwenArmed))
+            {
+                GwenBadge = "GWEN: off";
+                GwenTooltip = "GWEN confluence gate disarmed in Settings — dispatches are not model-checked.";
+                return;
+            }
+
+            var spoken = h.Hosts.Where(x => x.LastGwenVerdict is not null).ToList();
+            if (spoken.Count == 0)
+            {
+                GwenBadge = "GWEN: …";
+                GwenTooltip = "GWEN: awaiting the first assessment (spoken when a signal reaches dispatch).";
+                return;
+            }
+
+            var pick = spoken.FirstOrDefault(x => x.LastGwenPass == false) ?? spoken[0];
+            var v = pick.LastGwenVerdict!;
+            GwenBadge = $"GWEN {v.Bias} {v.Confidence} {(pick.LastGwenPass == false ? "✗" : "✓")}";
+            GwenTooltip = string.Join("\n", spoken.Select(x =>
+            {
+                var xv = x.LastGwenVerdict!;
+                var why = xv.Reasons.Count > 0 ? " · " + string.Join("; ", xv.Reasons) : "";
+                return $"{x.Symbol}: {xv.Bias} {xv.Confidence}"
+                    + (x.LastGwenPass == false ? " — vetoed dispatch" : "")
+                    + why;
+            }));
+        }
+        catch
+        {
+            // The pill is cosmetic: never let badge math touch the cycle.
+        }
+    }
+
     /// <summary>Timer hook: refresh the soak badge cheaply and only when a
     /// counter could have moved. The badge never changes from the 3 s poll
     /// itself (the engine cycles on its own 60 s timer), so one compare per
     /// tick is all the UI work. Internal: tests drive it directly.</summary>
     internal void RefreshFxSoakBadgeIfRunning()
     {
+        UpdateGwenBadge();   // every tick — verdicts arrive independently
+                              // of soak progress (string compare when equal)
         if (_fxHost is not { } h || !h.IsRunning)
         {
             return;

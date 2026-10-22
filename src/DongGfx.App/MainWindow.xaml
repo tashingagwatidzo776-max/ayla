@@ -684,6 +684,14 @@
                                       IsChecked="{Binding SettingsVm.FxPaperRrCloseArmed}"
                                       Margin="0,6,0,4"
                                       ToolTip="While the brain is in PAPER, the exit brain closes the book at the Close 1:R default ratio (1:2) and journals FX_EXIT with Override=reward-target — an evidence stream for the 1:R rule. Live mode is never armed." />
+                            <CheckBox Content="GWEN confluence gate (local Qwen)"
+                                      IsChecked="{Binding SettingsVm.GwenConfluenceArmed}"
+                                      Margin="0,6,0,4"
+                                      ToolTip="The local Qwen model (served by Ollama on this machine) judges each proposed dispatch for directional confluence and a workable 1:2 and may veto it — refusals journal as FX_GWEN + FX_ORDER. Advisory only: it never places, sizes or schedules, and if the model is unavailable trading continues unchanged." />
+                            <CheckBox Content="Venue 1:2 take-profit on brain orders"
+                                      IsChecked="{Binding SettingsVm.FxVenueRrTpArmed}"
+                                      Margin="0,0,0,4"
+                                      ToolTip="Brain-placed orders carry a take-profit at 2x the sized stop distance, so winners bank +2R on the venue itself — closed trades actually land near 1:2 even with the app closed. Off = exit-brain-only (the historic behavior)." />
                             <!-- Actionable review list: only shown when the breaker
                                  holds the rung, so the operator can act/clear in-app
                                  instead of opening a terminal. -->
@@ -869,6 +877,11 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                 <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
                                         ToolTip="The forex brain: regime detection + momentum/mean-reversion families on MT5. Paper mode journals signals only; go-live needs the paper soak first.">
                                     <TextBlock Text="{Binding FxBadge}" FontWeight="Bold" FontSize="11" />
+                                </Border>
+                                <!-- ── GWEN: the local Qwen confluence analyst's verdict ── -->
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
+                                        ToolTip="{Binding GwenTooltip}">
+                                    <TextBlock Text="{Binding GwenBadge}" FontFamily="Consolas" FontSize="11" />
                                 </Border>
                                 <!-- per-symbol paper soak: laggard symbol first, so the
                                      one holding GO LIVE back is always the visible one -->
