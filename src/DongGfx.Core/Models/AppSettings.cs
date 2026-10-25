@@ -48,7 +48,7 @@ public sealed class AppSettings
     public bool FxPaperRrCloseArmed { get; set; }
 
     /// <summary>GWEN confluence gate (default ON): the local Qwen model
-    /// (imported as gwen-fx, served by loopback Ollama) judges each proposed
+    /// (imported as gwen-fx, run by the app's own model host) judges each proposed
     /// dispatch for directional confluence and a workable 1:2 — it can veto,
     /// journaled as FX_GWEN + an FX_ORDER refusal, and never places, sizes
     /// or schedules anything. Fail-neutral: a model that cannot answer

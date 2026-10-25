@@ -203,7 +203,57 @@ def main():
         check("thin cell still reported in By family", "bb-rev" in out)
         check("default-keep message shown", "default-keep holds" in preview)
 
-    # ── usage ────────────────────────────────────────────────────────────
+    # ── per-pair tape gates (report-only) ─────────────────────────────
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = []
+        # XAUUSDmicro: 30 losing trades across two families → pair crosses the bar.
+        for i in range(30):
+            t = noon + timedelta(minutes=i)
+            ticket = 600 + i
+            fam = "vol-breakout(14)" if i % 2 else "ou-rev(20)"
+            rows.append((t, "FX_ORDER", fill_details("buy", "XAUUSDmicro", ticket, fam)))
+            rows.append((t + timedelta(minutes=4), "FX_EXIT",
+                         close_details(ticket, realized_r=-0.5)))
+        # XAGUSD: 15 losing trades → below the sample bar, default-keep.
+        for i in range(15):
+            t = noon + timedelta(hours=1, minutes=i)
+            ticket = 700 + i
+            rows.append((t, "FX_ORDER", fill_details("buy", "XAGUSD", ticket, "ema-slope(21)")))
+            rows.append((t + timedelta(minutes=4), "FX_EXIT",
+                         close_details(ticket, realized_r=-0.4)))
+        d = make_journal(tmp, rows)
+        closes, _ = load(d)
+        out = fw.render(fw.windowed_trades(closes, days=30), "t", [])
+        pair = out.split("-- Per-pair tape gates")[1]
+
+        check("per-pair section rendered", "Per-pair tape gates" in out)
+        check("pair at the bar gated",
+              "GATED-IF-APPROVED" in pair and "XAUUSDmicro" in pair)
+        check("gated pair names its worst cells",
+              "worst cells:" in pair and "vol-breakout" in pair)
+        check("pair below the sample bar default-kept",
+              "XAGUSD" in pair and pair.count("GATED-IF-APPROVED") == 1)
+        check("approval caveat present",
+              "recommendation only" in pair and "human" in pair)
+        check("report-only gate never reuses the cell FAIL label",
+              "FAIL — would exclude" not in pair)
+
+    # ── per-pair: no pair crosses the bar → default-keep message ───────
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = []
+        for i in range(5):
+            t = noon + timedelta(minutes=i)
+            rows.append((t, "FX_ORDER", fill_details("buy", "EURUSD", 800 + i, "ou-rev")))
+            rows.append((t + timedelta(minutes=4), "FX_EXIT",
+                         close_details(800 + i, realized_r=0.3)))
+        d = make_journal(tmp, rows)
+        closes, _ = load(d)
+        pair = fw.render(fw.windowed_trades(closes, days=30), "t", [])\
+            .split("-- Per-pair tape gates")[1]
+        check("all-pairs default-keep message",
+              "no pair crosses the gate bar" in pair)
+
+    # ── usage ──────────────────────────────────────────────────────────
     old_argv = sys.argv
     try:
         sys.argv = ["fx_win_rate.py", "--days", "0"]

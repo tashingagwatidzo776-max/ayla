@@ -5,6 +5,10 @@ using System.Text.Json;
 
 namespace DongGfx.GwenHost;
 
+/// <summary>One parsed /api/chat request: the last user message plus the
+/// optional per-request system override and token budget.</summary>
+public sealed record GwenChatRequest(string UserPrompt, string? SystemPrompt, int? MaxTokens);
+
 /// <summary>A loopback-only HTTP endpoint for the GWEN host.
 ///
 /// Wire shape: the Ollama subset the desk's client already speaks —
@@ -21,7 +25,7 @@ namespace DongGfx.GwenHost;
 public sealed class GwenHostServer : IDisposable
 {
     private readonly TcpListener _listener;
-    private readonly Func<string, CancellationToken, Task<string>> _generate;
+    private readonly Func<GwenChatRequest, CancellationToken, Task<string>> _generate;
     private readonly Func<bool> _modelLoaded;
     private readonly int _port;
     private readonly CancellationTokenSource _cts = new();
@@ -37,7 +41,7 @@ public sealed class GwenHostServer : IDisposable
     /// </summary>
     public static readonly TimeSpan GenerationDeadline = TimeSpan.FromMinutes(15);
 
-    public GwenHostServer(int port, Func<string, CancellationToken, Task<string>> generate, Func<bool>? modelLoaded = null)
+    public GwenHostServer(int port, Func<GwenChatRequest, CancellationToken, Task<string>> generate, Func<bool>? modelLoaded = null)
     {
         _port = port;
         _generate = generate;
@@ -100,22 +104,53 @@ public sealed class GwenHostServer : IDisposable
                     return;
                 }
 
-                if (method == "POST" && path.StartsWith("/api/chat", StringComparison.Ordinal))
+                if (method == "POST" &&
+                    (path.StartsWith("/api/chat", StringComparison.Ordinal) ||
+                     path.StartsWith("/v1/chat/completions", StringComparison.Ordinal)))
                 {
-                    var prompt = ExtractLastUserMessage(body);
-                    if (prompt is null)
+                    // Two dialects, one model: /api/chat speaks the Ollama
+                    // subset (the desk's client), /v1/chat/completions the
+                    // OpenAI subset (JournalAnalyst, RiskNarrator, the alpha
+                    // proposer — everything that used to need the retired
+                    // third-party daemon on 11434).
+                    var openAi = path.StartsWith("/v1/chat/completions", StringComparison.Ordinal);
+                    var model = JsonSerializer.Deserialize<JsonElement>(body)
+                        .TryGetProperty("model", out var m)
+                            ? m.GetString() ?? GwenModelService.ModelName
+                            : GwenModelService.ModelName;
+                    var chat = ExtractChatRequest(body);
+                    if (chat is null)
                     {
                         await WriteJsonAsync(stream, 400, new { error = "no user message in request" }).ConfigureAwait(false);
                         return;
                     }
                     using var genCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
                     genCts.CancelAfter(GenerationDeadline);
-                    var reply = await _generate(prompt, genCts.Token).ConfigureAwait(false);
+                    var reply = await _generate(chat, genCts.Token).ConfigureAwait(false);
+                    if (openAi)
+                    {
+                        await WriteJsonAsync(stream, 200, new
+                        {
+                            id = $"chatcmpl-{Guid.NewGuid():N}",
+                            @object = "chat.completion",
+                            created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                            model,
+                            choices = new[]
+                            {
+                                new
+                                {
+                                    index = 0,
+                                    message = new { role = "assistant", content = reply },
+                                    finish_reason = "stop",
+                                },
+                            },
+                            usage = new { prompt_tokens = 0, completion_tokens = 0, total_tokens = 0 },
+                        }).ConfigureAwait(false);
+                        return;
+                    }
                     await WriteJsonAsync(stream, 200, new
                     {
-                        model = JsonSerializer.Deserialize<JsonElement>(body).TryGetProperty("model", out var m)
-                            ? m.GetString() ?? GwenModelService.ModelName
-                            : GwenModelService.ModelName,
+                        model,
                         message = new { role = "assistant", content = reply },
                         done = true,
                         done_reason = "stop",
@@ -145,9 +180,14 @@ public sealed class GwenHostServer : IDisposable
         }
     }
 
-    /// <summary>The last user-role message — the desk's client sends the
-    /// full assessment prompt as one user message.</summary>
-    internal static string? ExtractLastUserMessage(string body)
+    /// <summary>The last user-role message plus the request's own OPTIONAL
+    /// system message and token budget — the two fields callers beyond the
+    /// desk need: the alpha proposer (scripts/ai_alpha/propose.py) brings
+    /// its own system prompt and asks for room for a full proposal object,
+    /// while the desk's client sends neither and gets the host defaults
+    /// (file-loaded GWEN system prompt, MaxReplyTokens cap). Returns null
+    /// when there is no non-empty user message.</summary>
+    internal static GwenChatRequest? ExtractChatRequest(string body)
     {
         try
         {
@@ -157,17 +197,48 @@ public sealed class GwenHostServer : IDisposable
             {
                 return null;
             }
-            string? last = null;
+            string? system = null;
+            string? lastUser = null;
             foreach (var msg in messages.EnumerateArray())
             {
-                if (msg.TryGetProperty("role", out var role) &&
-                    role.GetString() == "user" &&
-                    msg.TryGetProperty("content", out var content))
+                if (!msg.TryGetProperty("role", out var role) ||
+                    !msg.TryGetProperty("content", out var content))
                 {
-                    last = content.GetString();
+                    continue;
+                }
+                var roleStr = role.GetString();
+                if (roleStr == "system" && system is null)
+                {
+                    system = content.GetString();
+                }
+                else if (roleStr == "user")
+                {
+                    lastUser = content.GetString();
                 }
             }
-            return string.IsNullOrWhiteSpace(last) ? null : last;
+            if (string.IsNullOrWhiteSpace(lastUser))
+            {
+                return null;
+            }
+            int? maxTokens = null;
+            if (doc.RootElement.TryGetProperty("options", out var options) &&
+                options.ValueKind == JsonValueKind.Object &&
+                options.TryGetProperty("num_predict", out var np) &&
+                np.ValueKind == JsonValueKind.Number &&
+                np.TryGetInt32(out var npInt))
+            {
+                maxTokens = npInt;   // Ollama dialect
+            }
+            else if (doc.RootElement.TryGetProperty("max_tokens", out var mt) &&
+                     mt.ValueKind == JsonValueKind.Number &&
+                     mt.TryGetInt32(out var mtInt))
+            {
+                maxTokens = mtInt;   // OpenAI dialect
+            }
+            return new GwenChatRequest(
+                lastUser,
+                string.IsNullOrWhiteSpace(system) ? null : system,
+                maxTokens);
         }
         catch (JsonException)
         {

@@ -9,8 +9,9 @@
     <Color x:Key="BorderColor">#FF2E3440</Color>
     <Color x:Key="TextPrimary">#FFE8EAF0</Color>
     <Color x:Key="TextSecondary">#FF9AA3B2</Color>
-    <Color x:Key="Accent">#FF00D4AA</Color>
-    <Color x:Key="AccentDim">#FF0A9B7E</Color>
+    <!-- Accent: dark orange (was teal #00D4AA — 2026-10-25 restyle). -->
+    <Color x:Key="Accent">#FFFF8C00</Color>
+    <Color x:Key="AccentDim">#FFB35C00</Color>
     <Color x:Key="Danger">#FFFF5C5C</Color>
     <Color x:Key="Warning">#FFFFC857</Color>
 
@@ -40,7 +41,7 @@
     <!-- ── Button ──────────────────────────────────────────────── -->
     <Style TargetType="Button">
         <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-        <Setter Property="Foreground" Value="#FF06251D" />
+        <Setter Property="Foreground" Value="#FF241000" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Padding" Value="16,8" />
         <Setter Property="FontWeight" Value="SemiBold" />
@@ -206,6 +207,118 @@
     <Style x:Key="FieldLabel" TargetType="TextBlock">
         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
         <Setter Property="Margin" Value="0,0,0,4" />
+    </Style>
+
+    <!-- ── White removal (2026-10-25) ──────────────────────────
+         The light theme's whites came from UNSTYLED WPF defaults, not
+         from explicit colors: every DataGrid (79 of them), dropdown
+         rows, menu hovers, tooltips and selection highlights paint
+         system chrome that never consults this palette. Two layers fix
+         it: (1) explicit styles for the property-default whites that no
+         resource can reach, (2) SystemColors key overrides for every
+         default template that resolves chrome via DynamicResource. -->
+
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#FF1C1F26" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightLightBrushKey}" Color="#FF1C1F26" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightBrushKey}" Color="#FF22262E" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkBrushKey}" Color="#FF2E3440" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkDarkBrushKey}" Color="#FF14161A" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#FF14161A" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#FFE8EAF0" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#FF7A3D00" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#FF1C1F26" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#FFE8EAF0" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#FF9AA3B2" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InfoBrushKey}" Color="#FF22262E" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InfoTextBrushKey}" Color="#FFE8EAF0" />
+
+    <!-- DataGrid family: property-default whites (Background/rows/headers
+         are literal #FFFFFF, not resource lookups — only styles reach). -->
+    <Style TargetType="DataGrid">
+        <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="RowBackground" Value="{StaticResource PanelBrush}" />
+        <Setter Property="AlternatingRowBackground" Value="{StaticResource CardBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="HorizontalGridLinesBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="VerticalGridLinesBrush" Value="{StaticResource BorderBrush}" />
+    </Style>
+
+    <Style TargetType="DataGridColumnHeader">
+        <Setter Property="Background" Value="{StaticResource CardBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style TargetType="DataGridRowHeader">
+        <Setter Property="Background" Value="{StaticResource CardBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+    </Style>
+
+    <Style TargetType="DataGridRow">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Style.Triggers>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="#FF7A3D00" />
+                <Setter Property="Foreground" Value="#FFFFFFFF" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style TargetType="DataGridCell">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="4,2" />
+        <Style.Triggers>
+            <!-- Row selection paints through the cell (the row carries the
+                 orange); cell selection alone gets the dim orange. -->
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="#FFFFFFFF" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Dropdown rows: the popup list is the other big white surface. -->
+    <Style TargetType="ComboBoxItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Padding" Value="8,5" />
+        <Style.Triggers>
+            <Trigger Property="IsHighlighted" Value="True">
+                <Setter Property="Background" Value="#FF7A3D00" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="#FF7A3D00" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Right-click menus and their hover rows (chrome comes from the
+         SystemColors overrides above; these carry the TEXT color). -->
+    <Style TargetType="ContextMenu">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+    </Style>
+
+    <Style TargetType="MenuItem">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+
+    <Style TargetType="ToolTip">
+        <Setter Property="Background" Value="{StaticResource CardBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="FontSize" Value="12" />
     </Style>
 
     <!-- ── Converters ──────────────────────────────────────────── -->

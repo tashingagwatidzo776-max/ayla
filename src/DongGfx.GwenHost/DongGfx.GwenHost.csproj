@@ -11,6 +11,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The host's wire-parsing seam is tested from the app test suite. -->
+    <InternalsVisibleTo Include="DongGfx.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- llama.cpp as a managed-library dependency: the desk's model runs in
          a process WE build and supervise — no third-party app on the box. -->
     <PackageReference Include="LLamaSharp" Version="0.30.0" />

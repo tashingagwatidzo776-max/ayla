@@ -23,7 +23,8 @@ AI agent 5 of `docs/ai-agent-program.md`. The loop, in order:
 ## Usage
 
 ```bash
-# 1. propose (needs the Ollama daemon on 127.0.0.1:11434)
+# 1. propose (needs the desk's built-in host on 127.0.0.1:11435 —
+#    auto-spawned by the running app on first use)
 python scripts/ai_alpha/propose.py
 
 # 2. backtest the newest proposal against exported bars…

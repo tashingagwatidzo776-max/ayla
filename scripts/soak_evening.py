@@ -4,7 +4,7 @@
 Runs the two end-of-soak-day chores that until now were manual:
 
   --analyst  run the production analyst once (tools/AnalystSmoke against
-             the live journal, local LLM qwen3 by default) and append the
+             the live journal, local LLM gwen-fx by default) and append the
              narrative to today's docs/soak/SOAK-<date>.md. A cold model
              is warmed first so the scheduled run records the LLM
              narrative, not the timeout fallback template.
@@ -148,7 +148,7 @@ def run_analyst(model: str) -> tuple[str | None, str]:
 def analyst_section(narrative: str) -> str:
     return (f"- captured: {dt.datetime.now():%Y-%m-%d %H:%M} local, "
             f"production JournalAnalystService (model from TF_LLM_MODEL, "
-            f"default qwen3:0.6b)\n"
+            f"default gwen-fx)\n"
             f"- narrative (verbatim):\n"
             f"> {narrative}")
 
@@ -290,7 +290,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--analyst", action="store_true", help="run the analyst and record the narrative")
     p.add_argument("--alpha", action="store_true", help="re-run the alpha harness over the tick archive")
     p.add_argument("--force", action="store_true", help="rewrite the analyst section even if present")
-    p.add_argument("--model", default="qwen3:0.6b")
+    p.add_argument("--model", default="gwen-fx")
     p.add_argument("--tick-dir", type=pathlib.Path, default=DEFAULT_TICK_DIR)
     p.add_argument("--date", default=None, help="YYYY-MM-DD override for the evidence doc")
     args = p.parse_args(argv)

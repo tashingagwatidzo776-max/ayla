@@ -52,8 +52,9 @@ Read-only storyteller. Each cycle it reads the trade journal
 narrative digest to the same Discord/Slack webhook settlements use.
 
 - **LLM access:** OpenAI-compatible chat endpoint, configured by
-  `TF_LLM_BASE_URL` (default `http://127.0.0.1:11434/v1` — local Ollama),
-  `TF_LLM_MODEL` (default `qwen3:0.6b`), `TF_LLM_API_KEY` (optional;
+  `TF_LLM_BASE_URL` (default `http://127.0.0.1:11435/v1` — the desk's
+  built-in GWEN host),
+  `TF_LLM_MODEL` (default `gwen-fx`), `TF_LLM_API_KEY` (optional;
   Ollama ignores it but the contract stays provider-agnostic). The key
   never touches `settings.json` — secrets don't live in settings files
   (a settings wipe already happened once).

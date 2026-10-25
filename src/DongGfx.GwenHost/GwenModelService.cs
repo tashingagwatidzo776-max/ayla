@@ -43,6 +43,17 @@ public sealed class GwenModelService : IDisposable
     /// crowd the longest valid verdicts and risk truncating one.</summary>
     public const int MaxReplyTokens = 160;
 
+    /// <summary>Hard ceiling for a caller-requested budget (the alpha
+    /// proposer asks for room for a full proposal object). The desk never
+    /// requests one — no options/max_tokens in its payload keeps the
+    /// 160-token verdict cap above.</summary>
+    public const int MaxTokensCeiling = 512;
+
+    /// <summary>Requested budget resolved against the cap: nothing asked →
+    /// the verdict default; anything asked → clamped to [1, ceiling].</summary>
+    public static int ResolveMaxTokens(int? requested) =>
+        requested is null ? MaxReplyTokens : Math.Clamp(requested.Value, 1, MaxTokensCeiling);
+
     public const uint ContextSize = 4096;
 
     private readonly string _ggufPath;
@@ -74,14 +85,17 @@ public sealed class GwenModelService : IDisposable
     }
 
     /// <summary>One assessment: the user message content, framed with the
-    /// GWEN system prompt through the model's own chat template.</summary>
-    public async Task<string> GenerateAsync(string userPrompt, CancellationToken ct = default)
+    /// GWEN system prompt through the model's own chat template. Callers
+    /// that bring their OWN system prompt (the alpha proposer) and/or a
+    /// token budget pass them here; nulls keep the desk defaults.</summary>
+    public async Task<string> GenerateAsync(string userPrompt, CancellationToken ct = default,
+        string? systemPrompt = null, int? maxTokens = null)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             EnsureLoaded();
-            return await GenerateCore(userPrompt, ct).ConfigureAwait(false);
+            return await GenerateCore(userPrompt, ct, systemPrompt, maxTokens).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -119,7 +133,8 @@ public sealed class GwenModelService : IDisposable
         _model = LLamaWeights.LoadFromFile(Params());
     }
 
-    private async Task<string> GenerateCore(string userPrompt, CancellationToken ct)
+    private async Task<string> GenerateCore(string userPrompt, CancellationToken ct,
+        string? systemPrompt = null, int? maxTokens = null)
     {
         var model = _model ?? throw new InvalidOperationException("model not loaded");
         // A FRESH context per assessment, weights shared and resident.
@@ -133,7 +148,7 @@ public sealed class GwenModelService : IDisposable
         // History carries ONLY the system prompt: ChatAsync appends the
         // user message itself (session state must not double-add it).
         var history = new ChatHistory();
-        history.AddMessage(AuthorRole.System, _systemPrompt);
+        history.AddMessage(AuthorRole.System, systemPrompt ?? _systemPrompt);
 
         var executor = new InteractiveExecutor(context);
         // The GGUF carries NO embedded chat template (tokenizer_config.json
@@ -145,7 +160,7 @@ public sealed class GwenModelService : IDisposable
             .WithHistoryTransform(new QwenChatTemplate());
         var inference = new InferenceParams
         {
-            MaxTokens = MaxReplyTokens,
+            MaxTokens = ResolveMaxTokens(maxTokens),
             SamplingPipeline = new DefaultSamplingPipeline { Temperature = Temperature },
         };
 

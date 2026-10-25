@@ -232,18 +232,28 @@ public sealed class FxEngine
                 // (host re-verifies demo before placing), and the fill is
                 // journaled under PAPER-EXEC. Paper mode remains
                 // risk-gated; only the venue's real-money path is closed.
+                // Symbol/Bid/Ask/Time are the market snapshot the genetic
+                // lab replays (FxLabService.DecisionToBar): without them in
+                // the details JSON the lab finds 0 lab-able bars and stays
+                // silent forever — observed 2026-10-25 (0 of 14,797 entries
+                // carried one, so the lab had never run a single pass).
                 _journal("FX_DECISION",
                     $"PAPER-EXEC: {winner.Direction} {lots:0.##} lots {Symbol} (demo execution)",
                     ToJson(new { Action = "paper-exec", winner.Direction, Lots = lots,
-                        StopDistance = FxJson.Sanitize(effectiveStop) }));
+                        StopDistance = FxJson.Sanitize(effectiveStop),
+                        Symbol, Bid = FxJson.Sanitize(bid), Ask = FxJson.Sanitize(ask),
+                        Time = utcNow.ToUnixTimeMilliseconds() }));
                 return new FxDecision(verdict.TimeUtc, verdict, winner, FxDecisionAction.PaperExecuted, lots,
                     "paper mode — order routes to the connected demo account", effectiveStop);
             }
 
+            // Same lab snapshot contract as the paper path above.
             _journal("FX_DECISION",
                 $"ORDER: {winner.Direction} {lots:0.##} lots {Symbol} @ market",
                 ToJson(new { Action = "order", winner.Direction, Lots = lots,
-                    StopDistance = FxJson.Sanitize(effectiveStop) }));
+                    StopDistance = FxJson.Sanitize(effectiveStop),
+                    Symbol, Bid = FxJson.Sanitize(bid), Ask = FxJson.Sanitize(ask),
+                    Time = utcNow.ToUnixTimeSeconds() }));
             return new FxDecision(verdict.TimeUtc, verdict, winner, FxDecisionAction.Ordered, lots,
                 "live order handed to the bridge ticket path (rails apply there)", effectiveStop);
         }

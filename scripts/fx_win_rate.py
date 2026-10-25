@@ -19,6 +19,11 @@ Also prints the recent-tape bar preview (ROSTER-POLICY items 2-4:
 n >= 30 and mean <= -0.10R excludes) so you can see which cells the
 in-app filter will cut before it cuts them.
 
+The per-pair gates section applies the same bar to the WHOLE pair
+(symbol-level rollup) and names the worst cells behind each verdict —
+REPORT-ONLY: ROSTER-POLICY shows per-family direction differs within a
+symbol, so a pair-level cut is a human decision, never this script's.
+
 Usage:
   python scripts/fx_win_rate.py                     # last 30 days of closes
   python scripts/fx_win_rate.py --days 7
@@ -291,6 +296,42 @@ def render(trades, label, signals):
             lines.append(f"    {sym} {fam:<20} n={n:3}  mean {mean:+.2f}R")
     if not any_cell and not approaching:
         lines.append("  (no cell has reached the sample bar yet — default-keep holds)")
+
+    lines.append("")
+    lines.append("-- Per-pair tape gates (report-only — live gate stays cell-level) " + "-" * 4)
+    pair_trades = bucket(trades, lambda t: (t["fill"] or {}).get("symbol") or "?")
+    cell_map = cells(trades)
+    any_gated = False
+    for sym, group in sorted(pair_trades.items(),
+                              key=lambda kv: stats(kv[1])["avg_r"]
+                              if stats(kv[1])["avg_r"] is not None else 0.0):
+        st = stats(group)
+        mean = st["avg_r"]
+        gated = st["n"] >= TAPE_WINDOW_N and mean is not None and mean <= TAPE_EXCLUDE_MEAN_R
+        if gated:
+            any_gated = True
+        verdict = (f"GATED-IF-APPROVED (mean {mean:+.2f}R <= {TAPE_EXCLUDE_MEAN_R}R "
+                   f"at n>={TAPE_WINDOW_N})" if gated else "keep")
+        if st["n"] == 0:
+            lines.append(f"  {sym:<20}  n=  0  n=0 measured ({st['closed']} closed, "
+                         f"outcome unknown)")
+        else:
+            lines.append(f"  {sym:<20}  n={st['n']:3}  win {st['win_rate'] * 100:5.1f}%  "
+                         f"mean {mean:+.2f}R")
+        lines.append(f"      {verdict}")
+        if st["n"] > 0:
+            worst = sorted(
+                ((fam, o) for (cs, fam), o in cell_map.items() if cs == sym
+                 and len(o) >= APPROACHING_N and sum(o) / len(o) < 0),
+                key=lambda kv: sum(kv[1]) / len(kv[1]))[:3]
+            if worst:
+                lines.append("      worst cells: " + "; ".join(
+                    f"{fam} {sum(o) / len(o):+.2f}R (n={len(o)})" for fam, o in worst))
+    if not any_gated:
+        lines.append("  (no pair crosses the gate bar — default-keep holds for every pair)")
+    else:
+        lines.append("  a gated pair here is a recommendation only — the live dispatch gate "
+                     "cuts per (symbol, family) cell, and any pair-level cut needs a human.")
 
     return "\n".join(lines)
 

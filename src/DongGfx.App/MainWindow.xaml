@@ -224,7 +224,7 @@
                             <!-- The armed plan-% override: the engine is using the
                                  operator's plan instead of the brain's own leg. -->
                             <Border Margin="0,6,0,0" CornerRadius="4" Padding="8,3"
-                                    Background="#2200D4AA" BorderBrush="#5500D4AA"
+                                    Background="#22FF8C00" BorderBrush="#55FF8C00"
                                     BorderThickness="1">
                                 <Border.Style>
                                     <Style TargetType="Border">
@@ -505,7 +505,7 @@
                             </Border>
 
                             <!-- Shadow-engine promotion card: the giveback engine's road to weight -->
-                            <Border Background="#2200D4AA" BorderBrush="#5500D4AA" BorderThickness="1"
+                            <Border Background="#22FF8C00" BorderBrush="#55FF8C00" BorderThickness="1"
                                     CornerRadius="4" Padding="8,4" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="{Binding Dashboard.PromotionSummaryText}"
@@ -521,7 +521,7 @@
                                                         <Run Text="{Binding Settled, Mode=OneWay, StringFormat='· {0}'}" />
                                                         <Run Text="{Binding Evidence, Mode=OneWay, StringFormat='· {0}'}" />
                                                         <Run Text="{Binding HitRate, Mode=OneWay, StringFormat='· {0}'}" />
-                                                        <Run Text="{Binding Weight, Mode=OneWay, StringFormat='· {0}'}" Foreground="#FF00D4AA" />
+                                                        <Run Text="{Binding Weight, Mode=OneWay, StringFormat='· {0}'}" Foreground="#FFFF8C00" />
                                                     </TextBlock>
                                                 </Border>
                                             </DataTemplate>

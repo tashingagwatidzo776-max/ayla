@@ -71,7 +71,7 @@ if (probe)
 
 using var server = new GwenHostServer(
     port,
-    (prompt, ct) => model.GenerateAsync(prompt, ct),
+    (req, ct) => model.GenerateAsync(req.UserPrompt, ct, req.SystemPrompt, req.MaxTokens),
     () => model.IsLoaded);
 server.Start();
 Console.WriteLine($"gwen-host: ready on http://127.0.0.1:{port}/ (model loads lazily on first /api/chat)");

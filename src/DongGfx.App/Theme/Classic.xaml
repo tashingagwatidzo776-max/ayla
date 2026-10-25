@@ -216,7 +216,31 @@
         <Setter Property="Margin" Value="0,0,0,4" />
     </Style>
 
-    <!-- ── Converters ──────────────────────────────────────────── -->
+        <!-- ── System chrome (parity with Dark.xaml) ────────────────────
+         Dark.xaml overrides these SystemColors keys to kill white
+         system chrome, and the theme-parity contract test requires
+         BOTH dictionaries to declare the same key set (a missing key
+         is a runtime crash on theme switch). Classic pins the classic
+         Windows light chrome here — dropdowns, menus, tooltips and
+         selection stay on-palette and deterministic instead of
+         tracking the OS accent — so the override exists in both
+         themes with each theme’s own colours. -->
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#FFF0F0F0" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightLightBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkBrushKey}" Color="#FFA0A0A0" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkDarkBrushKey}" Color="#FF696969" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="#FF101010" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#FF0058CC" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#FFF0F0F0" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#FF101010" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#FF606060" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InfoBrushKey}" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InfoTextBrushKey}" Color="#FF101010" />
+
+<!-- ── Converters ──────────────────────────────────────────── -->
     <Style x:Key="BoolToInverseBoolConverter" TargetType="sys:Boolean" />
 
 </ResourceDictionary>

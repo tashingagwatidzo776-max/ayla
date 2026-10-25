@@ -67,11 +67,11 @@ public sealed class RiskNarratorService : IDisposable
 
     private string BaseUrl => (BaseUrlOverride?.Invoke()
         ?? Environment.GetEnvironmentVariable("TF_LLM_BASE_URL"))
-        ?.Trim().TrimEnd('/') is { Length: > 0 } url ? url : "http://127.0.0.1:11434/v1";
+        ?.Trim().TrimEnd('/') is { Length: > 0 } url ? url : "http://127.0.0.1:11435/v1";
 
     private string Model => (ModelOverride?.Invoke()
         ?? Environment.GetEnvironmentVariable("TF_LLM_MODEL"))
-        ?.Trim() is { Length: > 0 } model ? model : "qwen3:0.6b";
+        ?.Trim() is { Length: > 0 } model ? model : "gwen-fx";
 
     private string? ApiKey => ApiKeyOverride?.Invoke()
         ?? Environment.GetEnvironmentVariable("TF_LLM_API_KEY");

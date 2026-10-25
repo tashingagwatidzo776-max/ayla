@@ -28,7 +28,7 @@ Same shape as the Exit Brain and Profit Brain: **advisory with veto power**.
   the desk trades exactly as it did before GWEN existed, announced once in
   the journal (`GWEN unavailable`). A missing LLM must never become an
   unexplained trading halt.
-- Loopback-only (`127.0.0.1:11434`), same rule as Mt5BridgeClient: the model
+- Loopback-only (`127.0.0.1:11435`), same rule as Mt5BridgeClient: the model
   is a local process, never a remote endpoint.
 
 ## The gate rules (pure, tested in FxGwenAdvisorTests)

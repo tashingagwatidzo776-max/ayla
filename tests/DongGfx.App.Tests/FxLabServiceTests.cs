@@ -175,4 +175,42 @@ public class FxLabServiceTests : IDisposable
         Assert.True(FxWalkForward.Approved(honest));
         Assert.False(FxWalkForward.Approved(overfit));
     }
+
+    [Fact]
+    public void Engine_Paper_Decision_Carries_Lab_Snapshot()
+    {
+        // Loop-closing guard (2026-10-25): FX_DECISION details must embed
+        // Symbol/Bid/Ask/Time or DecisionToBar yields nothing and the lab
+        // stays silent forever — 0 of 14,797 historic rows carried one, so
+        // the lab had never completed a single pass on the live desk.
+        var captured = new List<string>();
+        var engine = new FxEngine("XAUUSDmicro", "M1",
+            (cat, _detail, json) => { if (cat == "FX_DECISION") captured.Add(json); },
+            lotsCap: 1.0, equityProvider: () => 10_000);
+        engine.AddAlpha(new FxMomentum.DonchianBreakout());
+
+        var bars = new List<FxBar>();
+        for (var i = 0; i < 120; i++)
+        {
+            var c = 2400 + i * 0.5;
+            bars.Add(new FxBar(1790000000L + 60 * i, c - 0.3, c + 0.6, c - 0.6, c, 100));
+        }
+        bars.Add(new FxBar(1790000600, 2459.0, 2465.0, 2458.5, 2464.8, 100)); // breakout
+
+        // Fixed session time keeps the regime verdict deterministic (a
+        // UtcNow run could land in a low-liquidity hour and stand down).
+        var now = new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero);
+        var decision = engine.RunOnce(now, bars, 2464.0, 2465.0);
+
+        Assert.True(decision.Signal is not null,
+            "expected the Donchian breakout to speak on the fixed london tape");
+        Assert.True(captured.Count > 0, "expected an FX_DECISION journal row");
+
+        var details = captured[^1];
+        Assert.Contains("\"XAUUSDmicro\"", details);   // CollectBars symbol filter
+        var bar = FxLabService.DecisionToBar(details);
+        Assert.NotNull(bar);                            // the row IS lab-able
+        Assert.Equal(2464.5, bar.Value.Close, 6);       // (bid + ask) / 2
+        Assert.Equal(now.ToUnixTimeMilliseconds(), bar.Value.Time);
+    }
 }

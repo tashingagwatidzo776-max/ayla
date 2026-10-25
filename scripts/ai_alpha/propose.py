@@ -2,7 +2,8 @@
 """Alpha Researcher step 1: ask the local LLM for one alpha proposal.
 
 Offline by design: this script talks ONLY to the LLM daemon (Ollama on
-127.0.0.1:11434 by default, OpenAI-compatible /v1/chat/completions) and
+127.0.0.1:11435 by default, OpenAI-compatible /v1/chat/completions — the
+desk's BUILT-IN host serves that dialect directly, no third-party daemon) and
 writes a JSON proposal file. No bridge, no sidecar, no webhook, no trading
 surface — the harness cannot place a trade even in principle.
 
@@ -23,8 +24,8 @@ import urllib.request
 HERE = pathlib.Path(__file__).resolve().parent
 PROPOSALS = HERE / "proposals"
 
-DEFAULT_BASE_URL = os.environ.get("TF_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
-DEFAULT_MODEL = os.environ.get("TF_LLM_MODEL", "qwen3:0.6b")
+DEFAULT_BASE_URL = os.environ.get("TF_LLM_BASE_URL", "http://127.0.0.1:11435/v1")
+DEFAULT_MODEL = os.environ.get("TF_LLM_MODEL", "gwen-fx")
 
 SCHEMA_HINT = """{
   "name": "short_snake_case_name",
