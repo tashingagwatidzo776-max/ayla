@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DongGfx.GwenHost</AssemblyName>
+    <RootNamespace>DongGfx.GwenHost</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- llama.cpp as a managed-library dependency: the desk's model runs in
+         a process WE build and supervise — no third-party app on the box. -->
+    <PackageReference Include="LLamaSharp" Version="0.30.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.30.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ONE prompt file for the whole desk: serving (here) and fine-tuning
+         (scripts/gwen_finetune_dataset.py) read the same bytes. -->
+    <EmbeddedResource Include="..\..\scripts\gwen_system_prompt.txt" Link="GwenSystemPrompt.txt" />
+  </ItemGroup>
+
+  <Target Name="CopyNativeBackendsBesideExe" AfterTargets="Build">
+    <!-- LLamaSharp's native loader resolves llama.dll from the APP BASE
+         directory (default DllImport probing); the package ships the CPU
+         variants under runtimes/win-x64/native/<avx-level>/ where
+         same-directory dependencies do not resolve, so the avx2 variant
+         lands beside the exe. The desk's i7-5600U is AVX2. -->
+    <ItemGroup>
+      <_Avx2Native Include="$(OutDir)runtimes\win-x64\native\avx2\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_Avx2Native)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

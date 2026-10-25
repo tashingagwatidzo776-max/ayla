@@ -112,9 +112,14 @@ public partial class App : System.Windows.Application
 
         // MT5 bridge + FX brain plumbing.
         services.AddSingleton<Mt5BridgeClient>();
-        // GWEN: the local Ollama-backed confluence analyst (advisory veto
-        // over the brain's dispatches; loopback-only, fail-neutral).
-        services.AddSingleton<GwenBrainClient>();
+        // GWEN: the desk's OWN confluence analyst (advisory veto over the
+        // brain's dispatches; loopback-only, fail-neutral). The supervisor
+        // keeps the built-in model host process alive; a model crash can
+        // never take this app down — it degrades to "no verdict".
+        services.AddSingleton<GwenHostSupervisor>();
+        services.AddSingleton(sp => new GwenBrainClient(
+            GwenBrainClient.DefaultUri,
+            sp.GetRequiredService<GwenHostSupervisor>()));
         services.AddSingleton<TickArchive>();
         services.AddSingleton<MetricsCollector>();
         services.AddSingleton(sp =>
@@ -433,7 +438,7 @@ public partial class App : System.Windows.Application
         if (settings.GwenConfluenceArmed)
         {
             provider.GetRequiredService<TradeJournal>().Log(Guid.Empty, "FX_MODE",
-                $"GWEN confluence gate armed ({GwenBrainClient.DefaultModel} over loopback Ollama) — " +
+                $"GWEN confluence gate armed ({GwenBrainClient.DefaultModel} via the built-in in-app model host) — " +
                 "the local model may veto dispatches; an unavailable model trades as usual",
                 "{}");
         }

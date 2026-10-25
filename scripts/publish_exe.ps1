@@ -107,6 +107,61 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed (exit $LASTEXITCODE)"
 }
 
+# The GWEN host runner MUST ship with the app. GwenHostSupervisor's
+# primary resolve path is "DongGfx.GwenHost.exe beside the app" (no
+# TF_GWEN_HOST_EXE override is set on the desk), and a deploy without
+# the host leaves GWEN silently disabled - fail-neutral by contract,
+# but the confluence gate would never run on the live desk. Publishing
+# it into the SAME output dir means deploy-app.ps1's robocopy carries
+# both binaries together, and a publish can never again produce an app
+# without its model runner (see the throw below).
+$hostProj = Join-Path $root "src\DongGfx.GwenHost\DongGfx.GwenHost.csproj"
+$hostArgs = @(
+    "publish", $hostProj,
+    "-c", $Configuration,
+    "-r", $rid,
+    "-o", $out,
+    "--self-contained", $(if ($FrameworkDependent) { "false" } else { "true" })
+)
+# The host is ALWAYS multi-file, even when the app is single-file:
+# LLamaSharp loads llama-bllas itself from disk (AppContext.BaseDirectory)
+# and cannot see a native library hidden inside a single-file bundle or
+# its self-extract temp dir. Observed 2026-10-24: a single-file host build
+# failed every request with TypeInitializationException (NativeApi) -
+# probe FAILED in 0.2s - while this multi-file layout is exactly what the
+# desk's passing E2E runs execute from bin\Release\net8.0. robocopy /E
+# carries the whole folder to the app dir beside DongGfx.exe, which is
+# where GwenHostSupervisor.ResolveHostExe looks.
+& dotnet $hostArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet publish (DongGfx.GwenHost) failed (exit $LASTEXITCODE)"
+}
+if (-not (Test-Path (Join-Path $out 'DongGfx.GwenHost.exe'))) {
+    throw "DongGfx.GwenHost.exe missing from $out after host publish - refusing to ship an app without its GWEN runner"
+}
+
+# LLamaSharp's package copies its five native libs (llama, ggml,
+# ggml-base, ggml-cpu, mtmd) to the BUILD output root, but they are not
+# content items, so `dotnet publish -o` does not transport them - while
+# the loader only probes the app root. Observed 2026-10-24: without this
+# copy every /api/chat fails in 0.1s with TypeInitializationException
+# (NativeApi), and `runtimes\win-x64\native\avx2\llama.dll` (where
+# publish DOES put them) is not a path LLamaSharp searches. Copy the
+# exact libs the build selected (avx2 on this desk) beside the published
+# exe - byte-identical to the bin layout the passing E2E runs use.
+$nativeFrom = Join-Path $root "src\DongGfx.GwenHost\bin\$Configuration\net8.0\$rid"
+$nativeLibs = @('llama.dll', 'ggml.dll', 'ggml-base.dll', 'ggml-cpu.dll', 'mtmd.dll')
+foreach ($n in $nativeLibs) {
+    $ns = Join-Path $nativeFrom $n
+    if (-not (Test-Path $ns)) {
+        throw "LLamaSharp native $n not found in $nativeFrom - host would ship unloadable; check the LLamaSharp.Backend package layout"
+    }
+    Copy-Item -LiteralPath $ns -Destination $out -Force
+}
+if (-not (Test-Path (Join-Path $out 'llama.dll'))) {
+    throw "llama.dll missing from $out after native copy"
+}
+
 if ($isReleaseTag) {
     Write-Host "Shipped from release tag '$tag' - real-money gate drill was green on this commit." -ForegroundColor Green
 }
@@ -118,3 +173,4 @@ if (-not $FrameworkDependent) {
 } else {
     Write-Host "Exe: $(Join-Path $out 'DongGfx.exe')  (needs the .NET 8 Desktop Runtime installed)" -ForegroundColor Green
 }
+Write-Host "GWEN host: $(Join-Path $out 'DongGfx.GwenHost.exe')  (ships beside the app - supervisor resolves it there)" -ForegroundColor Green

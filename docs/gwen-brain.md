@@ -82,8 +82,10 @@ invalid-stops rejection of the whole order.
 
 ## Performance on this desk
 
-The machine is an i7-5600U with a 2 GB GPU — the model runs **CPU-only**
-(`PARAMETER num_gpu 0`), quantized q4 (~3 GB resident). One assessment is
+The machine is an i7-5600U (2C/4T, 16 GB RAM) — the model runs **CPU-only**
+(`PARAMETER num_gpu 0`) as the full-precision f16 GGUF (~7.9 GB resident;
+a q4 build stays available via `ollama create … --quantize Q4_K_M` if
+latency ever matters). One assessment is
 seconds of generation; the client caches each market state for 10 minutes,
 so the 60 s brain cycle never waits on a repeat, and `keep_alive 5m` gives
 the RAM back when the desk is idle. The `GWEN` pill in the Terminal account
@@ -92,7 +94,9 @@ bar shows the last verdict (bias, confidence, ✓/✗) or why it is off.
 ## Setup / operations
 
 ```powershell
-# one-time: import the checkpoint as gwen-fx (needs ~17 GB free on OLLAMA_MODELS)
+# one-time: register gwen-fx (reuses the store's converted GGUF when one is
+# present — the fast path that needs ~0 extra disk; a full safetensors import
+# only runs as fallback and then wants ~17 GB free on the store drive)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-gwen-model.ps1
 
 # later: turn the gate on/off and the venue 1:2 in Settings (applies live)
@@ -101,8 +105,15 @@ python scripts/gwen_finetune_dataset.py
 ```
 
 Storage note: Ollama's model store lives at `E:\ollama-models`
-(`OLLAMA_MODELS` user env var) because the system drive is full — the
-import writes a full-precision GGUF (~9 GB) before quantizing.
+(`OLLAMA_MODELS` user env var) because the system drive runs at 99%.
+Import saga (2026-10-22, six attempts): the safetensors pipeline always
+dies in its `verifying conversion` stage with *"not enough space on the
+disk"* at ~30 GB used **with 8 GB free** — and a plain user write fills
+the very same volume to the last byte, so the stage's demand (not the
+volume) is what breaks. The register script therefore imports **from the
+already-converted f16 GGUF blob** (content-addressed store: no convert,
+no verify, ~0 extra disk); scratch lands on the store drive too, never
+on C:.
 
 ## Journal rows
 

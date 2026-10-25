@@ -6,13 +6,15 @@ using DongGfx.Core.Fx;
 
 namespace DongGfx.App.Services;
 
-/// <summary>The GWEN brain's transport: a loopback-only client for the local
-/// Ollama server running the forex-tuned Qwen model (imported as gwen-fx —
-/// see scripts/register-gwen-model.ps1 and docs/gwen-brain.md).
+/// <summary>The GWEN brain's transport: a loopback-only client for the
+/// desk's OWN model host (DongGfx.GwenHost — Qwen3.5-4B through
+/// llama.cpp/LLamaSharp, shipped and supervised by this app; no
+/// third-party software on the machine — see docs/gwen-brain.md).
 ///
 /// Behavior contract:
 ///  - Loopback URLs only, exactly like Mt5BridgeClient — the model is a
-///    local process, never a remote endpoint.
+///    local process, never a remote endpoint. Infinite local tokens: no
+///    provider, quota, or meter anywhere in the path.
 ///  - Fail-NEUTRAL: any error (server down, model unloaded, malformed
 ///    reply) yields a null verdict and the desk trades as if GWEN did not
 ///    exist. A missing LLM must never become an unexplained trading halt.
@@ -26,14 +28,21 @@ public sealed class GwenBrainClient : IDisposable
 {
     public const string DefaultModel = "gwen-fx";
 
-    /// <summary>The Ollama server's default loopback endpoint.</summary>
-    public static Uri DefaultUri { get; } = new("http://127.0.0.1:11434/");
+    /// <summary>The built-in host's default loopback endpoint (kept off
+    /// Ollama's old 11434 so a stray third-party daemon can never answer
+    /// for GWEN).</summary>
+    public static Uri DefaultUri { get; } = new("http://127.0.0.1:11435/");
 
-    /// <summary>Generous by local standards: the FIRST request pays the
-    /// model load (a few GB off disk into RAM), later ones are plain
-    /// generation. An expired timeout is a null verdict, never an error.
-    /// </summary>
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(180);
+    /// <summary>Sized from MEASURED latency on this desk (2026-10-23,
+    /// Q4_K_M under the desk's normal load): 406 s warm (model resident),
+    /// 628 s cold (fresh host pays the 2.5 GB load — llama-bench ceiling on
+    /// this CPU is ~1.9 t/s prompt eval / ~0.8 t/s generation, so minutes
+    /// per verdict is this hardware's floor). 720 s covers cold with
+    /// contention margin; anything slower is a null verdict, never an
+    /// error (fail-neutral — the desk trades as if GWEN never spoke).
+    /// Worst-case inline wait for the brain cycle is bounded by this
+    /// number, and only on a cache miss behind a qualifying signal.</summary>
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(720);
 
     /// <summary>How long the model stays resident in RAM after a call. Idle
     /// desk → the RAM comes back; active desk → no reload penalty.</summary>
@@ -44,6 +53,7 @@ public sealed class GwenBrainClient : IDisposable
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
     private readonly TimeSpan _timeout;
+    private readonly GwenHostSupervisor? _supervisor;
     private readonly object _gate = new();
     private readonly Dictionary<string, (FxGwenVerdict Verdict, DateTimeOffset At)> _cache = new();
 
@@ -58,6 +68,15 @@ public sealed class GwenBrainClient : IDisposable
     public GwenBrainClient(Uri baseAddress)
         : this(new HttpClient(), baseAddress, DefaultTimeout, ownsHttp: true)
     {
+    }
+
+    /// <summary>The desk's wire-up: the host supervisor makes sure the
+    /// built-in model process exists before each inference attempt (and
+    /// restarts it after a fault — the model can crash; the desk cannot).</summary>
+    public GwenBrainClient(Uri baseAddress, GwenHostSupervisor supervisor)
+        : this(new HttpClient(), baseAddress, DefaultTimeout, ownsHttp: true)
+    {
+        _supervisor = supervisor;
     }
 
     /// <summary>Test seam: an injected handler (the loopback stub servers the
@@ -97,6 +116,13 @@ public sealed class GwenBrainClient : IDisposable
 
         try
         {
+            // Best-effort host supervision (cache miss only): if the host
+            // cannot be (re)started the POST fails fast and this returns
+            // null — the fail-neutral contract holds either way.
+            if (_supervisor is not null)
+            {
+                await _supervisor.EnsureAsync(ct).ConfigureAwait(false);
+            }
             var prompt = FxGwenAdvisor.BuildPrompt(req);
             var sw = Stopwatch.StartNew();
             var reply = await PostChatAsync(prompt, ct).ConfigureAwait(false);
