@@ -805,6 +805,16 @@ public partial class App : System.Windows.Application
         var analyst = provider.GetRequiredService<JournalAnalystService>();
         analyst.AnalystEnabledToggle = () => settingsFactory().AnalystEnabled;
         analyst.MemoryEnabledToggle = () => settingsFactory().AnalystMemoryEnabled;
+
+        // GWEN host ensure: the built-in model host starts on demand, so
+        // every LLM consumer must be able to bring it up before calling —
+        // otherwise each call into a not-yet-started host templates
+        // (observed 2026-10-26: the first analyst tick after start hit a
+        // dead port; the FX gate's GwenBrainClient already does this for
+        // itself, these two services now do it too).
+        var gwenEnsure = () => provider.GetRequiredService<GwenHostSupervisor>().EnsureAsync();
+        analyst.EnsureLlmAsync = gwenEnsure;
+        provider.GetRequiredService<RiskNarratorService>().EnsureLlmAsync = gwenEnsure;
         analyst.Start();
 
         // The risk narrator is event-driven (no Start); wire its live toggle.

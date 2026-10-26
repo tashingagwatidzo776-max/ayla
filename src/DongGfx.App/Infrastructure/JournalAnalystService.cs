@@ -165,7 +165,8 @@ public sealed class AnalystMemory
 ///
 /// LLM endpoint comes from the environment (TF_LLM_BASE_URL, TF_LLM_MODEL,
 /// TF_LLM_API_KEY) so no secret ever lands in settings.json. Defaults point
-/// at the local Ollama daemon (http://127.0.0.1:11434/v1, model qwen3:0.6b).
+/// at the desk's built-in GWEN host (http://127.0.0.1:11435/v1, model
+/// gwen-fx), which starts on demand — see EnsureLlmAsync.
 /// </summary>
 public sealed class JournalAnalystService : IDisposable
 {
@@ -189,6 +190,15 @@ public sealed class JournalAnalystService : IDisposable
     public Func<string?>? BaseUrlOverride { get; set; }
     public Func<string?>? ModelOverride { get; set; }
     public Func<string?>? ApiKeyOverride { get; set; }
+
+    /// <summary>Brings the LLM endpoint up before a call. The GWEN host is
+    /// spawn-on-demand (GwenHostSupervisor), so without this a call into a
+    /// not-yet-started host is a guaranteed failure and EVERY narrative
+    /// degrades to the template — observed 2026-10-26: the first analyst
+    /// tick after start hit a dead port and templated. Returns false when
+    /// the endpoint could not be brought up (the caller then skips the HTTP
+    /// attempt entirely). Null = call as-is (tests, external tools).</summary>
+    public Func<Task<bool>>? EnsureLlmAsync { get; set; }
 
     /// <summary>Prediction-memory state. Tests point this at a temp file.</summary>
     public AnalystMemory Memory { get; }
@@ -409,6 +419,14 @@ public sealed class JournalAnalystService : IDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            if (EnsureLlmAsync is { } ensure && !await ensure().ConfigureAwait(false))
+            {
+                // Supervisor could not start the host (missing exe/GGUF, spawn
+                // failure, backoff). Skip the doomed HTTP attempt — the catch
+                // below logs the reason and templates.
+                throw new InvalidOperationException("GWEN host unavailable (supervisor could not start it)");
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/chat/completions");
             if (!string.IsNullOrEmpty(ApiKey))
             {
@@ -427,7 +445,12 @@ public sealed class JournalAnalystService : IDisposable
                 max_tokens = 200
             });
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            // The desk's standard LLM budget (GwenBrainClient.DefaultTimeout):
+            // the host loads the model lazily INSIDE the first chat — measured
+            // on this desk 2026-10-25 (gwen_bench): cold 781 s, warm ~245 s.
+            // The old 20 s bound could never survive that, so even a spawned
+            // host templated every narrative.
+            using var cts = new CancellationTokenSource(Services.GwenBrainClient.DefaultTimeout);
             using var response = await _http.SendAsync(request, cts.Token);
             if (!response.IsSuccessStatusCode)
             {

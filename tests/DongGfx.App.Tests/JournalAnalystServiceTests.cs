@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -116,6 +117,79 @@ public class JournalAnalystServiceTests : IDisposable
         var narrative = await service.AnalyzeOnceAsync();
         Assert.NotNull(narrative);
         Assert.StartsWith("📊", narrative);
+    }
+
+    /// <summary>Records every LLM attempt and answers with a canned
+    /// completion — the probe that proves whether the ensure hook let the
+    /// call reach HTTP at all.</summary>
+    private sealed class LlmProbe : HttpMessageHandler
+    {
+        public readonly List<string> Order = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Order.Add("http");
+            var json = JsonSerializer.Serialize(new
+            {
+                choices = new[] { new { message = new { content = "Session was orderly." } } }
+            });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    [Fact]
+    public async Task EnsureHook_Unavailable_SkipsHttpAndTemplates()
+    {
+        // The GWEN host is spawn-on-demand: when the supervisor cannot
+        // bring it up, the analyst must NOT burn a doomed HTTP attempt —
+        // it degrades straight to the template (the 2026-10-26 production
+        // bug was the opposite: a guaranteed-dead port, every time).
+        Seed(("FX_DECISION", "cycle ok"));
+        var probe = new LlmProbe();
+        var service = new JournalAnalystService(_journal, _webhook,
+            http: new HttpClient(probe),
+            memory: new AnalystMemory(_memoryPath))
+        {
+            BaseUrlOverride = () => DeadLlmUrl,
+            EnsureLlmAsync = () => Task.FromResult(false),
+        };
+
+        var narrative = await service.AnalyzeOnceAsync();
+
+        Assert.NotNull(narrative);
+        Assert.StartsWith("📊", narrative);      // template, never reached HTTP
+        Assert.Empty(probe.Order);
+        _journal.Flush();
+        var call = _journal.GetRecent(null, 50).Single(e => e.Category == "AI_CALL");
+        Assert.Contains("template", call.Details);
+    }
+
+    [Fact]
+    public async Task EnsureHook_Available_RunsBeforeLlmCall()
+    {
+        Seed(("FX_DECISION", "cycle ok: {\"Symbol\":\"EURUSD\"}"));
+        var probe = new LlmProbe();
+        var service = new JournalAnalystService(_journal, _webhook,
+            http: new HttpClient(probe),
+            memory: new AnalystMemory(_memoryPath))
+        {
+            BaseUrlOverride = () => DeadLlmUrl,
+            EnsureLlmAsync = () =>
+            {
+                probe.Order.Add("ensure");
+                return Task.FromResult(true);
+            },
+        };
+
+        var narrative = await service.AnalyzeOnceAsync();
+
+        Assert.NotNull(narrative);
+        Assert.StartsWith("🤖", narrative);      // endpoint up → real narration
+        Assert.Equal(new[] { "ensure", "http" }, probe.Order);
     }
 
     [Fact]
