@@ -295,8 +295,20 @@ def test_run_alpha_lists_winners_and_suppresses_the_rest():
 
 
 def test_run_alpha_no_ticks_no_crash():
+    """A missing tick dir reports 'no tick archives' - and must never
+    reach the REAL propose.py: run_alpha shells out to it (REPO-relative)
+    before the tick check, and against the real repo that spawns the
+    real GWEN host and runs up to 15 minutes of real inference. Swapping
+    REPO to this temp root keeps the test deterministic and fast (the
+    missing script under the temp root makes propose a quick no-op)."""
     with tempfile.TemporaryDirectory() as tmp:
-        lines, finding = soak_evening.run_alpha(pathlib.Path(tmp) / "absent")
+        root = pathlib.Path(tmp)
+        real_repo = soak_evening.REPO
+        try:
+            soak_evening.REPO = root                         # type: ignore[assignment]
+            lines, finding = soak_evening.run_alpha(root / "absent")
+        finally:
+            soak_evening.REPO = real_repo                    # type: ignore[assignment]
         assert finding == "" and any("no tick archives" in ln for ln in lines)
 
 

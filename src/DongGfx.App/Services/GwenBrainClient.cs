@@ -33,16 +33,19 @@ public sealed class GwenBrainClient : IDisposable
     /// for GWEN).</summary>
     public static Uri DefaultUri { get; } = new("http://127.0.0.1:11435/");
 
-    /// <summary>Sized from MEASURED latency on this desk (2026-10-23,
-    /// Q4_K_M under the desk's normal load): 406 s warm (model resident),
-    /// 628 s cold (fresh host pays the 2.5 GB load — llama-bench ceiling on
-    /// this CPU is ~1.9 t/s prompt eval / ~0.8 t/s generation, so minutes
-    /// per verdict is this hardware's floor). 720 s covers cold with
-    /// contention margin; anything slower is a null verdict, never an
+    /// <summary>Sized from MEASURED latency on this desk (2026-10-25
+    /// bench, Q4_K_M, published host): cold 781 s (a fresh process pages
+    /// the model in), warm ~245 s — llama-bench ceiling on this CPU is
+    /// ~1.9 t/s prompt eval / ~0.8 t/s generation, so minutes per verdict
+    /// is this hardware's floor. 880 s is the first value that covers the
+    /// measured cold: the old 720 s timed out at exactly 720 s on the
+    /// 2026-10-26 restart (two fail-open verdicts while the model warmed)
+    /// — while staying under the host's 900 s GenerationDeadline so OUR
+    /// timeout fires first. Anything slower is a null verdict, never an
     /// error (fail-neutral — the desk trades as if GWEN never spoke).
     /// Worst-case inline wait for the brain cycle is bounded by this
     /// number, and only on a cache miss behind a qualifying signal.</summary>
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(720);
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(880);
 
     /// <summary>How long the model stays resident in RAM after a call. Idle
     /// desk → the RAM comes back; active desk → no reload penalty.</summary>

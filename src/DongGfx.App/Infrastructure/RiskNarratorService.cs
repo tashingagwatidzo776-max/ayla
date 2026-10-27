@@ -70,6 +70,15 @@ public sealed class RiskNarratorService : IDisposable
             ConnectTimeout = TimeSpan.FromSeconds(5)
         });
         _ownsHttpClient = http is null;
+        if (_ownsHttpClient)
+        {
+            // HttpClient's 100 s default would abort every real halt
+            // narration before the WaitAsync budget could matter (warm
+            // gwen-fx replies measure 245-406 s on this desk). Own clients
+            // get the desk's standard LLM budget; injected ones (tests)
+            // keep what they arrived with.
+            _http.Timeout = Services.GwenBrainClient.DefaultTimeout;
+        }
         _journal.EntryAdded += OnEntryAdded;
     }
 

@@ -222,6 +222,15 @@ public sealed class JournalAnalystService : IDisposable
             ConnectTimeout = TimeSpan.FromSeconds(5)
         });
         _ownsHttpClient = http is null;
+        if (_ownsHttpClient)
+        {
+            // HttpClient's 100 s default would abort every REAL narration
+            // before the request cts could matter: warm gwen-fx replies
+            // measure 245-406 s on this desk (2026-10-25 bench). The client
+            // we construct gets the desk's standard LLM budget instead;
+            // injected clients (tests) keep whatever they arrived with.
+            _http.Timeout = Services.GwenBrainClient.DefaultTimeout;
+        }
         Memory = memory ?? new AnalystMemory();
     }
 

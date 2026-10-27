@@ -213,7 +213,7 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
         proposals_dir.mkdir(parents=True)
     before = {p.name for p in proposals_dir.glob("PROP-*.json")}
     # None (missing script, hung daemon, timed out) -> proceed with what exists
-    r = run_bounded([sys.executable, str(ai / "propose.py")], 600)
+    r = run_bounded([sys.executable, str(ai / "propose.py")], 920)  # > call_llm's own 860 s budget
     new = {p.name for p in proposals_dir.glob("PROP-*.json")} - before
     lines.append(f"- propose.py: {'+' + str(len(new)) + ' new proposal(s)' if new else 'no new proposal'}"
                  + ("" if r is not None and r.returncode == 0 else " (propose unavailable or failed)"))
