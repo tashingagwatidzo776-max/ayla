@@ -65,6 +65,17 @@ function Get-App {
       Where-Object { -not $_.HasExited })
 }
 
+# The GWEN model host runs FROM the app dir and keeps its own exe, the
+# llama DLLs and its .pdb open while warm - so every deploy with a live
+# host dies with robocopy exit 11 (observed 2026-10-27 08:03: the
+# handle poll watches only DongGfx.exe, which was already free, so the
+# retry could never clear). Headless server: no main window, force-stop
+# it directly; the in-app supervisor respawns it on the next consult.
+function Get-HostProc {
+  @(Get-Process -Name DongGfx.GwenHost -ErrorAction SilentlyContinue |
+      Where-Object { -not $_.HasExited })
+}
+
 # --- 0. validate inputs -------------------------------------------------
 $Source = (Resolve-Path -LiteralPath $Source -ErrorAction Stop).Path
 if (-not (Test-Path (Join-Path $Source 'DongGfx.exe'))) {
@@ -97,6 +108,9 @@ try {
   # ERRORS are logged - the 2026-10-08 02:16 abort swallowed them and
   # left 'app still running' unexplained.
   for ($i = 0; $i -lt 3; $i++) {
+    foreach ($h in Get-HostProc) {
+      Stop-Process -Id $h.Id -Force -ErrorAction SilentlyContinue
+    }
     $procs = Get-App
     if ($procs.Count -eq 0) { break }
     if ($i -eq 0) {
@@ -117,17 +131,18 @@ try {
   # Settle poll: a graceful close (or a slow force) can take a few more
   # seconds; the hard gate is ZERO processes before the binary swap.
   for ($i = 0; $i -lt 8; $i++) {
-    if ((Get-App).Count -eq 0) { break }
+    if ((Get-App).Count -eq 0 -and (Get-HostProc).Count -eq 0) { break }
     Start-Sleep -Seconds 2
   }
   $left = Get-App
-  if ($left.Count -gt 0) {
+  $leftHosts = Get-HostProc
+  if ($left.Count -gt 0 -or $leftHosts.Count -gt 0) {
     # finally re-enables the keep-alive -> previous binary comes back
-    Note ("abort: app still running after stop passes (PIDs " + (($left.Id) -join ',') + ") - keep-alive re-enabled, it will recover the old build")
+    Note ("abort: processes still running after stop passes (DongGfx PIDs " + (($left.Id) -join ',') + "; GwenHost PIDs " + (($leftHosts.Id) -join ',') + ") - keep-alive re-enabled, it will recover the old build")
     $failed = $true
     exit 1
   }
-  Note "app stopped (0 DongGfx processes)"
+  Note "app stopped (0 DongGfx / GwenHost processes)"
 
   # --- 3. backup ---------------------------------------------------------
   if (-not $NoBackup) {
