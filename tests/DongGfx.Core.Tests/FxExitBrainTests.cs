@@ -28,9 +28,67 @@ public class FxExitBrainTests
     private static FxExitDecision Eval(
         FxPositionState st, double price, double atr = 1.0, double median = 1.0,
         double spread = 20, FxRegime current = FxRegime.Trend, FxRegime entry = FxRegime.Trend,
-        IReadOnlyList<FxBar>? bars = null) =>
+        IReadOnlyList<FxBar>? bars = null, FxExitTuning? tuning = null) =>
         FxExitBrain.Evaluate(st, price, 0.1, atr, median, spread, 250,
-            10000, 0, true, bars ?? FlatBars(), current, entry);
+            10000, 0, true, bars ?? FlatBars(), current, entry, tuning: tuning);
+
+    // ── per-pair tuning (go-live plan Step 3) ────────────────────────────
+
+    [Fact]
+    public void PerPair_Tuning_Sets_The_Mae_Emergency_Bar_And_Null_Is_The_Constant()
+    {
+        // −1.5R of adverse excursion: UNDER the 1.6R constant bar, but
+        // PAST the pair's tightened 1.0R bar.
+        var st = LongState(entry: 2400, risk: 10);
+        var price = 2385;
+
+        var defaults = Eval(st, price);
+        Assert.Null(defaults.OverrideEngine);
+
+        var empty = Eval(st, price, tuning: new FxExitTuning());
+        Assert.Equal(defaults.OverrideEngine, empty.OverrideEngine);
+        Assert.Equal(defaults.Action, empty.Action);   // empty = the unchanged desk
+
+        var tight = Eval(st, price, tuning: new FxExitTuning(MaeEmergencyR: 1.0));
+        Assert.Equal("drawdown", tight.OverrideEngine);
+        Assert.Contains("emergency bar", tight.Reason);
+    }
+
+    [Fact]
+    public void PerPair_Tuning_Sets_The_Stagnant_Time_Stop()
+    {
+        // 30 bars held with the MFE never past 0.5R: a dead trade under
+        // the pair's 24-bar stop, still inside the 36-bar constant.
+        var st = LongState(entry: 2400, risk: 10) with { BarsHeld = 30, MfeR = 0.1 };
+        var price = 2400;   // flat — no MAE, no profit floor in play
+
+        var defaults = Eval(st, price);
+        var time = defaults.Votes.Single(v => v.Engine == "time");
+        Assert.Equal(0, time.Exit);
+        Assert.Contains("30 bars held", time.Reason);
+
+        var tuned = Eval(st, price, tuning: new FxExitTuning(MaxStagnantBars: 24));
+        var tunedTime = tuned.Votes.Single(v => v.Engine == "time");
+        Assert.True(tunedTime.Exit >= 0.6,
+            $"24-bar stop must call the 30-bar trade dead, got {tunedTime.Exit}");
+        Assert.Contains("the trade is dead", tunedTime.Reason);
+    }
+
+    [Fact]
+    public void PerPair_Tuning_Never_Weakens_A_Safety_Override()
+    {
+        // A looser pair bar (2.5R) still fires at the SAME depth when the
+        // global rules apply — tuning relaxes only what it says; the
+        // other overrides (spread, equity, bridge) are untouched.
+        var st = LongState(entry: 2400, risk: 10);
+        var loose = Eval(st, 2385, tuning: new FxExitTuning(MaeEmergencyR: 2.5));
+        Assert.Null(loose.OverrideEngine);   // 1.5R < 2.5R → no drawdown fire
+
+        var bridgeDown = FxExitBrain.Evaluate(st, 2385, 0.1, 1.0, 1.0, 20, 250,
+            10000, 0, bridgeUp: false, FlatBars(), FxRegime.Trend, FxRegime.Trend,
+            tuning: new FxExitTuning(MaeEmergencyR: 2.5));
+        Assert.Equal("bridge", bridgeDown.OverrideEngine);
+    }
 
     [Fact]
     public void Ownership_By_Comment()

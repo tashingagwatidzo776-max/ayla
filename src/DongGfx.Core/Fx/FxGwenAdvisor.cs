@@ -173,9 +173,20 @@ public static class FxGwenAdvisor
     }
 
     /// <summary>The confluence gate: does GWEND's verdict pass the proposed
-    /// side? Pure rule evaluation over an already-parsed verdict.</summary>
-    public static (bool Pass, string Reason) Evaluate(FxGwenVerdict verdict, string side)
+    /// side? Pure rule evaluation over an already-parsed verdict.
+    /// <paramref name="vetoFloor"/> (go-live plan Step 4) is the per-pair
+    /// veto floor: a verdict below this confidence cannot VETO on that pair —
+    /// it is recorded as an abstention and the gate passes, which is the
+    /// fail-neutral direction (calibration may only ever loosen a veto to
+    /// the floor's level, never invent a refusal GWEN did not make).
+    /// Null = the thresholds above apply exactly as before.</summary>
+    public static (bool Pass, string Reason) Evaluate(FxGwenVerdict verdict, string side, int? vetoFloor = null)
     {
+        if (vetoFloor is { } floor && verdict.Confidence < floor)
+        {
+            return (true, $"GWEN {verdict.Bias} {verdict.Confidence} below this pair's veto floor {floor} — advisory abstention, no veto");
+        }
+
         var isBuy = string.Equals(side, "buy", StringComparison.OrdinalIgnoreCase);
         var agrees = verdict.Bias switch
         {

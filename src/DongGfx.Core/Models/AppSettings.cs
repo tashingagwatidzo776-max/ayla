@@ -100,8 +100,26 @@ public sealed class AppSettings
 
     /// <summary>CSV of MT5 symbols the FX brain runs (one engine each).
     /// Falls back to FxSymbol when empty; unknown symbols degrade to a
-    /// skipped cycle, never an error.</summary>
-    public string FxSymbols { get; set; } = "XAUUSDmicro,EURUSD,GBPUSD,USDJPY";
+    /// skipped cycle, never an error. Trimmed to the metal pairs with a
+    /// measured edge (go-live plan Step 1, 2026-10-27/28): EURUSD/GBPUSD
+    /// have never produced a signal (daily dead-tape veto) and would only
+    /// block the all-or-nothing paper-soak badge; they return with evidence.
+    /// XAGUSDmicro is the venue's micro silver (present in Market Watch,
+    /// 2026-10-28) — it rides alongside XAGUSD with its own calibration.</summary>
+    public string FxSymbols { get; set; } = "XAUUSDmicro,XAGUSD,XAGUSDmicro";
+
+    /// <summary>Per-pair calibration spec (go-live plan Steps 3-4): each
+    /// pair's own exit bars, entry floor, session window, GWEN veto floor,
+    /// sizing and venue TP. Semicolon-separated pairs, comma-separated
+    /// knobs — see <see cref="DongGfx.Core.Fx.FxPairCalibration"/> for the
+    /// grammar and clamps. Default seeds the two exit-calibration values
+    /// the exit-weekly digest evidence called for: gold's drawdown
+    /// override tightened (1.6R → 1.3R — stop closing winners at max
+    /// pain) and silver's time stop shortened (36 → 24 bars — the same
+    /// bar for the micro silver, one calibration per metal). Empty = all
+    /// pairs on the brain's global constants (the pre-calibration desk).</summary>
+    public string FxPairCalibration { get; set; } =
+        "XAUUSDmicro:mae=1.3;XAGUSD:bars=24;XAGUSDmicro:bars=24";
 
     /// <summary>Total open lots across ALL FX-brain symbols (0 = disabled).
     /// The portfolio veto refuses any order that would exceed it.</summary>

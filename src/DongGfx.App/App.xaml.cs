@@ -428,6 +428,21 @@ public partial class App : System.Windows.Application
         // GWEN confluence gate: armed from settings on every launch/save —
         // the local Qwen model may veto dispatches only while this is on,
         // and an unavailable model fails neutral (journal says so once).
+        // Per-pair calibration (go-live plan Steps 3-4): parse once per
+        // launch/save; every host consults its symbol's entry at each gate
+        // (entry floor, session window, GWEN veto floor, sizing, venue TP,
+        // exit bars). The parse is tolerant — a malformed entry falls to
+        // that pair's defaults — and an empty spec is the pre-calibration
+        // desk, so this can never fail a boot.
+        Services.FxEngineHost.PairCalibration =
+            Core.Fx.FxPairCalibration.Parse(settings.FxPairCalibration);
+        if (Services.FxEngineHost.PairCalibration.Count > 0)
+        {
+            provider.GetRequiredService<TradeJournal>().Log(Guid.Empty, "FX_MODE",
+                $"per-pair calibration active — {string.Join(", ", Services.FxEngineHost.PairCalibration.Keys)} " +
+                "(pair gates: entry floor, session window, GWEN veto floor, sizing, venue TP, exit bars)",
+                "{}");
+        }
         Services.FxEngineHost.GwenConfluenceEnabled = settings.GwenConfluenceArmed;
         // Venue-side 1:2: the brain's own orders carry the reward target the
         // operator actually closes at (0 = disarmed → the exit brain alone,

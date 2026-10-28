@@ -186,4 +186,30 @@ public class FxGwenAdvisorTests
         Assert.Contains("1:2", FxGwenAdvisor.Evaluate(V("long", 80, rrOk: false), "buy").Reason);
         Assert.Contains("concurs", FxGwenAdvisor.Evaluate(V("long", 70), "buy").Reason);
     }
+
+    // ── per-pair veto floor (go-live plan Step 4) ──────────────────────
+
+    [Fact]
+    public void Evaluate_Pair_Veto_Floor_Binds_Above_It_And_Abstains_Below()
+    {
+        // At/above the floor the verdict binds exactly as before.
+        Assert.False(FxGwenAdvisor.Evaluate(V("short", 90), "buy", vetoFloor: 80).Pass);
+
+        // Below the floor GWEN abstains on THIS pair: a low-confidence
+        // opposition is advisory, never a veto — the fail-neutral
+        // direction (calibration may loosen to the floor, never invent a
+        // refusal GWEN did not make).
+        var (pass, reason) = FxGwenAdvisor.Evaluate(V("short", 90), "buy", vetoFloor: 95);
+        Assert.True(pass);
+        Assert.Contains("veto floor 95", reason);
+        Assert.Contains("abstention", reason);
+    }
+
+    [Fact]
+    public void Evaluate_Without_A_Pair_Floor_Is_The_Unchanged_Matrix()
+    {
+        Assert.False(FxGwenAdvisor.Evaluate(V("short", 90), "buy").Pass);   // opposed, confident
+        Assert.True(FxGwenAdvisor.Evaluate(V("short", 44), "buy").Pass);    // opposed, unsure
+        Assert.False(FxGwenAdvisor.Evaluate(V("flat", 60), "buy").Pass);    // flat, quiet read
+    }
 }

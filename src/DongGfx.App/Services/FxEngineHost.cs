@@ -885,16 +885,42 @@ public sealed class FxEngineHost : IDisposable
                     return;
                 }
 
-                if (decision.Signal.Confidence < MinEntryConfidence)
+                // Per-pair floor (Step 4): a pair may demand more of its
+                // own signals than the global dial — null falls to global.
+                var minConf = Pair.MinConfidence ?? MinEntryConfidence;
+                var pairFloorNote = Pair.MinConfidence is { } pf ? $" (pair floor {pf:0.00})" : "";
+                if (decision.Signal.Confidence < minConf)
                 {
                     Journal("FX_ORDER",
-                        $"confidence gate — {decision.Signal.Alpha} conf {decision.Signal.Confidence:0.00} < min {MinEntryConfidence:0.00}, not dispatched",
+                        $"confidence gate — {decision.Signal.Alpha} conf {decision.Signal.Confidence:0.00} < min {minConf:0.00}{pairFloorNote}, not dispatched",
                         System.Text.Json.JsonSerializer.Serialize(new
                         {
                             Symbol,
                             Alpha = decision.Signal.Alpha,
                             Confidence = FxJson.Sanitize(decision.Signal.Confidence),
-                            MinEntryConfidence,
+                            MinEntryConfidence = minConf,
+                            PairFloor = Pair.MinConfidence,
+                        }));
+                    return;
+                }
+
+                // Per-pair session window (Step 4): wall-clock dispatch
+                // window for THIS pair (UTC hours, wrap supported). Same
+                // shape and placement as the gates around it — observed,
+                // journaled, not traded — and BEFORE the cooldown, so an
+                // out-of-window signal never consumes the dispatch window
+                // a qualifying one would.
+                var cal = Pair;
+                if (!cal.InSession(_clock()))
+                {
+                    Journal("FX_ORDER",
+                        $"session window — {Symbol} outside its calibrated UTC window {cal.SessionStartUtc:00}-{cal.SessionEndUtc:00} (signal {decision.Signal.Alpha} kept), not dispatched",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Symbol,
+                            Alpha = decision.Signal.Alpha,
+                            cal.SessionStartUtc,
+                            cal.SessionEndUtc,
                         }));
                     return;
                 }
@@ -978,7 +1004,7 @@ public sealed class FxEngineHost : IDisposable
             decision.Regime.Adx, decision.Regime.AtrPct, decision.Regime.SpreadPoints,
             side, signal.Alpha, signal.Confidence,
             StopPips: signal.StopDistanceHint / PipSizeOf(bars),
-            TargetR: VenueRewardTargetR > 0 ? VenueRewardTargetR : 2.0,
+            TargetR: RewardTargetRFor > 0 ? RewardTargetRFor : 2.0,
             Bars: bars);
 
         var verdict = await _gwen!.AssessAsync(req).ConfigureAwait(true);
@@ -999,7 +1025,7 @@ public sealed class FxEngineHost : IDisposable
 
         _gwenDownAnnounced = false;
         _lastGwen = verdict;
-        var (pass, reason) = Core.Fx.FxGwenAdvisor.Evaluate(verdict, side);
+        var (pass, reason) = Core.Fx.FxGwenAdvisor.Evaluate(verdict, side, Pair.GwVetoFloor);
         _lastGwenPass = pass;
         Journal("FX_GWEN",
             $"{Symbol}: {reason}",
@@ -1089,17 +1115,25 @@ public sealed class FxEngineHost : IDisposable
             return;
         }
 
-        var lots = Math.Min((double)cap, decision.SuggestedLots);
+        // Per-pair sizing (Step 4): the pair's multiplier scales the
+        // signal's suggestion and its own lot cap min's with the global
+        // cap — the global cap still bounds everything, so calibration can
+        // shape a size but can never outgrow the rails.
+        var pairCal = Pair;
+        var suggested = decision.SuggestedLots * (pairCal.SizeMult ?? 1.0);
+        var lots = Math.Min((double)cap, suggested);
+        if (pairCal.MaxLots is { } pairMaxLots)
+        {
+            lots = Math.Min(lots, pairMaxLots);
+        }
 
         // Small-account mode: one trade at a time at the venue's minimum —
         // shrink the size before anything else consumes it, so the trade's
         // real risk follows the clamp (the stop distance stays the sized
         // hint; only the lot count shrinks).
-        lots = _smallAccountClamp?.Invoke(Symbol, lots) ?? lots;
-
-        if (lots < 0.01)
+        lots = _smallAccountClamp?.Invoke(Symbol, lots) ?? lots;        if (lots < 0.01)
         {
-            Journal("FX_ORDER", $"refused: sized {decision.SuggestedLots:0.##} lots below minimum", "{}");
+            Journal("FX_ORDER", $"refused: sized {suggested:0.##} lots below minimum", "{}");
             return;
         }
 
@@ -1216,18 +1250,19 @@ public sealed class FxEngineHost : IDisposable
         // actually CLOSE near 1:2 instead of watching +2R give back. The
         // exit brain still manages anything sooner; this is the backstop.
         double? tp = null;
-        if (VenueRewardTargetR > 0 && stopDistance is { } tpDist && tpDist > 0 && anchor > 0)
+        var tpR = RewardTargetRFor;
+        if (tpR > 0 && stopDistance is { } tpDist && tpDist > 0 && anchor > 0)
         {
             var band = Math.Max(vspec.StopsLevel, 0) * Math.Max(vspec.Point, 0);
             var tpRaw = side == "buy"
-                ? anchor + VenueRewardTargetR * tpDist
-                : anchor - VenueRewardTargetR * tpDist;
+                ? anchor + tpR * tpDist
+                : anchor - tpR * tpDist;
             if (band > 0 && Math.Abs(tpRaw - anchor) < band)
             {
                 // A TP inside the venue's forbidden band would be rejected
                 // outright (invalid-stops) and take the whole order with it.
                 Journal("FX_ORDER",
-                    $"no venue take-profit — 1:{VenueRewardTargetR:0.#}R target lands inside the " +
+                    $"no venue take-profit — 1:{tpR:0.#}R target lands inside the " +
                     $"venue's {vspec.StopsLevel:0.#}-point stops band", "{}");
             }
             else
@@ -1245,7 +1280,7 @@ public sealed class FxEngineHost : IDisposable
         Journal("FX_ORDER",
             result.Ok
                 ? $"{(paperExec ? "paper-exec fill (demo): " : string.Empty)}{side} {lots:0.##} lots {Symbol} @ {result.Price:0.#####} — ticket {result.Order ?? result.Deal}"
-                    + (tp is { } tpv ? $" (venue TP {tpv:0.#####} @ 1:{VenueRewardTargetR:0.#}R)" : string.Empty)
+                    + (tp is { } tpv ? $" (venue TP {tpv:0.#####} @ 1:{tpR:0.#}R)" : string.Empty)
                 : $"{side} {lots:0.##} lots {Symbol} refused: {result.RetcodeName}",
             System.Text.Json.JsonSerializer.Serialize(new
             {
@@ -1255,7 +1290,7 @@ public sealed class FxEngineHost : IDisposable
                 // The venue-side 1:2 the trade closes at (null = disarmed or
                 // inside the venue's stops band).
                 Tp = tp,
-                TpR = tp is null ? (double?)null : VenueRewardTargetR,
+                TpR = tp is null ? (double?)null : tpR,
                 // The structural R unit the size was computed with — the
                 // restart reseed reads this back for the exit brain.
                 SizedStopDistance = Core.Fx.FxJson.Sanitize(
@@ -1422,6 +1457,26 @@ public sealed class FxEngineHost : IDisposable
     /// MinConfidence, enforced live and measured on the tape before adoption).
     /// TEST-SAFETY: process-wide static, restore in a finally block.</summary>
     public static double MinEntryConfidence { get; set; }
+
+    /// <summary>Per-pair calibration table (AppSettings.FxPairCalibration,
+    /// wired in ConfigureFromSettings on every launch/save — go-live plan
+    /// Steps 3-4). Every gate below consults its symbol's entry; an empty
+    /// table or an absent symbol falls to <c>FxPairCalibration.Default</c>
+    /// (all knobs null = the global/const path, exactly the unchanged desk).
+    /// TEST-SAFETY: process-wide static, restore in a finally block.</summary>
+    public static IReadOnlyDictionary<string, Core.Fx.FxPairCalibration> PairCalibration { get; set; } =
+        new Dictionary<string, Core.Fx.FxPairCalibration>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>This host's symbol's calibration — one case-insensitive
+    /// dictionary lookup; <c>Default</c> when the table has no opinion.</summary>
+    private Core.Fx.FxPairCalibration Pair =>
+        Core.Fx.FxPairCalibration.For(PairCalibration, Symbol);
+
+    /// <summary>The venue take-profit R that applies to THIS pair: the
+    /// pair's own tp knob (0 = deliberately disarmed for the pair) or the
+    /// global arm. Used by the GWEN prompt and the placed order alike so
+    /// the model and the venue never disagree about the geometry.</summary>
+    private double RewardTargetRFor => Pair.RewardTargetR ?? VenueRewardTargetR;
 
     /// <summary>The brain's own book: lots it currently tracks as open.
     /// A FLOOR for the portfolio exposure guard — venue reads can degrade
@@ -1775,7 +1830,11 @@ public sealed class FxEngineHost : IDisposable
                 // Paper R:R evidence: while in paper the 1:R reward target
                 // is armed, so the close accrues journal evidence before
                 // real mode trusts the rule (live stays disarmed).
-                rewardTargetR: _engine.IsLive ? 0 : PaperRewardTargetR);
+                rewardTargetR: _engine.IsLive ? 0 : PaperRewardTargetR,
+                // Per-pair bars (Step 3): this symbol's MAE emergency bar
+                // and stagnant time stop; null fields fall to the brain's
+                // constants (empty calibration = the unchanged desk).
+                tuning: Pair.ExitTuning);
 
             Journal("FX_EXIT",
                 $"{p.Symbol} #{p.Ticket}: {decision.Action} score {decision.Score:0} — {decision.Reason}",
