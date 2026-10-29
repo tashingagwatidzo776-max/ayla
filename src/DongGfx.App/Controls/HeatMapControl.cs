@@ -34,12 +34,12 @@ public sealed class HeatMapControl : FrameworkElement
     private FxHeatMap? _map;
     private double[,]? _buyShare;
 
-    // Operator zoom, second pass (2026-10-27: "zoom each heatmap by 100%
-    // so that it fits the whole panel cleanly"): the old fixed 2x center
-    // crop filled the panel but HID half the surface. LayoutImages now
-    // cover-fits — the smallest scale that fills both panel axes — so each
-    // heatmap occupies 100% of its panel with only the unavoidable aspect
-    // difference cropped, centered.
+    // Operator zoom, third pass (2026-10-28: "zoom each heatmap by 100% so
+    // that it fits the whole panel cleanly"). Cover-fit failed on thin
+    // surfaces: a 24x1 volume profile was scaled by the panel HEIGHT (~580x),
+    // so only a sliver of one row was visible. LayoutImages now stretches the
+    // grid to the panel exactly, so every surface is 100% of its panel and
+    // nothing is cropped.
 
     /// <summary>Explicit colormap from the picker; null = Auto per map.</summary>
     private FxCmapKind? _colormap;
@@ -51,14 +51,19 @@ public sealed class HeatMapControl : FrameworkElement
         Margin = new Thickness(0, 0, 0, 6),
     };
     private readonly Canvas _canvas = new() { ClipToBounds = true };
+    // Fill, not None: with Stretch.None an explicitly sized Image renders the
+    // bitmap at native pixel size (one screen pixel per cell) and CLIPS it to
+    // the layout box — the reason every heatmap showed as a tiny grid in a
+    // mostly empty panel. Fill makes LayoutImages' panel-sized box the render
+    // size; NearestNeighbor below keeps the cells crisp at fractional scales.
     private readonly Image _image = new()
     {
-        Stretch = Stretch.None,
+        Stretch = Stretch.Fill,
         SnapsToDevicePixels = true,
     };
     private readonly Image _buyImage = new()
     {
-        Stretch = Stretch.None,
+        Stretch = Stretch.Fill,
         SnapsToDevicePixels = true,
     };
     private readonly System.Windows.Shapes.Rectangle _crosshair = new()
@@ -114,7 +119,7 @@ public sealed class HeatMapControl : FrameworkElement
         };
         _canvas.SizeChanged += (_, _) => LayoutImages();
 
-        // Cover-fit scales are fractional — nearest-neighbor keeps the
+        // Panel-fill scales are fractional — nearest-neighbor keeps the
         // data cells crisp instead of smearing them across the panel.
         RenderOptions.SetBitmapScalingMode(_image, BitmapScalingMode.NearestNeighbor);
         RenderOptions.SetBitmapScalingMode(_buyImage, BitmapScalingMode.NearestNeighbor);
@@ -282,12 +287,11 @@ public sealed class HeatMapControl : FrameworkElement
         LayoutImages();
     }
 
-    /// <summary>Cover-fit the images to the canvas: the smallest scale
-    /// that fills BOTH panel axes (100% coverage, no letterbox), centered
-    /// so the surface's middle stays visible inside the clipped canvas —
-    /// nearest-neighbor keeps cells crisp at fractional scales, cells may
-    /// be slightly rectangular, honest geometry beats a data grid that
-    /// floats in a half-empty panel.</summary>
+    /// <summary>Stretch the images to the canvas exactly: 100% of the panel
+    /// on both axes, nothing cropped and nothing letterboxed. Cells become
+    /// panelW/cols by panelH/rows — nearest-neighbor keeps them crisp at
+    /// fractional scales, and a thin surface (24x1) still fills the panel
+    /// as full-height bins instead of being over-zoomed into a sliver.</summary>
     private void LayoutImages()
     {
         if (_image.Source is not WriteableBitmap bmp)
@@ -295,25 +299,18 @@ public sealed class HeatMapControl : FrameworkElement
             return;
         }
 
-        var availW = _canvas.ActualWidth > 0 ? _canvas.ActualWidth : bmp.PixelWidth;
-        var availH = _canvas.ActualHeight > 0 ? _canvas.ActualHeight : bmp.PixelHeight;
-        // Cover-fit: the smallest scale that fills BOTH panel axes. The
-        // panel is 100% covered (no letterbox), and when the aspect ratios
-        // differ only that difference is cropped — centered, so the middle
-        // of the surface stays visible inside the clipped canvas.
-        var scale = Math.Max(availW / bmp.PixelWidth, availH / bmp.PixelHeight);
-        var w = Math.Max(bmp.PixelWidth * scale, 1);
-        var h = Math.Max(bmp.PixelHeight * scale, 1);
+        // Before the first arrange pass the canvas has no size: fall back to
+        // the bitmap size, then SizeChanged re-lays it out at panel size.
+        var w = Math.Max(_canvas.ActualWidth > 0 ? _canvas.ActualWidth : bmp.PixelWidth, 1);
+        var h = Math.Max(_canvas.ActualHeight > 0 ? _canvas.ActualHeight : bmp.PixelHeight, 1);
         _image.Width = w;
         _image.Height = h;
         _buyImage.Width = w;
         _buyImage.Height = h;
-        var left = w > availW ? -(w - availW) / 2.0 : 0.0;
-        var top = h > availH ? -(h - availH) / 2.0 : 0.0;
-        Canvas.SetLeft(_image, left);
-        Canvas.SetTop(_image, top);
-        Canvas.SetLeft(_buyImage, left);
-        Canvas.SetTop(_buyImage, top);
+        Canvas.SetLeft(_image, 0);
+        Canvas.SetTop(_image, 0);
+        Canvas.SetLeft(_buyImage, 0);
+        Canvas.SetTop(_buyImage, 0);
     }
 
     private void OnCanvasMouseMove(object sender, MouseEventArgs e)
@@ -331,8 +328,8 @@ public sealed class HeatMapControl : FrameworkElement
             return;
         }
 
-        // Zoomed images are centered (negative origin): map the pointer
-        // back through the same offset the layout applied.
+        // The image sits at the canvas origin (stretch-to-panel), so the
+        // pointer maps straight through the per-cell size.
         var originX = Canvas.GetLeft(_image);
         var originY = Canvas.GetTop(_image);
         var x = pos.X - originX;

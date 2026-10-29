@@ -978,21 +978,21 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                             <TextBox Text="{Binding ModifyTp, UpdateSourceTrigger=PropertyChanged}" Width="80" Padding="4,3"
                                                      ToolTip="New take profit (empty = keep)" />
                                             <Button Content="Modify selected" Command="{Binding ModifyMt5PositionCommand}"
-                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    CommandParameter="{Binding SelectedItem.Mt5Ticket, ElementName=TradeGrid}"
                                                     Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
                                                     ToolTip="Apply SL/TP to the selected MT5 position" />
                                             <TextBlock Text="Lots" VerticalAlignment="Center" Margin="16,0,4,0" FontSize="11" />
                                             <TextBox Text="{Binding PartialCloseLots, UpdateSourceTrigger=PropertyChanged}" Width="70" Padding="4,3"
                                                      ToolTip="Lots to close partially (e.g. 0.1)" />
                                             <Button Content="Partial close" Command="{Binding PartialCloseMt5PositionCommand}"
-                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    CommandParameter="{Binding SelectedItem.Mt5Ticket, ElementName=TradeGrid}"
                                                     Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
                                                     ToolTip="Close part of the selected MT5 position" />
                                             <TextBlock Text="1 :" VerticalAlignment="Center" Margin="16,0,4,0" FontSize="11" />
                                             <TextBox Text="{Binding RiskRewardRatio, UpdateSourceTrigger=PropertyChanged}" Width="34" Padding="4,3"
                                                      ToolTip="Reward-to-risk ratio the Close 1:R button arms (2 = 1:2). Change it here." />
                                             <Button Content="Arm TP 1:R" Command="{Binding CloseAtRiskRewardCommand}"
-                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    CommandParameter="{Binding SelectedItem.Mt5Ticket, ElementName=TradeGrid}"
                                                     Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
                                                     ToolTip="Set the selected position's take-profit at the configured reward-to-risk multiple of its stop (default 1:2). Arms the TP the venue fills — the 1:2 reward is banked without watching the screen." />
                                             <TextBlock Text="{Binding Mt5OrderStatus}" VerticalAlignment="Center" Margin="12,0,0,0"
