@@ -112,6 +112,14 @@ public partial class App : System.Windows.Application
 
         // MT5 bridge + FX brain plumbing.
         services.AddSingleton<Mt5BridgeClient>();
+        // GWEN: the desk's OWN confluence analyst (advisory veto over the
+        // brain's dispatches; loopback-only, fail-neutral). The supervisor
+        // keeps the built-in model host process alive; a model crash can
+        // never take this app down — it degrades to "no verdict".
+        services.AddSingleton<GwenHostSupervisor>();
+        services.AddSingleton(sp => new GwenBrainClient(
+            GwenBrainClient.DefaultUri,
+            sp.GetRequiredService<GwenHostSupervisor>()));
         services.AddSingleton<TickArchive>();
         services.AddSingleton<MetricsCollector>();
         services.AddSingleton(sp =>
@@ -260,7 +268,10 @@ public partial class App : System.Windows.Application
                     // fed to every engine as a bounded confidence tilt. It
                     // re-ranks an alpha's already-computed confidence; it can
                     // never place, size, or schedule anything.
-                    memory: sp.GetRequiredService<FxBrainMemory>());
+                    memory: sp.GetRequiredService<FxBrainMemory>(),
+                    // GWEN: one shared local-model client for the four
+                    // symbols' confluence gates (advisory veto only).
+                    gwen: sp.GetRequiredService<GwenBrainClient>());
             },
             // The real-money session unlock panel's arm action: latch the
             // shared gate AND write the audit row the journal formats as
@@ -407,12 +418,50 @@ public partial class App : System.Windows.Application
         // on every launch/save. 0 = off (the historical behavior); a positive
         // value journals one startup row so the operator sees the floor.
         Services.FxEngineHost.MinEntryConfidence =
-            Math.Clamp(settings.FxMinEntryConfidence, 0, 1);
-        if (Services.FxEngineHost.MinEntryConfidence > 0)
+            Math.Clamp(settings.FxMinEntryConfidence, 0, 1);        if (Services.FxEngineHost.MinEntryConfidence > 0)
         {
             provider.GetRequiredService<TradeJournal>().Log(Guid.Empty, "FX_MODE",
-                $"entry confidence gate active at {Services.FxEngineHost.MinEntryConfidence:0.00} — "
-                + "lower-confidence signals are journaled but not dispatched",
+                $"entry confidence gate active at {Services.FxEngineHost.MinEntryConfidence:0.00} — " +
+                "lower-confidence signals are journaled but not dispatched",
+                "{}");
+        }
+        // GWEN confluence gate: armed from settings on every launch/save —
+        // the local Qwen model may veto dispatches only while this is on,
+        // and an unavailable model fails neutral (journal says so once).
+        // Per-pair calibration (go-live plan Steps 3-4): parse once per
+        // launch/save; every host consults its symbol's entry at each gate
+        // (entry floor, session window, GWEN veto floor, sizing, venue TP,
+        // exit bars). The parse is tolerant — a malformed entry falls to
+        // that pair's defaults — and an empty spec is the pre-calibration
+        // desk, so this can never fail a boot.
+        Services.FxEngineHost.PairCalibration =
+            Core.Fx.FxPairCalibration.Parse(settings.FxPairCalibration);
+        if (Services.FxEngineHost.PairCalibration.Count > 0)
+        {
+            provider.GetRequiredService<TradeJournal>().Log(Guid.Empty, "FX_MODE",
+                $"per-pair calibration active — {string.Join(", ", Services.FxEngineHost.PairCalibration.Keys)} " +
+                "(pair gates: entry floor, session window, GWEN veto floor, sizing, venue TP, exit bars)",
+                "{}");
+        }
+        Services.FxEngineHost.GwenConfluenceEnabled = settings.GwenConfluenceArmed;
+        // Venue-side 1:2: the brain's own orders carry the reward target the
+        // operator actually closes at (0 = disarmed → the exit brain alone,
+        // exactly the pre-2026-10-22 behavior).
+        Services.FxEngineHost.VenueRewardTargetR = settings.FxVenueRrTpArmed
+            ? Services.FxEngineHost.VenueRewardTargetDefaultR
+            : 0;
+        if (settings.GwenConfluenceArmed)
+        {
+            provider.GetRequiredService<TradeJournal>().Log(Guid.Empty, "FX_MODE",
+                $"GWEN confluence gate armed ({GwenBrainClient.DefaultModel} via the built-in in-app model host) — " +
+                "the local model may veto dispatches; an unavailable model trades as usual",
+                "{}");
+        }
+        if (settings.FxVenueRrTpArmed)
+        {
+            provider.GetRequiredService<TradeJournal>().Log(Guid.Empty, "FX_MODE",
+                $"venue take-profit armed at 1:{Services.FxEngineHost.VenueRewardTargetDefaultR:0.#}R " +
+                "on brain-placed orders — winners bank at the target on the venue itself",
                 "{}");
         }
         // The operator-armed plan-% override (dashboard one-click arm): clamp
@@ -771,6 +820,16 @@ public partial class App : System.Windows.Application
         var analyst = provider.GetRequiredService<JournalAnalystService>();
         analyst.AnalystEnabledToggle = () => settingsFactory().AnalystEnabled;
         analyst.MemoryEnabledToggle = () => settingsFactory().AnalystMemoryEnabled;
+
+        // GWEN host ensure: the built-in model host starts on demand, so
+        // every LLM consumer must be able to bring it up before calling —
+        // otherwise each call into a not-yet-started host templates
+        // (observed 2026-10-26: the first analyst tick after start hit a
+        // dead port; the FX gate's GwenBrainClient already does this for
+        // itself, these two services now do it too).
+        var gwenEnsure = () => provider.GetRequiredService<GwenHostSupervisor>().EnsureAsync();
+        analyst.EnsureLlmAsync = gwenEnsure;
+        provider.GetRequiredService<RiskNarratorService>().EnsureLlmAsync = gwenEnsure;
         analyst.Start();
 
         // The risk narrator is event-driven (no Start); wire its live toggle.

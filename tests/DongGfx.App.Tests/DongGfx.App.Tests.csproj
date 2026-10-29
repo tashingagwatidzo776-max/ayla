@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DongGfx.App\DongGfx.App.csproj" />
+    <ProjectReference Include="..\..\src\DongGfx.GwenHost\DongGfx.GwenHost.csproj" />
   </ItemGroup>
 
 </Project>

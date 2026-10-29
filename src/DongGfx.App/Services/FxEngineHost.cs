@@ -71,6 +71,36 @@ public sealed class FxEngineHost : IDisposable
     /// is auditable evidence.</summary>
     public static double PaperRewardTargetR { get; set; }
 
+    /// <summary>The 1:2 the brain's own trades actually CLOSE at: the reward
+    /// target rides on the order as a venue-side take-profit the broker fills
+    /// even with the app closed. Operator-armed by default (2026-10-22: "make
+    /// sure we actually close to 1:2") — the exit brain still manages
+    /// anything sooner (stops, partials, overrides); the venue TP is the
+    /// backstop that banks +2R instead of watching it give back. 0 disarms.</summary>
+    public const double VenueRewardTargetDefaultR = 2.0;
+    public static double VenueRewardTargetR { get; set; } = VenueRewardTargetDefaultR;
+
+    /// <summary>GWEN confluence gate: the local Qwen model's advisory veto on
+    /// dispatched entries. Armed by default with the client; a host built
+    /// without a client simply has no gate (tests, headless rigs).</summary>
+    public static bool GwenConfluenceEnabled { get; set; } = true;
+
+    /// <summary>The most recent GWEN verdict this host heard (the account
+    /// bar's GWEN pill reads it). Null = never spoken on this host.</summary>
+    public Core.Fx.FxGwenVerdict? LastGwenVerdict => _lastGwen;
+
+    /// <summary>True when this host has a GWEN client and the gate is armed
+    /// — the pill distinguishes "armed, awaiting first verdict" from "off".</summary>
+    public bool GwenArmed => _gwen is not null && GwenConfluenceEnabled;
+
+    /// <summary>Whether the LAST verdict passed the confluence gate (null =
+    /// no verdict yet) — the pill's ✓/✗ reads it.</summary>
+    public bool? LastGwenPass => _lastGwen is null ? null : _lastGwenPass;
+
+    private Core.Fx.FxGwenVerdict? _lastGwen;
+    private bool _lastGwenPass;
+    private bool _gwenDownAnnounced;
+
     /// <summary>Paper signals this host RESTORED from the ledger when it was
     /// built (0 on a cold start). The account bar's soak pill names it, so a
     /// bar carried over from an earlier session is never mistaken for
@@ -103,6 +133,11 @@ public sealed class FxEngineHost : IDisposable
     /// <summary>Bridge equity refreshed every cycle - the engine's sizing
     /// budget reads it and fails closed at 0 while it is unknown.</summary>
     private double _lastEquity;
+
+    /// <summary>GWEN (the local Qwen confluence analyst) — optional: null on
+    /// test rigs and headless harnesses, and the desk behaves exactly as it
+    /// did before the brain existed.</summary>
+    private readonly GwenBrainClient? _gwen;
 
     /// <summary>HWARANG profit-floor memory per ticket: the floor is a
     /// one-way ratchet (never moves down, spec §16/§32), so each evaluation
@@ -414,13 +449,15 @@ public sealed class FxEngineHost : IDisposable
         string? shadowLedgerPath = null,
         PaperSoakLedger? soakLedger = null,
         Func<DateTimeOffset>? clock = null,
-        FxBrainMemory? memory = null)
+        FxBrainMemory? memory = null,
+        GwenBrainClient? gwen = null)
     {
         _cycleOffset = cycleOffset;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _preOrderVeto = preOrderVeto;
         _smallAccountClamp = smallAccountClamp;
         _newsVeto = newsVeto;
+        _gwen = gwen;
         _mt5 = mt5;
         _journal = journal;
         _webhook = webhook;
@@ -848,17 +885,55 @@ public sealed class FxEngineHost : IDisposable
                     return;
                 }
 
-                if (decision.Signal.Confidence < MinEntryConfidence)
+                // Per-pair floor (Step 4): a pair may demand more of its
+                // own signals than the global dial — null falls to global.
+                var minConf = Pair.MinConfidence ?? MinEntryConfidence;
+                var pairFloorNote = Pair.MinConfidence is { } pf ? $" (pair floor {pf:0.00})" : "";
+                if (decision.Signal.Confidence < minConf)
                 {
                     Journal("FX_ORDER",
-                        $"confidence gate — {decision.Signal.Alpha} conf {decision.Signal.Confidence:0.00} < min {MinEntryConfidence:0.00}, not dispatched",
+                        $"confidence gate — {decision.Signal.Alpha} conf {decision.Signal.Confidence:0.00} < min {minConf:0.00}{pairFloorNote}, not dispatched",
                         System.Text.Json.JsonSerializer.Serialize(new
                         {
                             Symbol,
                             Alpha = decision.Signal.Alpha,
                             Confidence = FxJson.Sanitize(decision.Signal.Confidence),
-                            MinEntryConfidence,
+                            MinEntryConfidence = minConf,
+                            PairFloor = Pair.MinConfidence,
                         }));
+                    return;
+                }
+
+                // Per-pair session window (Step 4): wall-clock dispatch
+                // window for THIS pair (UTC hours, wrap supported). Same
+                // shape and placement as the gates around it — observed,
+                // journaled, not traded — and BEFORE the cooldown, so an
+                // out-of-window signal never consumes the dispatch window
+                // a qualifying one would.
+                var cal = Pair;
+                if (!cal.InSession(_clock()))
+                {
+                    Journal("FX_ORDER",
+                        $"session window — {Symbol} outside its calibrated UTC window {cal.SessionStartUtc:00}-{cal.SessionEndUtc:00} (signal {decision.Signal.Alpha} kept), not dispatched",
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            Symbol,
+                            Alpha = decision.Signal.Alpha,
+                            cal.SessionStartUtc,
+                            cal.SessionEndUtc,
+                        }));
+                    return;
+                }
+
+                // GWEN confluence gate (advisory veto): the local Qwen model
+                // judges whether THIS proposed trade has directional confluence
+                // and a workable 1:2. Placed like the gates above — observed,
+                // journaled, not traded — and BEFORE the cooldown stamp, so a
+                // vetoed dispatch never consumes the window a qualifying one
+                // would. Unavailable model = fail-neutral: trade as usual.
+                if (_gwen is not null && GwenConfluenceEnabled &&
+                    !await GwenConfluencePassesAsync(decision, bars).ConfigureAwait(true))
+                {
                     return;
                 }
 
@@ -913,6 +988,91 @@ public sealed class FxEngineHost : IDisposable
         }
     }
 
+    /// <summary>Asks GWEN about this decision and journals the verdict.
+    /// Returns false only on an explicit veto; a missing/unparseable verdict
+    /// returns true (fail-neutral — the deterministic desks keep trading).
+    /// The verdict is cached client-side, so an unchanged market state costs
+    /// no inference.</summary>
+    private async Task<bool> GwenConfluencePassesAsync(FxDecision decision, IReadOnlyList<FxBar> bars)
+    {
+        var signal = decision.Signal!;
+        var side = signal.Direction == Core.Fx.FxDirection.Buy ? "buy" : "sell";
+
+        var req = new Core.Fx.FxGwenRequest(
+            Symbol, Timeframe,
+            decision.Regime.Session, decision.Regime.Regime.ToString(),
+            decision.Regime.Adx, decision.Regime.AtrPct, decision.Regime.SpreadPoints,
+            side, signal.Alpha, signal.Confidence,
+            StopPips: signal.StopDistanceHint / PipSizeOf(bars),
+            TargetR: RewardTargetRFor > 0 ? RewardTargetRFor : 2.0,
+            Bars: bars);
+
+        var verdict = await _gwen!.AssessAsync(req).ConfigureAwait(true);
+        if (verdict is null)
+        {
+            // Announced once per outage: an idle pill is not proof the gate
+            // is running, and a silent fail-open must be visible in the book.
+            if (!_gwenDownAnnounced)
+            {
+                _gwenDownAnnounced = true;
+                Journal("FX_GWEN",
+                    $"{Symbol}: no verdict from the local model (GWEN unavailable) — " +
+                    "confluence gate idle, trading as usual",
+                    System.Text.Json.JsonSerializer.Serialize(new { Symbol, Unavailable = true }));
+            }
+            return true;
+        }
+
+        _gwenDownAnnounced = false;
+        _lastGwen = verdict;
+        var (pass, reason) = Core.Fx.FxGwenAdvisor.Evaluate(verdict, side, Pair.GwVetoFloor);
+        _lastGwenPass = pass;
+        Journal("FX_GWEN",
+            $"{Symbol}: {reason}",
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Symbol,
+                Side = side,
+                Alpha = signal.Alpha,
+                verdict.Bias,
+                verdict.Confidence,
+                verdict.RrOk,
+                Reasons = verdict.Reasons,
+                LatencyMs = Core.Fx.FxJson.Sanitize(verdict.LatencyMs),
+                Pass = pass,
+                // The VERBATIM prompt the model was asked — the fine-tuning
+                // dataset (scripts/gwen_finetune_dataset.py) pairs this with
+                // the trade's realized R, so it must be journaled, not
+                // reconstructed later from partial rows.
+                Prompt = Core.Fx.FxGwenAdvisor.BuildPrompt(req),
+            }));
+
+        if (pass)
+        {
+            return true;
+        }
+
+        Journal("FX_ORDER",
+            $"GWEN confluence veto — {reason}, not dispatched",
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Veto = "gwen-confluence",
+                Alpha = signal.Alpha,
+                verdict.Bias,
+                verdict.Confidence,
+            }));
+        StatusChanged?.Invoke($"order refused: {reason}");
+        return false;
+    }
+
+    /// <summary>Pip size for this host's symbol, decided the same way the
+    /// engine does it (price-scaled): gold-like >100, index-like, FX.</summary>
+    private static double PipSizeOf(IReadOnlyList<FxBar> bars)
+    {
+        var price = bars is { Count: > 0 } ? bars[^1].Close : 0;
+        return price > 500 ? 10.0 : price > 20 ? 0.01 : 0.0001;
+    }
+
     private async Task ExecuteOrderAsync(FxDecision decision, bool paperExec = false)
     {
         // Paper-exec hard guard FIRST: the demo account is the paper
@@ -955,17 +1115,25 @@ public sealed class FxEngineHost : IDisposable
             return;
         }
 
-        var lots = Math.Min((double)cap, decision.SuggestedLots);
+        // Per-pair sizing (Step 4): the pair's multiplier scales the
+        // signal's suggestion and its own lot cap min's with the global
+        // cap — the global cap still bounds everything, so calibration can
+        // shape a size but can never outgrow the rails.
+        var pairCal = Pair;
+        var suggested = decision.SuggestedLots * (pairCal.SizeMult ?? 1.0);
+        var lots = Math.Min((double)cap, suggested);
+        if (pairCal.MaxLots is { } pairMaxLots)
+        {
+            lots = Math.Min(lots, pairMaxLots);
+        }
 
         // Small-account mode: one trade at a time at the venue's minimum —
         // shrink the size before anything else consumes it, so the trade's
         // real risk follows the clamp (the stop distance stays the sized
         // hint; only the lot count shrinks).
-        lots = _smallAccountClamp?.Invoke(Symbol, lots) ?? lots;
-
-        if (lots < 0.01)
+        lots = _smallAccountClamp?.Invoke(Symbol, lots) ?? lots;        if (lots < 0.01)
         {
-            Journal("FX_ORDER", $"refused: sized {decision.SuggestedLots:0.##} lots below minimum", "{}");
+            Journal("FX_ORDER", $"refused: sized {suggested:0.##} lots below minimum", "{}");
             return;
         }
 
@@ -1077,8 +1245,34 @@ public sealed class FxEngineHost : IDisposable
             return;
         }
 
+        // The 1:2 rides on the order itself: a venue-side take-profit the
+        // broker fills even with the app closed, so the brain's trades
+        // actually CLOSE near 1:2 instead of watching +2R give back. The
+        // exit brain still manages anything sooner; this is the backstop.
+        double? tp = null;
+        var tpR = RewardTargetRFor;
+        if (tpR > 0 && stopDistance is { } tpDist && tpDist > 0 && anchor > 0)
+        {
+            var band = Math.Max(vspec.StopsLevel, 0) * Math.Max(vspec.Point, 0);
+            var tpRaw = side == "buy"
+                ? anchor + tpR * tpDist
+                : anchor - tpR * tpDist;
+            if (band > 0 && Math.Abs(tpRaw - anchor) < band)
+            {
+                // A TP inside the venue's forbidden band would be rejected
+                // outright (invalid-stops) and take the whole order with it.
+                Journal("FX_ORDER",
+                    $"no venue take-profit — 1:{tpR:0.#}R target lands inside the " +
+                    $"venue's {vspec.StopsLevel:0.#}-point stops band", "{}");
+            }
+            else
+            {
+                tp = Math.Round(tpRaw, 6);
+            }
+        }
+
         var result = await _mt5.PlaceOrderAsync(
-            Symbol, side, "market", lots, null, null, sl, null,
+            Symbol, side, "market", lots, null, null, sl, tp,
             comment: Core.Fx.FxExitBrain.OwnershipComment).ConfigureAwait(true);
         // The comment stamp is how the exit engine recognizes the positions
         // it owns — manual trades are never managed.
@@ -1086,12 +1280,17 @@ public sealed class FxEngineHost : IDisposable
         Journal("FX_ORDER",
             result.Ok
                 ? $"{(paperExec ? "paper-exec fill (demo): " : string.Empty)}{side} {lots:0.##} lots {Symbol} @ {result.Price:0.#####} — ticket {result.Order ?? result.Deal}"
+                    + (tp is { } tpv ? $" (venue TP {tpv:0.#####} @ 1:{tpR:0.#}R)" : string.Empty)
                 : $"{side} {lots:0.##} lots {Symbol} refused: {result.RetcodeName}",
             System.Text.Json.JsonSerializer.Serialize(new
             {
                 Side = side,
                 Lots = lots,
                 Sl = sl,
+                // The venue-side 1:2 the trade closes at (null = disarmed or
+                // inside the venue's stops band).
+                Tp = tp,
+                TpR = tp is null ? (double?)null : tpR,
                 // The structural R unit the size was computed with — the
                 // restart reseed reads this back for the exit brain.
                 SizedStopDistance = Core.Fx.FxJson.Sanitize(
@@ -1258,6 +1457,26 @@ public sealed class FxEngineHost : IDisposable
     /// MinConfidence, enforced live and measured on the tape before adoption).
     /// TEST-SAFETY: process-wide static, restore in a finally block.</summary>
     public static double MinEntryConfidence { get; set; }
+
+    /// <summary>Per-pair calibration table (AppSettings.FxPairCalibration,
+    /// wired in ConfigureFromSettings on every launch/save — go-live plan
+    /// Steps 3-4). Every gate below consults its symbol's entry; an empty
+    /// table or an absent symbol falls to <c>FxPairCalibration.Default</c>
+    /// (all knobs null = the global/const path, exactly the unchanged desk).
+    /// TEST-SAFETY: process-wide static, restore in a finally block.</summary>
+    public static IReadOnlyDictionary<string, Core.Fx.FxPairCalibration> PairCalibration { get; set; } =
+        new Dictionary<string, Core.Fx.FxPairCalibration>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>This host's symbol's calibration — one case-insensitive
+    /// dictionary lookup; <c>Default</c> when the table has no opinion.</summary>
+    private Core.Fx.FxPairCalibration Pair =>
+        Core.Fx.FxPairCalibration.For(PairCalibration, Symbol);
+
+    /// <summary>The venue take-profit R that applies to THIS pair: the
+    /// pair's own tp knob (0 = deliberately disarmed for the pair) or the
+    /// global arm. Used by the GWEN prompt and the placed order alike so
+    /// the model and the venue never disagree about the geometry.</summary>
+    private double RewardTargetRFor => Pair.RewardTargetR ?? VenueRewardTargetR;
 
     /// <summary>The brain's own book: lots it currently tracks as open.
     /// A FLOOR for the portfolio exposure guard — venue reads can degrade
@@ -1611,7 +1830,11 @@ public sealed class FxEngineHost : IDisposable
                 // Paper R:R evidence: while in paper the 1:R reward target
                 // is armed, so the close accrues journal evidence before
                 // real mode trusts the rule (live stays disarmed).
-                rewardTargetR: _engine.IsLive ? 0 : PaperRewardTargetR);
+                rewardTargetR: _engine.IsLive ? 0 : PaperRewardTargetR,
+                // Per-pair bars (Step 3): this symbol's MAE emergency bar
+                // and stagnant time stop; null fields fall to the brain's
+                // constants (empty calibration = the unchanged desk).
+                tuning: Pair.ExitTuning);
 
             Journal("FX_EXIT",
                 $"{p.Symbol} #{p.Ticket}: {decision.Action} score {decision.Score:0} — {decision.Reason}",

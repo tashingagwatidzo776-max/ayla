@@ -4,7 +4,7 @@
 Runs the two end-of-soak-day chores that until now were manual:
 
   --analyst  run the production analyst once (tools/AnalystSmoke against
-             the live journal, local LLM qwen3 by default) and append the
+             the live journal, local LLM gwen-fx by default) and append the
              narrative to today's docs/soak/SOAK-<date>.md. A cold model
              is warmed first so the scheduled run records the LLM
              narrative, not the timeout fallback template.
@@ -148,7 +148,7 @@ def run_analyst(model: str) -> tuple[str | None, str]:
 def analyst_section(narrative: str) -> str:
     return (f"- captured: {dt.datetime.now():%Y-%m-%d %H:%M} local, "
             f"production JournalAnalystService (model from TF_LLM_MODEL, "
-            f"default qwen3:0.6b)\n"
+            f"default gwen-fx)\n"
             f"- narrative (verbatim):\n"
             f"> {narrative}")
 
@@ -213,7 +213,7 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
         proposals_dir.mkdir(parents=True)
     before = {p.name for p in proposals_dir.glob("PROP-*.json")}
     # None (missing script, hung daemon, timed out) -> proceed with what exists
-    r = run_bounded([sys.executable, str(ai / "propose.py")], 600)
+    r = run_bounded([sys.executable, str(ai / "propose.py")], 920)  # > call_llm's own 860 s budget
     new = {p.name for p in proposals_dir.glob("PROP-*.json")} - before
     lines.append(f"- propose.py: {'+' + str(len(new)) + ' new proposal(s)' if new else 'no new proposal'}"
                  + ("" if r is not None and r.returncode == 0 else " (propose unavailable or failed)"))
@@ -226,6 +226,10 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
         return lines + ["- no proposals to test"], ""
 
     tested, findings, skipped_thin = 0, [], 0
+    # Winning setups only (operator ask, 2026-10-21): the per-symbol report
+    # lists positive-expectancy setups; rejects/insufficient verdicts are
+    # TALLIED so honesty is preserved (full verdicts stay in results/).
+    suppressed = {"reject": 0, "insufficient": 0}
     for sym in symbols:
         bars = convert_bars(sym, tick_dir, bars_dir)
         if bars is None:
@@ -252,11 +256,20 @@ def run_alpha(tick_dir: pathlib.Path) -> tuple[list[str], str]:
                 continue
             tested += 1
             verdict = report["expectancy_verdict"]
-            lines.append(f"- {prop.stem} on {sym} ({day}): {report['trades']} trades, "
-                         f"{report['total_r']:+.1f}R, verdict: {verdict}")
             if verdict.startswith("positive expectancy"):
+                lines.append(f"- {prop.stem} on {sym} ({day}): {report['trades']} trades, "
+                             f"{report['total_r']:+.1f}R, verdict: {verdict}")
                 findings.append(f"{prop.stem} on {sym} ({report['trades']} trades, "
                                 f"{report['total_r']:+.1f}R, maxDD {report['max_drawdown_r']:.1f}R)")
+            elif verdict.startswith("insufficient"):
+                suppressed["insufficient"] += 1
+            else:
+                suppressed["reject"] += 1
+    hidden = suppressed["reject"] + suppressed["insufficient"]
+    if hidden:
+        lines.append(f"- {hidden} non-winning setup(s) suppressed - "
+                     f"{suppressed['reject']} rejected, {suppressed['insufficient']} insufficient trades; "
+                     "only winning setups are listed (full verdicts stay in scripts/ai_alpha/results/)")
     if skipped_thin:
         lines.append(f"- {skipped_thin} symbol(s) below the 50-bar floor (closed/static tape) - skipped")
     if not tested:
@@ -277,7 +290,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--analyst", action="store_true", help="run the analyst and record the narrative")
     p.add_argument("--alpha", action="store_true", help="re-run the alpha harness over the tick archive")
     p.add_argument("--force", action="store_true", help="rewrite the analyst section even if present")
-    p.add_argument("--model", default="qwen3:0.6b")
+    p.add_argument("--model", default="gwen-fx")
     p.add_argument("--tick-dir", type=pathlib.Path, default=DEFAULT_TICK_DIR)
     p.add_argument("--date", default=None, help="YYYY-MM-DD override for the evidence doc")
     args = p.parse_args(argv)

@@ -21,6 +21,14 @@ public sealed record FxExitDecision(
     string? OverrideEngine, // non-null: a hard safety override fired
     string Reason);
 
+/// <summary>Per-pair exit tuning (go-live plan Step 3): the two bars the
+/// exit-weekly digest evidence calls for on a per-symbol basis. Every
+/// field null = the brain's own constant, so a null/empty tuning record
+/// is bit-for-bit the pre-calibration behavior.</summary>
+public sealed record FxExitTuning(
+    double? MaeEmergencyR = null,
+    int? MaxStagnantBars = null);
+
 /// <summary>The state the brain tracks per open position between cycles.</summary>
 public sealed record FxPositionState(
     long Ticket,
@@ -176,8 +184,13 @@ public static class FxExitBrain
         IReadOnlyList<FxBar> bars,
         FxRegime currentRegime,
         FxRegime entryRegime,
-        double rewardTargetR = 0)
+        double rewardTargetR = 0,
+        FxExitTuning? tuning = null)
     {
+        // Per-pair bars: null tuning = the constants (unchanged desk).
+        var maeBar = tuning?.MaeEmergencyR ?? MaeEmergencyR;
+        var stagnantBars = tuning?.MaxStagnantBars ?? MaxStagnantBars;
+
         var votes = new List<FxExitVote>();
         var isBuy = state.Side == "buy";
         var dir = isBuy ? 1.0 : -1.0;
@@ -191,7 +204,7 @@ public static class FxExitBrain
         votes.Add(StructureVote(bars, isBuy));
         votes.Add(MomentumVote(bars, isBuy));
         votes.Add(VolatilityVote(atr, atrMedian20));
-        votes.Add(TimeVote(state.BarsHeld, mfeR, plR));
+        votes.Add(TimeVote(state.BarsHeld, mfeR, plR, stagnantBars));
         votes.Add(ThesisVote(currentRegime, entryRegime, isBuy));
         votes.Add(DrawdownVote(maeR, mfeR, plR));
 
@@ -233,10 +246,10 @@ public static class FxExitBrain
             overrideEngine = "equity-floor";
             overrideReason = $"equity {equity:0.##} below the absolute floor {equityFloor:0.##} — emergency close";
         }
-        else if (maeR >= MaeEmergencyR)
+        else if (maeR >= maeBar)
         {
             overrideEngine = "drawdown";
-            overrideReason = $"MAE {maeR:0.00}R beyond the {MaeEmergencyR:0.#}R emergency bar — adverse movement is abnormal; emergency close";
+            overrideReason = $"MAE {maeR:0.00}R beyond the {maeBar:0.#}R emergency bar — adverse movement is abnormal; emergency close";
         }
         else if ((mfeR >= 1.0 && plR <= ProfitFloorR)
                  || (mfeR >= 2.0 && (mfeR - plR) / mfeR >= GivebackOverrideRatio))
@@ -458,9 +471,9 @@ public static class FxExitBrain
     /// <summary>Time engine: a trade that went nowhere (or round-tripped
     /// back from its peak) is a dead trade — measured on current
     /// excursion, not the high-water mark.</summary>
-    private static FxExitVote TimeVote(int barsHeld, double mfeR, double plR)
+    private static FxExitVote TimeVote(int barsHeld, double mfeR, double plR, int maxStagnantBars)
     {
-        if (barsHeld < MaxStagnantBars)
+        if (barsHeld < maxStagnantBars)
         {
             return new FxExitVote("time", 0, 1.1, $"{barsHeld} bars held");
         }

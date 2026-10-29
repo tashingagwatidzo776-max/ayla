@@ -338,6 +338,7 @@ the gate-regression drill uses).
 | #8792846716 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T12:04:38 | 2026-10-08T12:05:45 | 1.12822R | 15 | +0.17R | 1.5R | — | yes |
 | #8793078103 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T15:27:23 | 2026-10-08T15:37:45 | 3.14029R | 15 | +0.47R | 3.3R | — | yes |
 | #8796640544 | — | HYBRID_STRUCTURE_ATR | 2026-10-12T16:42:28 | 2026-10-12T16:43:25 | 2.30155R | 25 | +0.58R | 2.5R | — | yes |
+| #8804125860 | — | HYBRID_STRUCTURE_ATR | 2026-10-20T06:18:09 | 2026-10-20T06:20:10 | 1.81866R | 15 | +0.27R | 2.0R | — | yes |
 
 <!-- TP1-EXEC-DIGEST:END -->
 
@@ -362,6 +363,7 @@ decisive FX_EXIT settles the ticket. Machine-readable twin:
 | #8792846716 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T12:04:38 | 2026-10-08T12:05:45 | +0.17R (15% plan) | 1.5R | — | — | pending |
 | #8793078103 | — | HYBRID_STRUCTURE_ATR | 2026-10-08T15:27:23 | 2026-10-08T15:37:45 | +0.47R (15% plan) | 3.3R | — | — | pending |
 | #8796640544 | — | HYBRID_STRUCTURE_ATR | 2026-10-12T16:42:28 | 2026-10-12T16:43:25 | +0.58R (25% plan) | 2.5R | — | — | pending |
+| #8804125860 | — | HYBRID_STRUCTURE_ATR | 2026-10-20T06:18:09 | 2026-10-20T06:20:10 | +0.27R (15% plan) | 2.0R | — | — | pending |
 
 <!-- TP1-GRADED:END -->
 

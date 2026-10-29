@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -139,6 +141,69 @@ public class RiskNarratorServiceTests : IDisposable
         {
             listener.Close();
         }
+    }
+
+    /// <summary>Records every LLM attempt and answers with a canned
+    /// completion — proves whether the ensure hook let the call reach HTTP.</summary>
+    private sealed class LlmProbe : HttpMessageHandler
+    {
+        public readonly List<string> Order = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Order.Add("http");
+            var json = JsonSerializer.Serialize(new
+            {
+                choices = new[] { new { message = new { content = "The bridge dropped; the brain parked itself safely." } } }
+            });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    [Fact]
+    public async Task EnsureHook_Unavailable_SkipsHttpAndTemplates()
+    {
+        // Spawn-on-demand host: a supervisor that cannot start it must
+        // degrade straight to the template, never to a doomed HTTP attempt.
+        var probe = new LlmProbe();
+        var service = new RiskNarratorService(_journal, _webhook, http: new HttpClient(probe))
+        {
+            BaseUrlOverride = () => "http://127.0.0.1:1/v1",
+            EnsureLlmAsync = () => Task.FromResult(false),
+        };
+
+        var narrative = await service.NarrateAsync(
+            Entry("FX_RISK", "bridge down — trading halted"));
+
+        Assert.NotNull(narrative);
+        Assert.StartsWith("📊", narrative);
+        Assert.Empty(probe.Order);            // no HTTP was attempted
+    }
+
+    [Fact]
+    public async Task EnsureHook_Available_RunsBeforeLlmCall()
+    {
+        var probe = new LlmProbe();
+        var service = new RiskNarratorService(_journal, _webhook, http: new HttpClient(probe))
+        {
+            BaseUrlOverride = () => "http://127.0.0.1:1/v1",
+            EnsureLlmAsync = () =>
+            {
+                probe.Order.Add("ensure");
+                return Task.FromResult(true);
+            },
+        };
+
+        var narrative = await service.NarrateAsync(
+            Entry("FX_RISK", "bridge down — trading halted"));
+
+        Assert.NotNull(narrative);
+        Assert.StartsWith("🤖", narrative);
+        Assert.Equal(new[] { "ensure", "http" }, probe.Order);
     }
 
     [Fact]

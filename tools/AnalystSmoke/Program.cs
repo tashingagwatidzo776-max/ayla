@@ -8,7 +8,7 @@
 //   dotnet run --project tools/AnalystSmoke [-p:OutputPath=bin/lockfree/]
 //
 // LLM endpoint: TF_LLM_BASE_URL / TF_LLM_MODEL / TF_LLM_API_KEY env vars
-// (defaults: local Ollama, qwen3:0.6b). Without a reachable LLM the
+// (defaults: the built-in GWEN host, gwen-fx). Without a reachable LLM the
 // deterministic template narrative is printed — the tool always works.
 using DongGfx.App.Infrastructure;
 using DongGfx.Core.Logging;

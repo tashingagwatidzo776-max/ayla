@@ -603,6 +603,138 @@ public class DemoPaperExecutionTests
         }
     }
 
+    // ── per-pair calibration (go-live plan Steps 3-5) ───────────────────
+    //
+    // PairCalibration is a process-wide static, exactly like the
+    // MinEntryConfidence dial above: every test restores it in a finally
+    // so a leaked table cannot re-gate an unrelated fixture.
+
+    [Fact]
+    public async Task PerPair_Confidence_Floor_Binds_Even_When_The_Global_Dial_Is_Off()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+        try
+        {
+            // Global floor off (the shipped default), pair floor above the
+            // fixture signal's conviction → THIS pair's opinion binds.
+            FxEngineHost.MinEntryConfidence = 0;
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("XAUUSDmicro:conf=0.99");
+            await host.RunCycleAsync();
+
+            Assert.Equal(0, script.OrderCalls);
+            Assert.Equal(1, host.PaperSignalsSeen);   // observed + soaked, not traded
+
+            journal.Flush();
+            var entries = journal.GetRecent(null, 200);
+            Assert.Contains(entries, e =>
+                e.Category == "FX_ORDER"
+                && e.Details.Contains("confidence gate")
+                && e.Details.Contains("pair floor 0.99"));
+            // A gated refusal never armed the dispatch cooldown.
+            Assert.DoesNotContain(entries, e =>
+                e.Category == "FX_ORDER" && e.Details.Contains("dispatch throttled"));
+        }
+        finally
+        {
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("");
+            FxEngineHost.MinEntryConfidence = 0;
+        }
+    }
+
+    [Fact]
+    public async Task PerPair_Session_Window_Gates_Dispatch_Without_Consuming_Cooldown()
+    {
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+        try
+        {
+            // The pinned cycle clock is Wednesday 18:00 UTC — give the
+            // pair a window that hour is NOT inside (19–20).
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("XAUUSDmicro:session=19-20");
+            await host.RunCycleAsync();
+
+            Assert.Equal(0, script.OrderCalls);
+            Assert.Equal(1, host.PaperSignalsSeen);   // the signal is kept
+
+            journal.Flush();
+            var entries = journal.GetRecent(null, 200);
+            Assert.Contains(entries, e =>
+                e.Category == "FX_ORDER" && e.Details.Contains("session window"));
+            Assert.DoesNotContain(entries, e =>
+                e.Category == "FX_ORDER" && e.Details.Contains("dispatch throttled"));
+
+            // Same clock, in-window (18–20) → the identical cycle
+            // dispatches: an out-of-window refusal is observed, never
+            // traded, and never armed the cooldown.
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("XAUUSDmicro:session=18-20");
+            await host.RunCycleAsync();
+            Assert.Equal(1, script.OrderCalls);
+        }
+        finally
+        {
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("");
+        }
+    }
+
+    [Fact]
+    public async Task PerPair_Lot_Knobs_Cannot_Outgrow_The_Global_Cap()
+    {
+        // Step 5 (live-readiness caps): calibration may SHAPE a size but
+        // the global lots cap — the rail the real-money gate enforces —
+        // still bounds every order the pair asks for.
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+        try
+        {
+            FxEngineHost.PairCalibration =
+                FxPairCalibration.Parse("XAUUSDmicro:size=10,lots=10");
+            await host.RunCycleAsync();
+
+            Assert.Equal(1, script.OrderCalls);
+            Assert.NotNull(script.LastOrderBody);
+            using var doc = JsonDocument.Parse(script.LastOrderBody!);
+            var lots = doc.RootElement.GetProperty("lots").GetDouble();
+            Assert.True(lots <= 1.00 + 1e-9,
+                $"pair knobs must never outgrow the global cap — order asked for {lots} lots");
+        }
+        finally
+        {
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("");
+        }
+    }
+
+    [Fact]
+    public async Task PerPair_VenueTp_Arms_A_Disarmed_Global_Target()
+    {
+        // Step 4: the pair's tp knob is its own geometry — it arms a
+        // take-profit the global dial deliberately disarmed.
+        var savedTpR = FxEngineHost.VenueRewardTargetR;
+        var journal = NewJournal();
+        var script = new BridgeScript();
+        var host = NewHost(script, journal);
+        try
+        {
+            FxEngineHost.VenueRewardTargetR = 0;          // global disarmed
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("XAUUSDmicro:tp=2");
+            await host.RunCycleAsync();
+
+            Assert.Equal(1, script.OrderCalls);
+            Assert.NotNull(script.LastOrderBody);
+            using var doc = JsonDocument.Parse(script.LastOrderBody!);
+            Assert.True(doc.RootElement.TryGetProperty("tp", out _),
+                $"the pair's tp knob must arm the venue take-profit: {script.LastOrderBody}");
+        }
+        finally
+        {
+            FxEngineHost.PairCalibration = FxPairCalibration.Parse("");
+            FxEngineHost.VenueRewardTargetR = savedTpR;
+        }
+    }
+
     [Fact]
     public async Task Cooldown_Counts_Refused_Attempts_Too()
     {

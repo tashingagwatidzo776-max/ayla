@@ -81,6 +81,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool fxPaperRrCloseArmed;
 
+    /// <summary>GWEN confluence gate: the local Qwen model's advisory veto
+    /// over brain dispatches. On by default; flipping it applies the static
+    /// at once (reaches a running brain — no restart).</summary>
+    [ObservableProperty]
+    private bool gwenConfluenceArmed = true;
+
+    /// <summary>Venue-side 1:2 on brain-placed orders: the take-profit rides
+    /// on the order itself so winners bank +2R on the venue. On by default;
+    /// flipping it applies the static at once.</summary>
+    [ObservableProperty]
+    private bool fxVenueRrTpArmed = true;
+
     [ObservableProperty]
     private string tp1ToggleHint = "TP1 partials: OFF — the allocation plan is advisory only";
 
@@ -224,6 +236,20 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string mapsColormap = "Auto";
 
+    /// <summary>Per-pair calibration spec (go-live plan Steps 3-4); the
+    /// grammar and clamps live in FxPairCalibration. Defaults to the
+    /// AppSettings default so a build without Load still persists the
+    /// shipped spec instead of wiping it; applied live on change and on
+    /// every ConfigureFromSettings.</summary>
+    [ObservableProperty]
+    private string fxPairCalibration = new AppSettings().FxPairCalibration;
+
+    /// <summary>Applies the spec to the live engine the moment the editor
+    /// changes it — the same apply-without-a-restart pattern the other
+    /// engine knobs use (tolerant parse; bad entries degrade to defaults).</summary>
+    partial void OnFxPairCalibrationChanged(string value) =>
+        Services.FxEngineHost.PairCalibration = Core.Fx.FxPairCalibration.Parse(value);
+
     [ObservableProperty]
     private int metricsDigestIntervalHours = 6;
 
@@ -269,7 +295,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>CSV of symbols the FX brain runs — one engine per entry.</summary>
     [ObservableProperty]
-    private string fxSymbols = "XAUUSDmicro,EURUSD,GBPUSD,USDJPY";
+    private string fxSymbols = "XAUUSDmicro,XAGUSD,XAGUSDmicro";
 
     /// <summary>Portfolio cap: total open lots across all FX symbols.</summary>
     [ObservableProperty]
@@ -375,6 +401,23 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         Services.FxEngineHost.PaperRewardTargetR = value
             ? Services.FxEngineHost.PaperRewardTargetDefaultR
+            : 0;
+    }
+
+    /// <summary>GWEN gate arm, same fail-safe shape as the R:R arm: ON
+    /// applies the static at once (a running brain picks it up immediately),
+    /// OFF is always allowed.</summary>
+    partial void OnGwenConfluenceArmedChanged(bool value)
+    {
+        Services.FxEngineHost.GwenConfluenceEnabled = value;
+    }
+
+    /// <summary>Venue-side 1:2 arm: 2R when on, disarmed (historic behavior)
+    /// when off — applied immediately to any running brain.</summary>
+    partial void OnFxVenueRrTpArmedChanged(bool value)
+    {
+        Services.FxEngineHost.VenueRewardTargetR = value
+            ? Services.FxEngineHost.VenueRewardTargetDefaultR
             : 0;
     }
 
@@ -547,11 +590,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxLabEnabled = settings.FxLabEnabled;
         FxExecuteTp1Partials = settings.FxExecuteTp1Partials;
         FxPaperRrCloseArmed = settings.FxPaperRrCloseArmed;
+        GwenConfluenceArmed = settings.GwenConfluenceArmed;
+        FxVenueRrTpArmed = settings.FxVenueRrTpArmed;
         RefreshTp1Hint();   // reflect any overdue-review breaker hold at load
         LoadTp1Tunables();  // the shared config, editable in-app
         MapsColormap = settings.MapsColormap;
         ArmStalenessHours = settings.ArmStalenessHours;
         FxMinEntryConfidence = Math.Clamp(settings.FxMinEntryConfidence, 0, 1);
+        FxPairCalibration = settings.FxPairCalibration ?? "";
         LogLevel = settings.LogLevel;
         StatusMessage = "Settings loaded.";
     }
@@ -588,9 +634,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         FxLabEnabled = FxLabEnabled,
         FxExecuteTp1Partials = FxExecuteTp1Partials,
         FxPaperRrCloseArmed = FxPaperRrCloseArmed,
+        GwenConfluenceArmed = GwenConfluenceArmed,
+        FxVenueRrTpArmed = FxVenueRrTpArmed,
         MapsColormap = MapsColormap,
         ArmStalenessHours = Math.Clamp(ArmStalenessHours, 0, 72),
         FxMinEntryConfidence = Math.Clamp(FxMinEntryConfidence, 0, 1),
+        FxPairCalibration = FxPairCalibration ?? "",
         LogLevel = LogLevel
     };
 

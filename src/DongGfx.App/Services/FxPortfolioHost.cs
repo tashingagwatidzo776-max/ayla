@@ -367,7 +367,8 @@ public sealed class FxPortfolioHost : IDisposable
         double riskFraction = 0.02,
         string? shadowLedgerDir = null,
         PaperSoakLedger? soakLedger = null,
-        FxBrainMemory? memory = null)
+        FxBrainMemory? memory = null,
+        GwenBrainClient? gwen = null)
     {
         Symbols = symbols;
         Supervisor = new FxSupervisor(journal, killSwitchEngaged, governorTripped,
@@ -443,7 +444,11 @@ public sealed class FxPortfolioHost : IDisposable
                 // One memory, shared by every symbol: measured training
                 // evidence for a (symbol, alpha) cell tilts that alpha's
                 // weight on that symbol's engine only. Research only.
-                memory: memory);
+                memory: memory,
+                // GWEN: one shared local-model client for every symbol's
+                // confluence gate — a single resident model serves all four
+                // engines, and its assessment cache keys per setup + bar.
+                gwen: gwen);
             staggerIndex++;
             host.StatusChanged += s => StatusChanged?.Invoke($"[{symbol}] {s}");
             _hosts.Add(host);

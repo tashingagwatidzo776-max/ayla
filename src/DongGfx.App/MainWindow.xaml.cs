@@ -213,6 +213,15 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        // The window handle exists only now: ThemeManager.Apply ran at boot
+        // before this window was created, so its DWM title-bar call no-oped
+        // here. Give THIS window the title bar its theme asks for (white
+        // bar over the dark palette was the 2026-10-26 screenshot bug).
+        var bootSettings = CommunityToolkit.Mvvm.DependencyInjection.Ioc.Default
+            .GetRequiredService<Func<Core.Models.AppSettings>>();
+        Infrastructure.ThemeManager.ApplyTitleBar(
+            Infrastructure.ThemeManager.Normalize(bootSettings().Theme));
+
         if (DataContext is MainViewModel vm)
         {
             vm.Dashboard.Chart = Chart;

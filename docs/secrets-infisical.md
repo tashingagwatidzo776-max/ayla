@@ -33,9 +33,9 @@ environment, and one credential from `settings.json`:
 
 | Variable | Secret? | Read by | Stored today |
 |---|---|---|---|
-| `TF_LLM_BASE_URL` | no — endpoint URL | `JournalAnalystService`, `RiskNarratorService`, `scripts/ai_alpha/propose.py` | env only; default `http://127.0.0.1:11434/v1` (local Ollama) |
-| `TF_LLM_MODEL` | no — model name | same three call sites | env only; default `qwen3:0.6b` |
-| `TF_LLM_API_KEY` | **only if** you point `TF_LLM_BASE_URL` at a hosted provider | same three call sites | not set anywhere (local Ollama ignores it) |
+| `TF_LLM_BASE_URL` | no — endpoint URL | `JournalAnalystService`, `RiskNarratorService`, `scripts/ai_alpha/propose.py` | env only; default `http://127.0.0.1:11435/v1` (the desk's built-in GWEN host) |
+| `TF_LLM_MODEL` | no — model name | same three call sites | env only; default `gwen-fx` |
+| `TF_LLM_API_KEY` | **only if** you point `TF_LLM_BASE_URL` at a hosted provider | same three call sites | not set anywhere (the local host ignores it) |
 | `FLAKE_WEBHOOK_URL` | **yes** — anyone holding it can post | `scripts/flake_tracker.py` | GitHub repo secret, forwarded by `ci.yml` / `flake-tracker.yml` |
 | `METRICS_WEBHOOK_URL` | **yes** — same | `metrics-digest.yml` | GitHub repo secret |
 | `GH_TOKEN` | credential, but minted per run | `scripts/generate_health.py`, `scripts/check_mergeability.py`, `scripts/restore_protection.py` | GitHub Actions `secrets.GITHUB_TOKEN` (nothing to migrate) |
@@ -81,7 +81,7 @@ with the CI/CD path called out in step 6.
    them in the Infisical UI, never in the file). Otherwise press
    **+ Add a New Secret** and type each key from the table in section 0.
 4. Keep the **Development** values non-production: `TF_LLM_BASE_URL` should
-   stay `http://127.0.0.1:11434/v1` unless you deliberately point dev at a
+   stay `http://127.0.0.1:11435/v1` unless you deliberately point dev at a
    hosted provider.
 
 ## 3. Install the CLI and authenticate

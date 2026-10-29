@@ -43,6 +43,14 @@ public sealed class RiskNarratorService : IDisposable
     public Func<string?>? ModelOverride { get; set; }
     public Func<string?>? ApiKeyOverride { get; set; }
 
+    /// <summary>Brings the LLM endpoint up before a call — the same seam
+    /// JournalAnalystService.EnsureLlmAsync has. The GWEN host is
+    /// spawn-on-demand (GwenHostSupervisor), so without this the first
+    /// halt narrative after start templates: the call hits a dead port.
+    /// Returns false when the endpoint could not come up (the caller then
+    /// skips the HTTP attempt and templates). Null = call as-is (tests).</summary>
+    public Func<Task<bool>>? EnsureLlmAsync { get; set; }
+
     private readonly TradeJournal _journal;
     private readonly WebhookService _webhook;
     private readonly HttpClient _http;
@@ -62,16 +70,25 @@ public sealed class RiskNarratorService : IDisposable
             ConnectTimeout = TimeSpan.FromSeconds(5)
         });
         _ownsHttpClient = http is null;
+        if (_ownsHttpClient)
+        {
+            // HttpClient's 100 s default would abort every real halt
+            // narration before the WaitAsync budget could matter (warm
+            // gwen-fx replies measure 245-406 s on this desk). Own clients
+            // get the desk's standard LLM budget; injected ones (tests)
+            // keep what they arrived with.
+            _http.Timeout = Services.GwenBrainClient.DefaultTimeout;
+        }
         _journal.EntryAdded += OnEntryAdded;
     }
 
     private string BaseUrl => (BaseUrlOverride?.Invoke()
         ?? Environment.GetEnvironmentVariable("TF_LLM_BASE_URL"))
-        ?.Trim().TrimEnd('/') is { Length: > 0 } url ? url : "http://127.0.0.1:11434/v1";
+        ?.Trim().TrimEnd('/') is { Length: > 0 } url ? url : "http://127.0.0.1:11435/v1";
 
     private string Model => (ModelOverride?.Invoke()
         ?? Environment.GetEnvironmentVariable("TF_LLM_MODEL"))
-        ?.Trim() is { Length: > 0 } model ? model : "qwen3:0.6b";
+        ?.Trim() is { Length: > 0 } model ? model : "gwen-fx";
 
     private string? ApiKey => ApiKeyOverride?.Invoke()
         ?? Environment.GetEnvironmentVariable("TF_LLM_API_KEY");
@@ -127,7 +144,19 @@ public sealed class RiskNarratorService : IDisposable
             string narrative;
             try
             {
-                narrative = await AskLlmAsync(context, entry).WaitAsync(TimeSpan.FromSeconds(20));
+                if (EnsureLlmAsync is { } ensure && !await ensure().ConfigureAwait(false))
+                {
+                    // Supervisor could not start the host — skip the doomed
+                    // HTTP attempt; the catch below logs and templates.
+                    throw new InvalidOperationException("GWEN host unavailable (supervisor could not start it)");
+                }
+
+                // Desk-standard LLM budget (GwenBrainClient.DefaultTimeout):
+                // the host loads the model lazily INSIDE the first chat —
+                // measured 2026-10-25 (gwen_bench): cold 781 s, warm ~245 s.
+                // The old 20 s bound died inside the cold load every time.
+                narrative = await AskLlmAsync(context, entry)
+                    .WaitAsync(Services.GwenBrainClient.DefaultTimeout);
                 narrative = "🤖 " + narrative.Trim();
             }
             catch (Exception ex)

@@ -17,7 +17,7 @@ public sealed class PnlCurveControl : FrameworkElement
 
     private static readonly string[] Palette =
     {
-        "#FF00D4AA", "#FFFFC857", "#FF7EB3FF", "#FFFF5C5C", "#FFB48CFF", "#FF8CE99A"
+        "#FFFF8C00", "#FFFFC857", "#FF7EB3FF", "#FFFF5C5C", "#FFB48CFF", "#FF8CE99A"
     };
 
     public void SetSeries(

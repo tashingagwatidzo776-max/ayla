@@ -70,6 +70,11 @@ public partial class MapsViewModel : ObservableObject
         "Auto", "Turbo", "Viridis", "Inferno", "Plasma", "Magma", "CoolHot",
     ];
 
+    /// <summary>The picker's items. XAML binds this instance property because a
+    /// binding path resolves PROPERTIES only — binding the static field above
+    /// left the dropdown's ItemsSource empty (an unselectable blank box).</summary>
+    public string[] Colormaps => ColormapChoices;
+
     [ObservableProperty]
     private string selectedColormap = "Auto";
 
@@ -128,7 +133,8 @@ public partial class MapsViewModel : ObservableObject
             };
             StatusText = CurrentMap is null
                 ? "no data yet"
-                : $"{CurrentMap.Name} — {CurrentMap.Columns}×{CurrentMap.Rows}, {CurrentMap.Unit} range {CurrentMap.Min:0.####}..{CurrentMap.Max:0.####}";
+                : $"{CurrentMap.Name} — {CurrentMap.Columns}×{CurrentMap.Rows}, {CurrentMap.Unit} range {CurrentMap.Min:0.####}..{CurrentMap.Max:0.####}"
+                  + (EmptySourceHint() ?? string.Empty);
         }
         catch (Exception ex)
         {
@@ -164,6 +170,30 @@ public partial class MapsViewModel : ObservableObject
         => ConfluenceProvider?.Invoke();
 
     private static IReadOnlyList<(string, IReadOnlyList<double>)> DefaultCorrelation() => [];
+
+    /// <summary>Names WHY a map has nothing (2026-10-21 operator report):
+    /// an empty source renders a degenerate grid, which reads as a broken
+    /// map — the status line must say which input is missing instead.</summary>
+    private string? EmptySourceHint()
+    {
+        switch (SelectedMap)
+        {
+            case "AI probability" when (AiBeliefs() ?? []).Count == 0:
+                return " — no brain beliefs yet (FX BRAIN not scoring)";
+            case "MTF confluence" when (Confluence() ?? []).Count == 0:
+                return " — no timeframe frames cached yet";
+            case "Correlation" when (Correlation() ?? []).Count == 0:
+                return " — no per-symbol closes cached yet";
+            case "Liquidity" when Quotes().Count == 0:
+                return " — no quotes or ticks archived today";
+            case "Volume surface" or "Order flow" when Ticks().Count == 0:
+                return " — no ticks archived today";
+            case "Volume profile" or "Volatility" or "SMC/ICT sweeps" when Bars().Count == 0:
+                return " — no candles from the bridge";
+            default:
+                return null;
+        }
+    }
 
     private static FxHeatMap Safe(Func<FxHeatMap> build)
     {

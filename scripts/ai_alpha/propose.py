@@ -2,7 +2,8 @@
 """Alpha Researcher step 1: ask the local LLM for one alpha proposal.
 
 Offline by design: this script talks ONLY to the LLM daemon (Ollama on
-127.0.0.1:11434 by default, OpenAI-compatible /v1/chat/completions) and
+127.0.0.1:11435 by default, OpenAI-compatible /v1/chat/completions — the
+desk's BUILT-IN host serves that dialect directly, no third-party daemon) and
 writes a JSON proposal file. No bridge, no sidecar, no webhook, no trading
 surface — the harness cannot place a trade even in principle.
 
@@ -16,6 +17,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -23,8 +25,106 @@ import urllib.request
 HERE = pathlib.Path(__file__).resolve().parent
 PROPOSALS = HERE / "proposals"
 
-DEFAULT_BASE_URL = os.environ.get("TF_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
-DEFAULT_MODEL = os.environ.get("TF_LLM_MODEL", "qwen3:0.6b")
+DEFAULT_BASE_URL = os.environ.get("TF_LLM_BASE_URL", "http://127.0.0.1:11435/v1")
+DEFAULT_MODEL = os.environ.get("TF_LLM_MODEL", "gwen-fx")
+
+# The desk's built-in GWEN host. It is spawn-on-demand inside the app
+# (GwenHostSupervisor), so an external caller into a quiet desk hits a
+# dead port until something in-app has consulted it first.
+HOST_PORT = 11435
+HOST_READY_DEADLINE_S = 90
+
+
+def _host_root(base_url: str) -> str | None:
+    """Origin of the LOCAL desk endpoint, or None for a hosted provider
+    (nothing local to ensure when TF_LLM_BASE_URL points off-box)."""
+    url = base_url.rstrip("/")
+    if "127.0.0.1" not in url and "localhost" not in url:
+        return None
+    return url[:-3] if url.endswith("/v1") else url
+
+
+def _health_ok(base_url: str) -> bool:
+    root = _host_root(base_url)
+    if root is None:
+        return True   # hosted provider: its reachability is its own
+    try:
+        with urllib.request.urlopen(f"{root}/health", timeout=3) as response:
+            return response.status == 200
+    except Exception:  # noqa: BLE001 - "not up yet" is the normal answer
+        return False
+
+
+def _resolve_host_exe() -> str | None:
+    env = os.environ.get("TF_GWEN_HOST_EXE")
+    if env:
+        return env if pathlib.Path(env).exists() else None
+    repo = pathlib.Path(__file__).resolve().parents[2]   # scripts/ai_alpha/ -> root
+    candidates = [
+        pathlib.Path(r"C:\Users\DELL\Desktop\DongGfx\app\DongGfx.GwenHost.exe"),
+        repo / "publish" / "win-x64" / "DongGfx.GwenHost.exe",
+        repo / "src" / "DongGfx.GwenHost" / "bin" / "Release" / "net8.0" / "win-x64" / "DongGfx.GwenHost.exe",
+        repo / "src" / "DongGfx.GwenHost" / "bin" / "Release" / "net8.0" / "DongGfx.GwenHost.exe",
+    ]
+    return next((str(c) for c in candidates if c.exists()), None)
+
+
+def _resolve_gguf() -> str | None:
+    env = os.environ.get("TF_GWEN_GGUF")
+    if env:
+        return env if pathlib.Path(env).exists() else None
+    # Mirror GwenHostSupervisor.ResolveGguf: Q4_K_M is canonical on this
+    # 15 GB desk, f16 where RAM allows, legacy import last.
+    candidates = [
+        r"E:\DonGFX\models\gwen-fx.Q4_K_M.gguf",
+        r"E:\DonGFX\models\gwen-fx.f16.gguf",
+        r"E:\ollama-models\blobs\sha256-1f08950590a395a944ef92a6f21024387348a8d75ed0c388b1cab1590762e95a",
+    ]
+    return next((p for p in candidates if pathlib.Path(p).exists()), None)
+
+
+def ensure_host(base_url: str) -> subprocess.Popen | None:
+    """Bring the desk's GWEN host up when nothing serves it yet.
+
+    Starts the SAME exe+args the in-app supervisor uses, waits for
+    /health (the model still loads lazily inside the first chat), and
+    returns the process so main() can stop exactly what it started.
+    A host that was already up - the app's own - is left alone (None).
+    """
+    if _host_root(base_url) is None:
+        return None
+    if _health_ok(base_url):
+        return None
+    exe = _resolve_host_exe()
+    gguf = _resolve_gguf()
+    if exe is None or gguf is None:
+        raise RuntimeError(
+            "GWEN host unavailable: "
+            + ("DongGfx.GwenHost.exe not found" if exe is None else "gwen-fx GGUF not found")
+        )
+    proc = subprocess.Popen([exe, gguf, "--port", str(HOST_PORT)],
+                            cwd=str(pathlib.Path(exe).parent))
+    deadline = time.time() + HOST_READY_DEADLINE_S
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"GwenHost exited with rc={proc.returncode} before /health")
+        if _health_ok(base_url):
+            return proc
+        time.sleep(1)
+    stop_host(proc)
+    raise RuntimeError(f"GWEN host did not become healthy in {HOST_READY_DEADLINE_S}s")
+
+
+def stop_host(proc: subprocess.Popen | None) -> None:
+    """Kill ONLY a host this script started - never the app's own."""
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=15)
+    except Exception:  # noqa: BLE001 - cleanup must never fail the loop
+        pass
 
 SCHEMA_HINT = """{
   "name": "short_snake_case_name",
@@ -53,8 +153,13 @@ USER_PROMPT = (
 # 540s: on the 2-core soak box the model cold-loads inside this request
 # (~180s) and then generates (~250s warm) - measured. The old 60s budget
 # could never succeed there and made every alpha run report "propose
-# failed". Must stay under soak_evening.py's 600s subprocess timeout.
-def call_llm(base_url: str, model: str, api_key: str | None, timeout: float = 540.0) -> str:
+# 860s: this desk decodes at ~0.8 t/s (2026-10-25 bench: warm verdict
+# ~245 s, cold 781 s) and the host is single-flight behind the live gate,
+# so a proposal pays queue wait + prompt eval + a few hundred generated
+# tokens - the old 540s budget died mid-generation on the 2026-10-26 run.
+# 860 s stays under the host's 900 s GenerationDeadline and OVER
+# soak_evening.py's subprocess budget, which is raised to 920 s to match.
+def call_llm(base_url: str, model: str, api_key: str | None, timeout: float = 860.0) -> str:
     body = json.dumps({
         "model": model,
         "messages": [
@@ -156,12 +261,19 @@ def main() -> int:
 
     print(f"proposing via {args.model} @ {args.base_url} ...")
     started = time.time()
+    host_proc = None
     try:
+        # Spawn-on-demand: a quiet desk has nothing on 11435 yet, and the
+        # call below would just hit a dead port. Bring the host up first;
+        # stop_host() then kills exactly what WE started.
+        host_proc = ensure_host(args.base_url)
         reply = call_llm(args.base_url, args.model, args.api_key)
         proposal = validate(extract_json(reply))
     except Exception as exc:  # noqa: BLE001 - report, never crash the loop
         print(f"propose failed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        stop_host(host_proc)
 
     PROPOSALS.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")

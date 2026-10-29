@@ -224,7 +224,7 @@
                             <!-- The armed plan-% override: the engine is using the
                                  operator's plan instead of the brain's own leg. -->
                             <Border Margin="0,6,0,0" CornerRadius="4" Padding="8,3"
-                                    Background="#2200D4AA" BorderBrush="#5500D4AA"
+                                    Background="#22FF8C00" BorderBrush="#55FF8C00"
                                     BorderThickness="1">
                                 <Border.Style>
                                     <Style TargetType="Border">
@@ -505,7 +505,7 @@
                             </Border>
 
                             <!-- Shadow-engine promotion card: the giveback engine's road to weight -->
-                            <Border Background="#2200D4AA" BorderBrush="#5500D4AA" BorderThickness="1"
+                            <Border Background="#22FF8C00" BorderBrush="#55FF8C00" BorderThickness="1"
                                     CornerRadius="4" Padding="8,4" Margin="0,8,0,0">
                                 <StackPanel>
                                     <TextBlock Text="{Binding Dashboard.PromotionSummaryText}"
@@ -521,7 +521,7 @@
                                                         <Run Text="{Binding Settled, Mode=OneWay, StringFormat='· {0}'}" />
                                                         <Run Text="{Binding Evidence, Mode=OneWay, StringFormat='· {0}'}" />
                                                         <Run Text="{Binding HitRate, Mode=OneWay, StringFormat='· {0}'}" />
-                                                        <Run Text="{Binding Weight, Mode=OneWay, StringFormat='· {0}'}" Foreground="#FF00D4AA" />
+                                                        <Run Text="{Binding Weight, Mode=OneWay, StringFormat='· {0}'}" Foreground="#FFFF8C00" />
                                                     </TextBlock>
                                                 </Border>
                                             </DataTemplate>
@@ -684,6 +684,14 @@
                                       IsChecked="{Binding SettingsVm.FxPaperRrCloseArmed}"
                                       Margin="0,6,0,4"
                                       ToolTip="While the brain is in PAPER, the exit brain closes the book at the Close 1:R default ratio (1:2) and journals FX_EXIT with Override=reward-target — an evidence stream for the 1:R rule. Live mode is never armed." />
+                            <CheckBox Content="GWEN confluence gate (local Qwen)"
+                                      IsChecked="{Binding SettingsVm.GwenConfluenceArmed}"
+                                      Margin="0,6,0,4"
+                                      ToolTip="The desk's built-in local model (Qwen3.5-4B, run by the app's own model host — no third-party software) judges each proposed dispatch for directional confluence and a workable 1:2 and may veto it — refusals journal as FX_GWEN + FX_ORDER. Advisory only: it never places, sizes or schedules, and if the model is unavailable trading continues unchanged." />
+                            <CheckBox Content="Venue 1:2 take-profit on brain orders"
+                                      IsChecked="{Binding SettingsVm.FxVenueRrTpArmed}"
+                                      Margin="0,0,0,4"
+                                      ToolTip="Brain-placed orders carry a take-profit at 2x the sized stop distance, so winners bank +2R on the venue itself — closed trades actually land near 1:2 even with the app closed. Off = exit-brain-only (the historic behavior)." />
                             <!-- Actionable review list: only shown when the breaker
                                  holds the rung, so the operator can act/clear in-app
                                  instead of opening a terminal. -->
@@ -870,6 +878,11 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                         ToolTip="The forex brain: regime detection + momentum/mean-reversion families on MT5. Paper mode journals signals only; go-live needs the paper soak first.">
                                     <TextBlock Text="{Binding FxBadge}" FontWeight="Bold" FontSize="11" />
                                 </Border>
+                                <!-- ── GWEN: the local Qwen confluence analyst's verdict ── -->
+                                <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
+                                        ToolTip="{Binding GwenTooltip}">
+                                    <TextBlock Text="{Binding GwenBadge}" FontFamily="Consolas" FontSize="11" />
+                                </Border>
                                 <!-- per-symbol paper soak: laggard symbol first, so the
                                      one holding GO LIVE back is always the visible one -->
                                 <Border Style="{StaticResource StatusPill}" Margin="0,0,8,0"
@@ -965,21 +978,21 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                             <TextBox Text="{Binding ModifyTp, UpdateSourceTrigger=PropertyChanged}" Width="80" Padding="4,3"
                                                      ToolTip="New take profit (empty = keep)" />
                                             <Button Content="Modify selected" Command="{Binding ModifyMt5PositionCommand}"
-                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    CommandParameter="{Binding SelectedItem.Mt5Ticket, ElementName=TradeGrid}"
                                                     Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
                                                     ToolTip="Apply SL/TP to the selected MT5 position" />
                                             <TextBlock Text="Lots" VerticalAlignment="Center" Margin="16,0,4,0" FontSize="11" />
                                             <TextBox Text="{Binding PartialCloseLots, UpdateSourceTrigger=PropertyChanged}" Width="70" Padding="4,3"
                                                      ToolTip="Lots to close partially (e.g. 0.1)" />
                                             <Button Content="Partial close" Command="{Binding PartialCloseMt5PositionCommand}"
-                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    CommandParameter="{Binding SelectedItem.Mt5Ticket, ElementName=TradeGrid}"
                                                     Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
                                                     ToolTip="Close part of the selected MT5 position" />
                                             <TextBlock Text="1 :" VerticalAlignment="Center" Margin="16,0,4,0" FontSize="11" />
                                             <TextBox Text="{Binding RiskRewardRatio, UpdateSourceTrigger=PropertyChanged}" Width="34" Padding="4,3"
                                                      ToolTip="Reward-to-risk ratio the Close 1:R button arms (2 = 1:2). Change it here." />
                                             <Button Content="Arm TP 1:R" Command="{Binding CloseAtRiskRewardCommand}"
-                                                    CommandParameter="{Binding SelectedItem.Ticket, ElementName=TradeGrid}"
+                                                    CommandParameter="{Binding SelectedItem.Mt5Ticket, ElementName=TradeGrid}"
                                                     Style="{StaticResource GhostButton}" Padding="10,3" Margin="8,0,0,0"
                                                     ToolTip="Set the selected position's take-profit at the configured reward-to-risk multiple of its stop (default 1:2). Arms the TP the venue fills — the 1:2 reward is banked without watching the screen." />
                                             <TextBlock Text="{Binding Mt5OrderStatus}" VerticalAlignment="Center" Margin="12,0,0,0"
@@ -1508,7 +1521,7 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                           Width="200" Margin="0,0,10,0"
                                           ToolTip="Market surface: volume surface/profile, liquidity, order flow, volatility, correlation, SMC/ICT sweeps, AI probability." />
                                 <Button Content="REFRESH" Command="{Binding RefreshCommand}" Margin="0,0,10,0" />
-                                <ComboBox ItemsSource="{Binding ColormapChoices}" SelectedItem="{Binding SelectedColormap}"
+                                <ComboBox ItemsSource="{Binding Colormaps}" SelectedItem="{Binding SelectedColormap}"
                                           Width="100" Margin="0,0,10,0" VerticalAlignment="Center"
                                           ToolTip="Color scale: Auto picks the perceptual default per surface (Turbo for diverging, Viridis/Magma for magnitude, Inferno for AI probability)." />
                                 <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"

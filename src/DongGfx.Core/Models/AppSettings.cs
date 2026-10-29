@@ -47,6 +47,22 @@ public sealed class AppSettings
     /// them. Live always stays disarmed regardless of this flag.</summary>
     public bool FxPaperRrCloseArmed { get; set; }
 
+    /// <summary>GWEN confluence gate (default ON): the local Qwen model
+    /// (imported as gwen-fx, run by the app's own model host) judges each proposed
+    /// dispatch for directional confluence and a workable 1:2 — it can veto,
+    /// journaled as FX_GWEN + an FX_ORDER refusal, and never places, sizes
+    /// or schedules anything. Fail-neutral: a model that cannot answer
+    /// trades exactly as if the gate were off.</summary>
+    public bool GwenConfluenceArmed { get; set; } = true;
+
+    /// <summary>Venue-side 1:2 on brain-placed orders (default ON): the
+    /// order carries a take-profit at 2x the sized stop distance, so winners
+    /// bank at +2R on the venue itself — closed positions actually land at
+    /// ~1:2 instead of watching profit give back. Off = the historic
+    /// behavior (exit brain only). Survives restarts; applied on every
+    /// launch/save like the other engine knobs.</summary>
+    public bool FxVenueRrTpArmed { get; set; } = true;
+
     /// <summary>Operator-armed TP1 plan-% override (null = the allocation
     /// plan's own TP1 leg). Set by the dashboard's one-click Arm action when
     /// the plan-% gate recommends a different percentage: the engine then
@@ -84,8 +100,26 @@ public sealed class AppSettings
 
     /// <summary>CSV of MT5 symbols the FX brain runs (one engine each).
     /// Falls back to FxSymbol when empty; unknown symbols degrade to a
-    /// skipped cycle, never an error.</summary>
-    public string FxSymbols { get; set; } = "XAUUSDmicro,EURUSD,GBPUSD,USDJPY";
+    /// skipped cycle, never an error. Trimmed to the metal pairs with a
+    /// measured edge (go-live plan Step 1, 2026-10-27/28): EURUSD/GBPUSD
+    /// have never produced a signal (daily dead-tape veto) and would only
+    /// block the all-or-nothing paper-soak badge; they return with evidence.
+    /// XAGUSDmicro is the venue's micro silver (present in Market Watch,
+    /// 2026-10-28) — it rides alongside XAGUSD with its own calibration.</summary>
+    public string FxSymbols { get; set; } = "XAUUSDmicro,XAGUSD,XAGUSDmicro";
+
+    /// <summary>Per-pair calibration spec (go-live plan Steps 3-4): each
+    /// pair's own exit bars, entry floor, session window, GWEN veto floor,
+    /// sizing and venue TP. Semicolon-separated pairs, comma-separated
+    /// knobs — see <see cref="DongGfx.Core.Fx.FxPairCalibration"/> for the
+    /// grammar and clamps. Default seeds the two exit-calibration values
+    /// the exit-weekly digest evidence called for: gold's drawdown
+    /// override tightened (1.6R → 1.3R — stop closing winners at max
+    /// pain) and silver's time stop shortened (36 → 24 bars — the same
+    /// bar for the micro silver, one calibration per metal). Empty = all
+    /// pairs on the brain's global constants (the pre-calibration desk).</summary>
+    public string FxPairCalibration { get; set; } =
+        "XAUUSDmicro:mae=1.3;XAGUSD:bars=24;XAGUSDmicro:bars=24";
 
     /// <summary>Total open lots across ALL FX-brain symbols (0 = disabled).
     /// The portfolio veto refuses any order that would exceed it.</summary>
