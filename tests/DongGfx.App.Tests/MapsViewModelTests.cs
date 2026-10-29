@@ -36,6 +36,17 @@ public class MapsViewModelTests
         }
     }
 
+    /// <summary>The ComboBox binds an instance property, not the static list:
+    /// WPF resolves binding paths against properties only, so binding the
+    /// static field left the dropdown empty and its selection unsettable.</summary>
+    [Fact]
+    public void Colormap_Picker_Is_Bindable_From_The_Instance()
+    {
+        var vm = new MapsViewModel();
+        Assert.Same(MapsViewModel.ColormapChoices, vm.Colormaps);
+        Assert.Contains(vm.SelectedColormap, vm.Colormaps);
+    }
+
     [Fact]
     public void SelectedColormap_Change_Notifies()
     {

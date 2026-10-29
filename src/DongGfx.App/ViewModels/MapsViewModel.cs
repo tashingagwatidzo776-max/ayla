@@ -70,6 +70,11 @@ public partial class MapsViewModel : ObservableObject
         "Auto", "Turbo", "Viridis", "Inferno", "Plasma", "Magma", "CoolHot",
     ];
 
+    /// <summary>The picker's items. XAML binds this instance property because a
+    /// binding path resolves PROPERTIES only — binding the static field above
+    /// left the dropdown's ItemsSource empty (an unselectable blank box).</summary>
+    public string[] Colormaps => ColormapChoices;
+
     [ObservableProperty]
     private string selectedColormap = "Auto";
 

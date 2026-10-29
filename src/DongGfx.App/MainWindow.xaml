@@ -1521,7 +1521,7 @@ ews-calendar.json) where the brain refuses new orders. 0 disables." />
                                           Width="200" Margin="0,0,10,0"
                                           ToolTip="Market surface: volume surface/profile, liquidity, order flow, volatility, correlation, SMC/ICT sweeps, AI probability." />
                                 <Button Content="REFRESH" Command="{Binding RefreshCommand}" Margin="0,0,10,0" />
-                                <ComboBox ItemsSource="{Binding ColormapChoices}" SelectedItem="{Binding SelectedColormap}"
+                                <ComboBox ItemsSource="{Binding Colormaps}" SelectedItem="{Binding SelectedColormap}"
                                           Width="100" Margin="0,0,10,0" VerticalAlignment="Center"
                                           ToolTip="Color scale: Auto picks the perceptual default per surface (Turbo for diverging, Viridis/Magma for magnitude, Inferno for AI probability)." />
                                 <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
